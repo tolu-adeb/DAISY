@@ -122,6 +122,31 @@ def analyze(symbol: str = typer.Argument(..., help="Ticker, e.g. AAPL"),
 
 
 @app.command()
+def predict(symbol: str = typer.Argument(..., help="Ticker, e.g. AAPL"),
+            horizon: int = typer.Option(63, "-h", "--horizon", help="Primary horizon in trading days (21=1m, 63=3m, 126=6m, 252=1y)."),
+            paths: int = typer.Option(5000, help="Simulated paths (more = smoother, slower)."),
+            source: Optional[str] = typer.Option(None, "-s", "--source"),
+            as_json: bool = typer.Option(False, "--json")):
+    """Monte Carlo prediction: simulated future returns, scenarios, thesis, confidence and recommendation."""
+    async def go(eng: AnalysisEngine):
+        with err_console.status(f"Simulating {paths:,} paths for {symbol.upper()}…", spinner="dots"):
+            return await eng.analyze(symbol, AnalyzeOptions(period="2y", source=source, ai=False, options=False,
+                                                            forecast_horizon=horizon, forecast_paths=paths))
+    r = _run(go)
+    if as_json:
+        _dump({"symbol": r["symbol"], "forecast": {k: v for k, v in r["forecast"].items() if k != "fan"}}, None)
+        return
+    q = r["quote"]
+    console.print(f"[bold cyan]{r['symbol']}[/bold cyan] {r.get('name') or ''} · {num(q.get('price'))} "
+                  f"({q.get('change_pct') or 0:+.2f}%) · signal {r['signal']['label']} ({r['signal']['score']:+.0f}) · "
+                  f"risk {(r.get('risk') or [{}])[0].get('level', 'n/a')}")
+    from .render import render_forecast
+    render_forecast(r["forecast"])
+    for w in r.get("warnings") or []:
+        console.print(f"[yellow]⚠ {w}[/yellow]")
+
+
+@app.command()
 def compare(symbols: list[str] = typer.Argument(..., help="Two or more tickers"),
             period: str = typer.Option("1y", "-p", "--period"),
             as_json: bool = typer.Option(False, "--json")):

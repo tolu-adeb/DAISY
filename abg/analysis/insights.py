@@ -28,7 +28,9 @@ SYSTEM_PROMPT = (
     "You are the analyst voice of the AI Business Group Intelligence Terminal. You receive a JSON digest of "
     "technical, statistical, sentiment, options and risk analytics for one stock. Write a concise, balanced, "
     "evidence-based read of the setup for a student investment team. Reference specific numbers from the digest. "
-    "Do not invent data that is not in the digest. This is educational analysis, not investment advice. "
+    "Do not invent data that is not in the digest. The 'prediction' block is a Monte Carlo simulation; discuss its "
+    "recommendation and probabilities critically (agree or push back with evidence). "
+    "This is educational analysis, not investment advice. "
     "Respond with ONLY a JSON object with keys: summary (2-4 sentences), bull_case (array of 2-4 strings), "
     "bear_case (array of 2-4 strings), key_levels (array of strings), risks_to_watch (array of 2-4 strings), "
     "stance (one of: bullish, cautiously bullish, neutral, cautiously bearish, bearish), confidence (low|medium|high)."
@@ -60,7 +62,20 @@ def digest(report: dict) -> dict:
         "headlines": [n.get("title") for n in (report.get("news") or [])[:6]],
         "options": keep(opt, ["atm_iv", "expected_move_pct", "skew_25d", "put_call_oi_ratio", "max_pain"]),
         "risk": keep(risk, ["score", "level", "metrics"]),
+        "prediction": _forecast_digest(report.get("forecast") or {}),
     })
+
+
+def _forecast_digest(fc: dict) -> dict:
+    if not fc.get("available"):
+        return {}
+    rec = fc.get("recommendation") or {}
+    return {"recommendation": rec.get("action"), "horizon": rec.get("horizon_label"),
+            "confidence": (fc.get("confidence") or {}).get("rating"), "prob_up": rec.get("prob_up"),
+            "expected_return_pct": rec.get("expected_return_pct"),
+            "p10_p90_return_pct": [h["return_pct"]["p10"] for h in fc["horizons"] if h["days"] == fc["primary_horizon"]][:1]
+            + [h["return_pct"]["p90"] for h in fc["horizons"] if h["days"] == fc["primary_horizon"]][:1],
+            "scenarios": [{k: s[k] for k in ("name", "probability", "return_pct")} for s in fc.get("scenarios") or []]}
 
 
 def rule_based_insight(report: dict) -> dict:

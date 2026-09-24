@@ -79,7 +79,8 @@ function renderHoldings(s) {
       <td class="n">${sgnMoney(h.unrealized_pnl)}<br><small>${sgn(h.unrealized_pct, 1, "%")}</small></td>
       <td class="n"><input class="cell" type="number" step="any" data-meta="stop_loss" data-sym="${esc(h.symbol)}" value="${h.stop_loss ?? ""}" placeholder="—" aria-label="Stop for ${esc(h.symbol)}"></td>
       <td class="n"><input class="cell" type="number" step="any" data-meta="take_profit" data-sym="${esc(h.symbol)}" value="${h.take_profit ?? ""}" placeholder="—" aria-label="Target for ${esc(h.symbol)}"></td>
-      <td>${h.signal_label ? `${esc(h.signal_label)} <span class="muted num">${fmt(h.signal_score, 0)}</span>` : '<span class="muted">…</span>'}</td>
+      <td>${h.signal_label ? `${esc(h.signal_label)} <span class="muted num">${fmt(h.signal_score, 0)}</span>` : '<span class="muted">…</span>'}
+        ${h.recommendation ? `<br><span class="rec-pill rec-${esc(h.recommendation.replace(" ", "-"))}" title="Model view (${esc(h.forecast_confidence || "")} confidence), P(up) ${pct(h.prob_up, 0)}">${esc(h.recommendation)}</span>` : ""}</td>
       <td class="lvl lvl-${esc(h.risk_level)}">${h.risk_level ? `<span class="badge"><span class="dot"></span>${esc(h.risk_level)}</span>` : '<span class="muted">…</span>'}</td>
       <td><button class="btn small" data-sell="${esc(h.symbol)}" data-shares="${h.shares}">Sell</button></td></tr>`).join("")}</tbody></table>`;
   bindSymLinks("#pf-holdings");
@@ -112,7 +113,7 @@ function renderWatch(s) {
     <tbody>${rows.map((w) => `<tr><td><a class="sym" data-sym="${esc(w.symbol)}">${esc(w.symbol)}</a></td><td class="n">${fmt(w.price)}</td>
       <td class="n">${sgn(w.change_pct, 2, "%")}</td><td>${esc(w.signal_label || "…")}</td>
       <td class="lvl lvl-${esc(w.risk_level)}">${w.risk_level ? `<span class="badge"><span class="dot"></span>${esc(w.risk_level)}</span>` : "…"}</td>
-      <td>${esc(w.top_setup || "—")}</td><td><button class="x" title="Stop watching" data-unwatch="${esc(w.symbol)}">×</button></td></tr>`).join("")}</tbody></table>`
+      <td>${esc(w.top_setup || "—")}${w.recommendation ? ` <span class="rec-pill rec-${esc(w.recommendation.replace(" ", "-"))}">${esc(w.recommendation)}</span>` : ""}</td><td><button class="x" title="Stop watching" data-unwatch="${esc(w.symbol)}">×</button></td></tr>`).join("")}</tbody></table>`
     : '<p class="muted">Nothing on the watchlist.</p>';
   bindSymLinks("#pf-watch");
   $("#pf-watch").querySelectorAll("[data-unwatch]").forEach((b) => b.addEventListener("click", async () => {

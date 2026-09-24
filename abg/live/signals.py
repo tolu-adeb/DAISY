@@ -180,6 +180,21 @@ class SignalEngine:
                                       "Headlines: " + " | ".join(n.get("title", "")[:90] for n in (r.get("news") or [])[:2]),
                                       {**base, "sentiment": sent}))
 
+        fc = r.get("forecast") or {}
+        rec = (fc.get("recommendation") or {}).get("action")
+        if rec:
+            changed, old = self._transition(symbol, "recommendation", rec)
+            if changed:
+                order = ["Sell", "Reduce", "Hold", "Buy", "Strong Buy"]
+                up = order.index(rec) > order.index(old) if old in order else True
+                th = fc.get("thesis") or {}
+                conf = (fc.get("confidence") or {}).get("rating", "")
+                self._add(out, Signal(symbol, "recommendation", rec,
+                                      "warning" if rec in ("Strong Buy", "Sell") or conf == "High" else "info",
+                                      "bullish" if up else "bearish",
+                                      f"{symbol} model view {old} -> {rec} ({conf.lower()} confidence)",
+                                      th.get("headline", ""), {**base, "prob_up": (fc.get("recommendation") or {}).get("prob_up")}))
+
         out += self._rules(symbol, {"rsi": rsi, "score": sig.get("score")})
         return out
 

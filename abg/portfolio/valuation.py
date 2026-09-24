@@ -91,7 +91,9 @@ def _analysis_summary(a: dict | None) -> dict:
         return {}
     return {"signal_score": a.get("signal_score"), "signal_label": a.get("signal_label"), "trend": a.get("trend"),
             "rsi": a.get("rsi"), "risk_level": a.get("risk_level"), "risk_score": a.get("risk_score"),
-            "top_setup": a.get("top_setup"), "analyzed_at": a.get("analyzed_at")}
+            "top_setup": a.get("top_setup"), "analyzed_at": a.get("analyzed_at"),
+            "recommendation": a.get("recommendation"), "forecast_confidence": a.get("forecast_confidence"),
+            "prob_up": a.get("prob_up")}
 
 
 async def _risk(engine: "AnalysisEngine", rows: list[dict], period: str) -> dict:

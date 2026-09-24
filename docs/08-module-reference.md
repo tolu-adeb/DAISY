@@ -21,6 +21,7 @@ abg/
 │   └── local.py     CSV parsing/provider, synthetic generator/provider
 ├── analysis/
 │   ├── indicators.py  signals.py  stats.py  sentiment.py  options.py  insights.py
+│   └── forecast.py    Monte Carlo prediction, calibration, confidence, recommendation, thesis
 ├── risk/
 │   ├── features.py  interface.py  baseline.py  portfolio.py
 ├── portfolio/
@@ -230,3 +231,19 @@ See [Portfolio & live signals §9.6](09-portfolio-and-live-signals.md#96-interna
   timer or `poke()`. `poke()` during a sweep is remembered (`_poked*` flags), so bursts of edits aren't lost.
   Symbols without a recent analysis are analysed on the next quote sweep, and failed analyses back off for one
   analysis interval.
+
+## `analysis/forecast.py`
+
+- `simulate(close, *, symbol, rf, beta, signal_score, sentiment, plays, cfg, seed)` → forecast dict (no
+  recommendation). It's pure and deterministic for a given seed. The default seed is the CRC32 of symbol, last bar
+  timestamp and last close.
+- `ewma_var(r, λ)` gives causal EWMA variance. `vol_term_structure(v_short, v_long, H, half_life)` gives per-day variance.
+- `calibrate(r, ev, cfg, h=21)` runs the walk-forward interval coverage test (it uses only data available at each origin).
+- `confidence(fc, n_bars, signal_score, primary)` is the weighted component score.
+- `finalize(report, rf)` adds `recommendation` and `thesis`. The engine calls it after the risk models so the
+  risk-level cap can apply.
+- `ForecastConfig` holds paths, primary horizon, fan length, equity premium, tilts, Student-t ν, EWMA λ, vol
+  half-life, block length and calibration origins.
+- Engine hook: `AnalysisEngine._forecast` runs in the compute thread (daily interval only). `_build_report`
+  calls `finalize` after risk. The monitor asks for 2,000 paths and records `recommendation`,
+  `forecast_confidence` and `prob_up` per symbol.

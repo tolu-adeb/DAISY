@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- risk plug-ins
     risk_models: str = ""                       # extra models: "pkg.module:ClassName,other.mod:Factory"
 
+    # ---------------------------------------------------------------- prediction (Monte Carlo)
+    forecast_paths: int = 5000                  # simulated paths (2,500 GBM-t + 2,500 filtered historical)
+    forecast_horizon: int = 63                  # primary horizon for the recommendation (trading days, ~3 months)
+    forecast_equity_premium: float = 0.05       # long-run equity risk premium used in the drift
+    forecast_signal_tilt: float = 0.25          # drift tilt at |signal| = 100, in units of annual vol
+
     # ---------------------------------------------------------------- saved portfolio
     data_dir: Path = Field(default_factory=lambda: Path.home() / ".abg-terminal")   # portfolio.sqlite3 lives here
     default_portfolio: str = "main"

@@ -163,6 +163,8 @@ def render_report(r: dict, show_chain: bool = True, show_news: int = 6) -> None:
             nt.add_row(signed(n.get("sentiment"), 2), n.get("title", ""), (n.get("publisher") or "")[:18])
         console.print(nt)
 
+    render_forecast(r.get("forecast") or {}, compact=True)
+
     ai = r.get("ai_insight") or {}
     if ai:
         body = Text(ai.get("summary") or "", style="bold")
@@ -275,3 +277,68 @@ def render_providers(status: list[dict]) -> None:
                f"{h['ewma_latency_ms']:.0f}ms" if h["ewma_latency_ms"] else "—"]
         t.add_row(*row, *([p["notes"]] if wide else []))
     console.print(t)
+
+
+REC_STYLE = {"Strong Buy": "bold black on green", "Buy": "bold green", "Hold": "bold white", "Reduce": "bold red",
+             "Sell": "bold white on red"}
+
+
+def render_forecast(fc: dict, compact: bool = False) -> None:
+    if not fc.get("available"):
+        if fc.get("reason") and fc.get("reason") != "disabled":
+            console.print(f"[dim]Prediction unavailable: {fc['reason']}[/dim]")
+        return
+    rec, th, conf = fc.get("recommendation") or {}, fc.get("thesis") or {}, fc["confidence"]
+    head = Table.grid(padding=(0, 3))
+    head.add_row(Text(f" {rec.get('action', 'n/a')} ", style=REC_STYLE.get(rec.get("action"), "bold")),
+                 Text(f"confidence {conf['rating']} ({conf['score']:.0f}/100)", style="bold"),
+                 Text(f"horizon {rec.get('horizon_label')} · P(up) {rec.get('prob_up', 0):.0%} · "
+                      f"expected {rec.get('expected_return_pct', 0):+.1f}%", style="dim"))
+    body = [head, Text(th.get("headline", ""), style="bold"), Text(th.get("context", ""))]
+    for lbl, key, sty in (("+", "bull_points", "green"), ("-", "bear_points", "red")):
+        for x in (th.get(key) or [])[: (3 if compact else 5)]:
+            body.append(Text(f"  {lbl} {x}", style=sty))
+    if th.get("setup"):
+        body.append(Text(f"  > {th['setup']}", style="cyan"))
+    for x in th.get("invalidation") or []:
+        body.append(Text(f"  ! {x}", style="yellow"))
+    for n in rec.get("notes") or []:
+        body.append(Text(f"  note: {n}", style="dim italic"))
+    console.print(Panel(Group(*body), title=f"Prediction · {fc['paths']:,} simulated paths", border_style="magenta"))
+
+    t = Table(box=box.SIMPLE, expand=not compact, title=None if compact else "Simulated outcomes")
+    for c in ("Horizon", "P5", "P25", "Median", "P75", "P95", "Mean", "P(up)", "P(>+10%)", "P(<-10%)", "VaR95"):
+        t.add_column(c, justify="right")
+    for h in fc["horizons"]:
+        q = h["return_pct"]
+        t.add_row(h["label"], signed(q["p5"], 1, "%"), signed(q["p25"], 1, "%"), signed(q["p50"], 1, "%"),
+                  signed(q["p75"], 1, "%"), signed(q["p95"], 1, "%"), signed(h["expected_return_pct"], 1, "%"),
+                  f"{h['prob_up']:.0%}", f"{h['prob_up_10']:.0%}", f"{h['prob_down_10']:.0%}", f"{h['var_95_pct']:.1f}%")
+    console.print(t)
+    if compact:
+        return
+    st = Table(box=box.SIMPLE, title=f"Scenarios · {fc['primary_horizon']} trading days")
+    for c in ("Scenario", "Probability", "Avg return", "Price", "Range"):
+        st.add_column(c)
+    for sc in fc["scenarios"]:
+        st.add_row(sc["name"], f"{sc['probability']:.0%}", signed(sc["return_pct"], 1, "%"), num(sc["price"]),
+                   f"{sc['range_pct'][0]:+.1f}% to {sc['range_pct'][1]:+.1f}%")
+    console.print(st)
+    for b in fc.get("barriers") or []:
+        console.print(f"[cyan]{b['setup']}[/cyan]: target {num(b['target_1'])} first {b['prob_target_first']:.0%} · stop "
+                      f"{num(b['stop'])} first {b['prob_stop_first']:.0%} · neither {b['prob_neither']:.0%} · "
+                      f"expected {b['expected_r_multiple']:+.2f}R")
+    cal = fc.get("calibration") or {}
+    v, d = fc["volatility"], fc["drift"]
+    console.print(f"[dim]Volatility {v['now_annual_pct']:.0f}% now → {v['long_run_annual_pct']:.0f}% long-run · drift "
+                  f"{d['total_annual'] * 100:+.1f}%/yr (rf {d['risk_free'] * 100:.1f} + beta×ERP {d['equity_premium'] * 100:.1f} "
+                  f"+ signal {d['signal_tilt'] * 100:+.1f} + news {d['sentiment_tilt'] * 100:+.1f})"
+                  + (f" · calibration: {cal['verdict']} ({cal['coverage_90']:.0%} of past 90% bands hit)" if cal.get("available") else "")
+                  + "[/dim]")
+    ct = Table(box=None, title="Confidence components")
+    for c in ("Component", "Score", "Weight", "Detail"):
+        ct.add_column(c)
+    for k, c in conf["components"].items():
+        ct.add_row(k.replace("_", " "), f"{c['score']:.2f}", f"{c['weight']:.2f}", c["detail"])
+    console.print(ct)
+    console.print(f"[dim]{th.get('method', '')} {th.get('disclaimer', '')}[/dim]")

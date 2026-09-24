@@ -104,6 +104,7 @@ cooldown (`ABG_SIGNAL_COOLDOWN`, 4 h) stops a condition that keeps flipping back
 | `position_loss` | Holding falls another `ABG_POSITION_LOSS_PCT` (8%) below cost | warning |
 | `portfolio_move` | Portfolio day change crosses each ±`ABG_PORTFOLIO_MOVE_PCT` (2%) band | warning |
 | `concentration` | A holding exceeds `ABG_CONCENTRATION_PCT` (35%) of a ≥ 3-position portfolio | info |
+| `recommendation` | The prediction model's view changes (e.g. Hold → Buy), with the thesis headline | info / warning |
 | `custom_rule` | Your rule: `price_above/below`, `change_above/below`, `rsi_above/below`, `score_above/below` | warning |
 
 Signals are rule-based, educational analytics, **not trade instructions**.

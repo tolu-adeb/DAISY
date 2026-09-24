@@ -227,6 +227,7 @@ class Monitor:
                 try:
                     r = await self.engine.analyze(sym, AnalyzeOptions(
                         period="1y", ai=False, options=False, news=True, fundamentals=True, benchmark=True,
+                        forecast_paths=2000,
                         live_quote=q, history_ttl=self.s.monitor_history_ttl))
                 except ABGError as e:
                     self._failed[sym] = time.time()
@@ -240,7 +241,10 @@ class Monitor:
                     "trend": r["regime"]["trend"], "rsi": r["indicators"].get("rsi_14"),
                     "risk_level": risk.get("level"), "risk_score": risk.get("score"),
                     "top_setup": plays[0]["name"] if plays else None, "analyzed_at": time.time(),
-                    "sentiment": (r.get("sentiment") or {}).get("score"), "live_bar": r["data_quality"].get("live_bar")}
+                    "sentiment": (r.get("sentiment") or {}).get("score"), "live_bar": r["data_quality"].get("live_bar"),
+                    "recommendation": ((r.get("forecast") or {}).get("recommendation") or {}).get("action"),
+                    "forecast_confidence": ((r.get("forecast") or {}).get("confidence") or {}).get("rating"),
+                    "prob_up": ((r.get("forecast") or {}).get("recommendation") or {}).get("prob_up")}
                 self.levels[sym] = r.get("levels") or {}
                 for sig in self.signals.from_report(sym, r):
                     emitted.append(await self._emit(sig))

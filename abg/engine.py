@@ -33,6 +33,7 @@ import pandas as pd
 
 from .analysis import indicators as ta
 from .analysis import options as opt
+from .analysis import forecast as fcast
 from .analysis import sentiment as sent
 from .analysis import signals, stats
 from .analysis.insights import claude_insight, rule_based_insight
@@ -74,6 +75,9 @@ class AnalyzeOptions:
     live_quote: Quote | None = None     # use this quote instead of fetching one (live monitor)
     history_ttl: float | None = None    # override daily-history cache TTL (monitor reuses history for hours)
     splice_live: bool = True            # merge the live quote into today's daily bar before computing
+    forecast: bool = True               # Monte Carlo prediction + thesis / confidence / recommendation
+    forecast_horizon: int | None = None # primary horizon in trading days (default ABG_FORECAST_HORIZON)
+    forecast_paths: int | None = None
 
 
 class AnalysisEngine:
@@ -235,6 +239,9 @@ class AnalysisEngine:
                 for r in report["risk"]:
                     if "error" in r:
                         warnings.append(f"risk model {r['model']}: {r['error']}")
+        if (report.get("forecast") or {}).get("available"):
+            with timer.stage("forecast_rec"):
+                report["forecast"] = jsonable(fcast.finalize(report, s.risk_free_rate))
         with timer.stage("insight"):
             if o.ai:
                 try:
@@ -321,10 +328,30 @@ class AnalysisEngine:
             "indicators": ta.latest_snapshot(ind), "statistics": st,
             "sentiment": sentiment, "news": [n.to_dict() for n in news_items],
             "options": options_out, "features": fv.to_dict(), "risk": [], "disclaimer": DISCLAIMER,
+            "forecast": self._forecast(sym, ph, st, sig, sentiment, plays, o, warnings),
         }
         if o.include_series:
             report["series"] = series_payload(view)
         return {"report": report, "features": fv, "ind": ind, "frame": frame}
+
+    def _forecast(self, sym, ph: PriceHistory, st: dict, sig: dict, sentiment: dict, plays: list,
+                  o: AnalyzeOptions, warnings: list[str]) -> dict:
+        if not o.forecast:
+            return {"available": False, "reason": "disabled"}
+        if ph.interval != "1d":
+            return {"available": False, "reason": "prediction runs on daily bars (use interval 1d)"}
+        s = self.settings
+        cfg = fcast.ForecastConfig(paths=o.forecast_paths or s.forecast_paths,
+                                   primary_horizon=o.forecast_horizon or s.forecast_horizon,
+                                   equity_premium=s.forecast_equity_premium, signal_tilt=s.forecast_signal_tilt)
+        try:
+            return fcast.simulate(ph.df["close"], symbol=sym, rf=s.risk_free_rate, beta=st.get("beta"),
+                                  signal_score=sig.get("score"), sentiment=(sentiment or {}).get("score"),
+                                  plays=plays, cfg=cfg)
+        except Exception as e:  # never let the forecast take the report down
+            log.exception("forecast failed for %s", sym)
+            warnings.append(f"forecast: {type(e).__name__}: {e}")
+            return {"available": False, "reason": str(e)}
 
     # ================================================================== multi-symbol
     async def analyze_many(self, symbols: list[str], concurrency: int = 4, **kw) -> dict[str, dict]:

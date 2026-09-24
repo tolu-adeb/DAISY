@@ -70,7 +70,7 @@ function toggleTheme() {
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("abg-theme", next); } catch {}
-  if (state.report) renderCharts(state.report);
+  if (state.report) { renderCharts(state.report); if (window.renderForecast && FC.report) drawForecast(FC.report.forecast, FC.report); }
 }
 
 // ------------------------------------------------------------------ analyze
@@ -111,6 +111,7 @@ function render(r) {
   $("#warnings").innerHTML = (r.warnings || []).map((w) => `<div class="warn">${esc(w)}</div>`).join("");
   renderQuote(r); renderSignal(r); renderRegime(r); renderRisk(r);
   renderCharts(r); renderPlays(r); renderIndicators(r); renderLevels(r);
+  if (window.renderForecast) window.renderForecast(r);
   renderInsight(r); renderRiskDetail(r); renderOptions(r.options, r.symbol); renderNews(r); renderStats(r); renderMeta(r);
 }
 

@@ -121,6 +121,16 @@ async def analyze(request: Request, symbol: str, period: str = "1y", interval: s
     return await _t(eng(request).analyze(symbol, o))
 
 
+@app.get("/api/predict/{symbol}")
+async def predict(request: Request, symbol: str, horizon: int = Query(63, ge=5, le=252),
+                  paths: int = Query(5000, ge=500, le=50000), source: str | None = None):
+    """Monte Carlo prediction with thesis, confidence and recommendation."""
+    r = await _t(eng(request).analyze(symbol, AnalyzeOptions(period="2y", source=source or None, ai=False, options=False,
+                                                             forecast_horizon=horizon, forecast_paths=paths)))
+    return {"symbol": r["symbol"], "name": r.get("name"), "quote": r["quote"], "signal": r["signal"],
+            "risk": r["risk"][:1], "forecast": r["forecast"], "warnings": r["warnings"], "provenance": r["provenance"]}
+
+
 @app.get("/api/quote/{symbol}")
 async def quote(request: Request, symbol: str, source: str | None = None):
     f = await _t(eng(request).quote(symbol, source))

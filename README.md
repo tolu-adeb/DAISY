@@ -17,8 +17,9 @@ abg serve                   # web dashboard at http://127.0.0.1:8000
 | Analytics | RSI, MACD, BB, ADX, OBV, W%R, CCI, VWAP, plays, sentiment, Black-Scholes, Claude insight | All of those, plus Stochastic, MFI, ATR, regime detection, scored & explained signal, trade levels, S/R clusters, Sharpe/Sortino/Calmar/beta, IV solver, skew, max pain, term structure, expected move |
 | Risk | — | **Versioned feature schema (40 features)**, `RiskModel` plug-in interface, baseline VaR/CVaR model, portfolio risk, training-data export with forward labels |
 | Interfaces | CLI + React | Rich CLI (14 commands), REST API with OpenAPI docs, dashboard, importable Python library |
-| Portfolio & alerts | — | Saved portfolio (average-cost P&L, stops/targets, watchlist), continuous live monitor, 16 edge-triggered signal types, dashboard + desktop + Discord + email alerts |
-| Tests | — | 99 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
+| Prediction | — | Monte Carlo ensemble (GBM-t + filtered historical simulation): 1W–1Y return ranges, scenarios, setup target/stop odds, walk-forward calibration, confidence rating, thesis and a guard-railed Strong Buy…Sell model view |
+| Portfolio & alerts | — | Saved portfolio (average-cost P&L, stops/targets, watchlist), continuous live monitor, 17 edge-triggered signal types, dashboard + desktop + Discord + email alerts |
+| Tests | — | 118 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
 
 ## Install
 
@@ -39,6 +40,7 @@ abg analyze AAPL                         # technicals, setups, stats, options/Gr
 abg analyze TSLA -p 6mo -i 1d --no-ai    # period / interval / skip Claude
 abg analyze MSFT --account 25000 --risk-pct 1   # adds position sizing for the top setup
 abg analyze AAPL --json --save aapl.json # machine-readable report
+abg predict AAPL -h 63                   # Monte Carlo prediction: ranges, scenarios, thesis, confidence, recommendation
 abg compare AAPL MSFT NVDA SPY           # side-by-side + correlation + portfolio risk
 abg options AAPL --expiry 2026-10-16     # chain with IV + full Greeks
 abg news NVDA                            # headlines with sentiment
@@ -86,11 +88,12 @@ asyncio.run(main())
 7. [Operations](docs/07-operations.md): configuration reference, deployment, troubleshooting, testing, limitations
 8. [Module reference](docs/08-module-reference.md): file-by-file, function-by-function internals
 9. [Portfolio & live signals](docs/09-portfolio-and-live-signals.md): saved portfolio, monitor, signal catalogue, Discord/email/desktop alerts
+10. [Prediction](docs/10-prediction.md): Monte Carlo simulation of future returns, calibration, confidence rating, recommendation rules
 
 ## Tests
 
 ```bash
-pytest -q          # 99 tests, fully offline (no network, no API keys)
+pytest -q          # 118 tests, fully offline (no network, no API keys)
 ```
 
 > Educational analysis tool, not investment advice.

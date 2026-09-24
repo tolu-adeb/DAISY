@@ -7,6 +7,7 @@ Global options go **before** the command: `abg [--demo] [--no-cache] [--csv-dir 
 | Command | Purpose | Key options |
 |---|---|---|
 | `analyze SYMBOL` | Full report | `-p/--period` (1mo 3mo 6mo ytd 1y 2y 5y 10y max, or `45d`), `-i/--interval` (1d 1wk 1mo 1h 30m 15m 5m), `-s/--source`, `--ai/--no-ai`, `--news/--no-news`, `--options/--no-options`, `--expiry`, `--account` + `--risk-pct` (position sizing), `--json`, `--save FILE` |
+| `predict SYMBOL` | Monte Carlo prediction: ranges, scenarios, thesis, confidence, recommendation | `-h/--horizon` (trading days), `--paths`, `-s`, `--json` |
 | `compare A B C…` | Side-by-side table, correlation matrix, equal-weight portfolio risk | `-p`, `--json` |
 | `quote A B…` | Latest quotes with source and cache state | `-s` |
 | `watch A B…` | Live quote board | `--every SECONDS` |
@@ -58,6 +59,7 @@ OpenAPI docs are at `/docs`. All responses are JSON. Errors are always `{"error"
 | `GET /api/meta` | periods, intervals, configured providers, demo flag, AI flag |
 | `GET /api/status` | providers (health/breaker), cache stats, risk models, schema version |
 | `GET /api/analyze/{symbol}` | Full report. Query: `period, interval, source, ai, news, options, expiry, series (default true), refresh` |
+| `GET /api/predict/{symbol}?horizon=63&paths=5000` | `{forecast: {horizons, fan, scenarios, barriers, calibration, confidence, recommendation, thesis}, signal, risk, quote}` |
 | `GET /api/quote/{symbol}` | `{quote, provenance}` |
 | `GET /api/history/{symbol}` | `{bars:[{date,open,high,low,close,volume,…}], provenance}` (no warm-up) |
 | `GET /api/news/{symbol}?limit=` | `{sentiment, news[], provenance}` |

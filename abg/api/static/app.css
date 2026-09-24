@@ -219,3 +219,30 @@ a.sym:hover { text-decoration: underline; }
 td.num { white-space: nowrap; }
 .ticker { width: 84px; }
 @media (max-width: 560px) { .tab, .icon { padding: 6px 7px; } }
+
+/* ---------------- prediction ---------------- */
+.fc-top { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
+@media (max-width: 900px) { .fc-top { grid-template-columns: minmax(0, 1fr); } }
+.rec-badge { display: inline-block; font: 800 22px var(--sans); padding: 6px 16px; border-radius: 8px; letter-spacing: .02em;
+  border: 2px solid var(--border); }
+.rec-Strong-Buy, .rec-Buy { color: var(--up); border-color: color-mix(in srgb, var(--up) 55%, var(--border)); }
+.rec-Strong-Buy { background: color-mix(in srgb, var(--up) 14%, var(--surface-1)); }
+.rec-Hold { color: var(--text-primary); }
+.rec-Reduce, .rec-Sell { color: var(--down); border-color: color-mix(in srgb, var(--down) 55%, var(--border)); }
+.rec-Sell { background: color-mix(in srgb, var(--down) 14%, var(--surface-1)); }
+.rec-pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 4px; border: 1px solid var(--border); margin-top: 2px; }
+.fc-headline { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+.fc-list { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.fc-list li { margin: 2px 0; }
+.fc-list.bull li::marker { content: "▲ "; color: var(--up); }
+.fc-list.bear li::marker { content: "▼ "; color: var(--down); }
+.fc-list.inv li::marker { content: "! "; color: var(--warning); }
+.chart.fan { height: 300px; }
+.hz-btns { display: inline-flex; gap: 4px; }
+.hz-btns button { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 12px; }
+.hz-btns button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.scen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.scen > div { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.scen b { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-secondary); }
+.scen .v { font: 700 18px var(--mono); }
+@media (max-width: 560px) { .scen { grid-template-columns: 1fr; } }

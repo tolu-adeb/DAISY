@@ -34,6 +34,7 @@ Precedence: `Settings(...)` kwargs / CLI flags → environment (`ABG_*`) → `.e
 | `ABG_WARMUP_DAYS` | 420 | Extra history for indicator warm-up |
 | `ABG_NEWS_LIMIT` | 20 | |
 | `ABG_RISK_MODELS` | – | `module:Attr,…` extra risk models |
+| `ABG_FORECAST_PATHS` / `ABG_FORECAST_HORIZON` / `ABG_FORECAST_EQUITY_PREMIUM` / `ABG_FORECAST_SIGNAL_TILT` | 5000 / 63 / 0.05 / 0.25 | Prediction engine (docs/10) |
 | `ABG_DATA_DIR` | `~/.abg-terminal` | Saved portfolio database + monitor lock (not the cache) |
 | `ABG_DEFAULT_PORTFOLIO` | `main` | |
 | `ABG_MONITOR_ON_SERVE` | `true` | `abg serve` also runs the live monitor |
@@ -106,7 +107,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-99 tests, all offline:
+118 tests, all offline:
 
 | File | Covers |
 |---|---|
@@ -115,6 +116,7 @@ pytest -q
 | `test_resilience.py` | Breaker state machine, retry policy, Retry-After handling, token bucket, health, cache fresh/stale/persistence/corruption |
 | `test_router.py` | Failover, single-flight, hedging latency, synthetic never hedged, stale-if-error, error taxonomy → breaker, validation failover, adapter-bug containment, allow-list, demo-cache leak guard |
 | `test_providers.py` | Every adapter against recorded payload shapes (MockTransport), vendor throttle bodies, HTTP status mapping, timeouts, 4 CSV formats |
+| `test_forecast.py` | Simulation reproducibility, ordering, analytic mean and vol checks, tilt direction, barrier odds, calibration coverage, every recommendation guard-rail, engine/API/monitor integration |
 | `test_portfolio_live.py` | Average-cost/realized P&L, oversell & delete guards, backup round-trip, persistence, NYSE holidays, live-bar splicing, every signal family incl. cooldowns/bands/one-shot rules, Discord (429 retry), email digest vs critical, hub isolation, monitor sweeps + single-instance lock + poke, portfolio REST API |
 | `test_engine_risk_api.py` | End-to-end strict-JSON report, partial-failure isolation, fatal history failure, CSV, compare, feature no-look-ahead, baseline monotonicity, plug-in isolation and schema checks, portfolio math, sentiment, mocked Claude (success, cache, fallback), every REST endpoint and error code |
 
