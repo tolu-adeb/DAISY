@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ABG Intelligence Terminal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c5cab'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/vendor/lightweight-charts.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">ABG</span><span class="brand-name">Intelligence Terminal <small id="ver"></small></span></div>
+  <form id="search" class="controls" autocomplete="off">
+    <input id="sym" class="ticker" placeholder="Ticker" value="AAPL" maxlength="15" aria-label="Ticker symbol">
+    <select id="period" aria-label="Period"></select>
+    <select id="interval" aria-label="Interval"></select>
+    <select id="source" aria-label="Price data source"><option value="">Auto (failover)</option></select>
+    <label class="chk"><input type="checkbox" id="opt-ai" checked> AI</label>
+    <label class="chk"><input type="checkbox" id="opt-options" checked> Options</label>
+    <label class="chk"><input type="checkbox" id="opt-news" checked> News</label>
+    <button type="submit" class="primary">Analyze</button>
+    <label class="btn" title="Analyze a MacroTrends / Yahoo / Nasdaq CSV">CSV<input type="file" id="csv" accept=".csv,text/csv" hidden></label>
+  </form>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="analyze" role="tab">Analyze</button>
+    <button class="tab" data-view="portfolio" role="tab">Portfolio <span id="sig-badge" class="count" hidden>0</span></button>
+    <button class="tab" data-view="compare" role="tab">Compare</button>
+    <button class="tab" data-view="status" role="tab">Providers</button>
+    <button id="theme" class="icon" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </nav>
+</header>
+
+<div id="demo-banner" class="banner" hidden>DEMO MODE — synthetic prices may be shown when no real provider answers. Not market data.</div>
+<div id="toast" class="toast" hidden></div>
+<div id="loading" class="loading" hidden><div class="bar"></div></div>
+
+<main id="view-analyze" class="view">
+  <section id="empty" class="empty">
+    <h1>Multi-source stock analysis</h1>
+    <p>Enter a ticker and press <b>Analyze</b>. Data is routed across Yahoo, yfinance, Polygon, Tiingo, FMP, Twelve Data,
+      Alpha Vantage, Finnhub, Stooq and local CSVs with automatic failover.</p>
+  </section>
+  <div id="report" hidden>
+    <div id="warnings"></div>
+    <section class="row kpis">
+      <div class="card quote" id="card-quote"></div>
+      <div class="card" id="card-signal"></div>
+      <div class="card" id="card-regime"></div>
+      <div class="card" id="card-risk"></div>
+    </section>
+
+    <section class="card chart-card">
+      <div class="card-head">
+        <h2>Price</h2>
+        <div class="legend" id="legend"></div>
+        <div class="toggles" id="overlay-toggles"></div>
+      </div>
+      <div id="chart-main" class="chart main"></div>
+      <div class="subhead">RSI (14)</div>
+      <div id="chart-rsi" class="chart sub"></div>
+      <div class="subhead">MACD (12, 26, 9)</div>
+      <div id="chart-macd" class="chart sub"></div>
+    </section>
+
+    <section class="row three">
+      <div class="card" id="card-plays"></div>
+      <div class="card" id="card-indicators"></div>
+      <div class="card" id="card-levels"></div>
+    </section>
+
+    <section class="row two">
+      <div class="card" id="card-insight"></div>
+      <div class="card" id="card-riskdetail"></div>
+    </section>
+
+    <section class="card" id="card-options"></section>
+
+    <section class="row two">
+      <div class="card" id="card-news"></div>
+      <div class="card" id="card-stats"></div>
+    </section>
+
+    <footer class="card meta" id="card-meta"></footer>
+  </div>
+</main>
+
+<main id="view-compare" class="view" hidden>
+  <form id="compare-form" class="card controls-row">
+    <input id="cmp-syms" value="AAPL,MSFT,NVDA,SPY" aria-label="Symbols to compare">
+    <select id="cmp-period" aria-label="Period"></select>
+    <button class="primary">Compare</button>
+  </form>
+  <div id="compare-out"></div>
+</main>
+
+<main id="view-portfolio" class="view" hidden>
+  <section class="row kpis5" id="pf-kpis"></section>
+  <section class="card monitor-bar" id="pf-monitor"></section>
+  <div class="pf-grid">
+    <div class="pf-main">
+      <section class="card">
+        <div class="card-head"><h2>Holdings</h2><span class="muted" id="pf-asof"></span></div>
+        <div class="scroll" id="pf-holdings"></div>
+        <form id="tx-form" class="inline-form" autocomplete="off">
+          <select id="tx-side" aria-label="Side"><option>BUY</option><option>SELL</option></select>
+          <input id="tx-sym" placeholder="Ticker" maxlength="15" required aria-label="Ticker">
+          <input id="tx-shares" type="number" step="any" min="0" placeholder="Shares" required aria-label="Shares">
+          <input id="tx-price" type="number" step="any" min="0" placeholder="Price (blank = live)" aria-label="Price">
+          <input id="tx-date" type="date" aria-label="Trade date">
+          <button class="primary">Record trade</button>
+          <button type="button" class="btn" id="tx-history-btn">History</button>
+        </form>
+        <div id="tx-history" hidden></div>
+      </section>
+      <section class="row two">
+        <div class="card">
+          <h2>Watchlist</h2>
+          <div class="scroll" id="pf-watch"></div>
+          <form id="watch-form" class="inline-form" autocomplete="off">
+            <input id="watch-sym" placeholder="Add ticker(s), e.g. NVDA, AMD" aria-label="Watch ticker">
+            <button class="primary">Watch</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Alert rules</h2>
+          <div id="pf-rules"></div>
+          <form id="rule-form" class="inline-form" autocomplete="off">
+            <input id="rule-sym" placeholder="Ticker" maxlength="15" required aria-label="Rule ticker">
+            <select id="rule-kind" aria-label="Rule type"></select>
+            <input id="rule-val" type="number" step="any" placeholder="Value" required aria-label="Rule value">
+            <label class="chk"><input type="checkbox" id="rule-repeat"> repeat</label>
+            <button class="primary">Add</button>
+          </form>
+        </div>
+      </section>
+      <section class="card" id="pf-risk"></section>
+    </div>
+    <aside class="card pf-feed">
+      <div class="card-head"><h2>Live signals</h2><button class="btn small" id="sig-ack">Mark read</button></div>
+      <div id="sig-feed"></div>
+    </aside>
+  </div>
+</main>
+
+<main id="view-status" class="view" hidden>
+  <div class="card" id="status-out"></div>
+</main>
+
+<script src="/static/app.js"></script>
+<script src="/static/portfolio.js"></script>
+</body>
+</html>

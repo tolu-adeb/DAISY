@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abg-terminal"
+version = "3.0.0"
+description = "ABG Intelligence Terminal - multi-source stock analysis engine for AI Business Group"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AI Business Group" }]
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.2",
+  "httpx>=0.25",
+  "pydantic>=2.5",
+  "pydantic-settings>=2.1",
+  "typer>=0.12",
+  "rich>=13",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+yfinance = ["yfinance>=0.2.50"]
+fast = ["scipy>=1.10"]
+parquet = ["pyarrow>=14"]
+desktop = ["plyer>=2.1"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+all = ["yfinance>=0.2.50", "scipy>=1.10", "pyarrow>=14", "plyer>=2.1", "pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+abg = "abg.cli:app"
+
+# Third-party plug-ins register here (see docs/05-extending.md):
+# [project.entry-points."abg.providers"]     myvendor = "my_pkg.provider:MyVendorProvider"
+# [project.entry-points."abg.risk_models"]   garch    = "my_pkg.risk:GarchRiskModel"
+
+[tool.setuptools.packages.find]
+include = ["abg*"]
+
+[tool.setuptools.package-data]
+abg = ["api/static/*", "api/static/vendor/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
