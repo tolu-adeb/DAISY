@@ -56,8 +56,9 @@ async function init() {
 
 function showView(v) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
-  for (const id of ["analyze", "portfolio", "compare", "status"]) $("#view-" + id).hidden = id !== v;
+  for (const id of ["analyze", "portfolio", "signals", "compare", "status"]) $("#view-" + id).hidden = id !== v;
   if (v === "status") loadStatus();
+  if (v === "signals" && window.loadExt) window.loadExt();
   if (v === "portfolio" && window.loadPortfolio) {
     window.loadPortfolio();
     if (typeof PF !== "undefined") { PF.unread = 0; updateBadge(); }

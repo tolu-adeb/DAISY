@@ -1,7 +1,6 @@
 """Saved portfolio, live signals, notifications, monitor and their API (all offline)."""
 import asyncio
 import json
-import time
 from datetime import date, datetime
 
 import httpx

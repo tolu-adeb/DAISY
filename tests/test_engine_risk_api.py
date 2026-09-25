@@ -1,17 +1,16 @@
 """End-to-end: engine, risk layer and REST API (synthetic data, fully offline)."""
 import json
-import math
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from abg.engine import AnalysisEngine, AnalyzeOptions
+from abg.engine import AnalysisEngine
 from abg.errors import AllProvidersFailed, NoDataError
 from abg.risk import (FEATURE_NAMES, FeatureVector, RiskAssessment, register_risk_model, registered_models,
                       unregister_risk_model)
 from abg.risk.baseline import BaselineRiskModel, position_size
-from abg.risk.features import add_forward_labels, build_feature_frame
+from abg.risk.features import build_feature_frame
 from abg.risk.interface import RiskContext, run_models
 from abg.risk.portfolio import portfolio_risk
 from conftest import FakeProvider

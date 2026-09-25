@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -14,6 +14,17 @@ from abg.errors import AuthError, NoDataError, ProviderError
 from abg.models import Capability, PriceHistory, Quote
 from abg.providers.base import Provider
 from abg.providers.local import synthetic_frame
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch, tmp_path):
+    """Tests never read the developer's real configuration: drop ABG_* variables and run from a
+    temp dir so a local .env (API keys, per-capability provider orders) can't leak in."""
+    import os
+    for k in list(os.environ):
+        if k.startswith("ABG_") or k == "ANTHROPIC_API_KEY":
+            monkeypatch.delenv(k, raising=False)
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture

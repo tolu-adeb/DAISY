@@ -127,6 +127,21 @@ class Monitor:
         self._failed: dict[str, float] = {}
         self._wake = asyncio.Event()
         self._stop = asyncio.Event()
+        # external signals (docs/11): tracked trade ideas + Discord poller / relay
+        self.ext = self.poller = None
+        self._poll_task: asyncio.Task | None = None
+        if self.s.ext_enabled:
+            try:
+                from ..extsignals.discord import DiscordPoller, DiscordRelay
+                from ..extsignals.store import ExtSignalStore
+                from ..extsignals.tracker import ExtSignalTracker
+                relay = DiscordRelay(self.s, engine.http)
+                self.ext = ExtSignalTracker(engine, ExtSignalStore.from_settings(self.s), hub,
+                                            relay if relay.enabled else None)
+                self.poller = DiscordPoller(self.s, engine.http, self.ext, relay)
+            except Exception as e:   # pragma: no cover - never block the portfolio monitor
+                log.exception("external signals disabled")
+                self.errors.append({"ts": time.time(), "where": "ext init", "error": str(e)[:300]})
 
     # ------------------------------------------------------------------ control
     def poke(self, analysis: bool = False) -> None:
@@ -153,6 +168,10 @@ class Monitor:
         log.info("monitor started for portfolio %s", self.pf)
         was_open = None
         try:
+            if self.ext is not None:
+                await self._guard("ext catch-up", self.ext.catch_up())
+            if self.poller is not None and self.poller.enabled:
+                self._poll_task = asyncio.ensure_future(self.poller.run())
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -182,6 +201,16 @@ class Monitor:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            if self.poller is not None:
+                self.poller.stop()
+            if self._poll_task is not None:
+                try:
+                    await asyncio.wait_for(self._poll_task, 10)
+                except Exception:
+                    self._poll_task.cancel()
+                self._poll_task = None
+            if self.ext is not None:
+                await self.ext.drain(10)
             self.running = False
             self.lock.release()
             log.info("monitor stopped")
@@ -196,17 +225,36 @@ class Monitor:
             self.errors.append({"ts": time.time(), "where": where, "error": f"{type(e).__name__}: {e}"[:300]})
 
     # ------------------------------------------------------------------ sweeps
+    def _ext_symbols(self) -> list[str]:
+        return self.ext.symbols() if self.ext is not None else []
+
+    async def _ext_quotes(self, quotes: dict[str, dict]) -> None:
+        """Advance tracked external ideas (fetching quotes the portfolio sweep didn't cover)."""
+        ext = self._ext_symbols()
+        if not ext:
+            return
+        missing = [x for x in ext if x not in quotes]
+        if missing:
+            quotes = {**quotes, **await fetch_quotes(self.engine, missing, use_cache=False)}
+        await self._guard("ext tracking", self.ext.on_quotes({k: quotes[k] for k in ext if k in quotes}))
+
     async def quote_sweep(self) -> list:
         syms = self.store.symbols(self.pf)
         if not syms:
+            await self._ext_quotes({})
             self.last_quote_sweep = time.time()
+            self.sweeps += 1
+            self.hub.broadcast("status", self.status())
             return []
         cutoff = time.time() - self.s.monitor_analysis_interval
         new = [x for x in syms if x not in self.analysis and self._failed.get(x, 0) < cutoff]
         if new:                                   # symbols added since the last analysis sweep
             return await self.analysis_sweep(new)
-        quotes = await fetch_quotes(self.engine, syms, use_cache=False)
-        return await self._process_quotes(quotes)
+        ext = [x for x in self._ext_symbols() if x not in syms]
+        quotes = await fetch_quotes(self.engine, syms + ext, use_cache=False)
+        emitted = await self._process_quotes({k: v for k, v in quotes.items() if k in syms})
+        await self._ext_quotes(quotes)
+        return emitted
 
     async def analysis_sweep(self, only: list[str] | None = None) -> list:
         tracked = self.store.symbols(self.pf)
@@ -214,7 +262,10 @@ class Monitor:
             self.analysis.pop(gone, None)
             self.levels.pop(gone, None)
         syms = [x for x in tracked if only is None or x in only]
+        if only is None and self.ext is not None:
+            await self._guard("ext review", self.ext.review())
         if not syms:
+            await self._ext_quotes({})
             self.last_analysis_sweep = self.last_quote_sweep = time.time()
             return []
         quotes = await fetch_quotes(self.engine, syms, use_cache=False)
@@ -256,6 +307,7 @@ class Monitor:
             if rest:
                 quotes = {**quotes, **await fetch_quotes(self.engine, rest, use_cache=False)}
         emitted += await self._process_quotes(quotes)
+        await self._ext_quotes(quotes)
         return emitted
 
     async def _process_quotes(self, quotes: dict[str, dict]) -> list:
@@ -295,5 +347,7 @@ class Monitor:
             "next_quote_in_s": in_(self.next_quote_at), "next_analysis_in_s": in_(self.next_analysis_at),
             "sweeps": self.sweeps, "signals_emitted": self.signals_emitted, "errors": list(self.errors)[-10:],
             "channels": self.hub.describe(), "now": wall,
+            "external": ({**self.ext.status(), "discord": self.poller.describe() if self.poller else None}
+                         if self.ext is not None else None),
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

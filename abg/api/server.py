@@ -59,6 +59,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 task.cancel()
         await app.state.hub.aclose()
+        if app.state.monitor.ext is not None:
+            app.state.monitor.ext.store.close()
         app.state.store.close()
         await app.state.engine.aclose()
 
@@ -211,6 +213,10 @@ async def meta(request: Request):
 from .portfolio_routes import router as portfolio_router  # noqa: E402
 
 app.include_router(portfolio_router)
+
+from .ext_routes import router as ext_router  # noqa: E402
+
+app.include_router(ext_router)
 
 # --------------------------------------------------------------------------- dashboard
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

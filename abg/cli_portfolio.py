@@ -21,7 +21,7 @@ from .config import Settings
 from .engine import AnalysisEngine
 from .errors import ABGError
 from .portfolio import RULE_KINDS, PortfolioStore, snapshot
-from .render import big, num, risk_style, signed
+from .render import num, risk_style, signed
 
 pf_app = typer.Typer(help="Saved portfolio: holdings, watchlist, stops/targets.", no_args_is_help=True)
 alert_app = typer.Typer(help="Custom alert rules (price/change/RSI/score thresholds).", no_args_is_help=True)

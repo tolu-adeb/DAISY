@@ -2,7 +2,8 @@
 
 The terminal keeps a **saved portfolio** (holdings, watchlist, stops/targets, alert rules, signal
 history) in a real database, and a **live monitor** watches it continuously. The monitor sends
-signals to the dashboard, desktop pop-ups, Discord and email.
+signals to the dashboard, desktop pop-ups, Discord and email. The same monitor also tracks **external
+trade ideas** parsed from messages or Discord channels (see [docs/11](11-external-signals.md)).
 
 ```
          ┌──────────── portfolio.sqlite3 (ABG_DATA_DIR) ────────────┐

@@ -192,7 +192,7 @@ def render_provenance(r: dict) -> None:
         parts.append(f"{tag}←{p.get('provider')} ({'cache ' + c if c not in ('miss', None) else str(p.get('latency_ms')) + 'ms'})")
     t = r.get("timings_ms") or {}
     console.print(f"[dim]sources: {' · '.join(parts)}[/dim]")
-    console.print(f"[dim]timings: " + " · ".join(f"{k} {v:.0f}ms" for k, v in t.items()) + "[/dim]")
+    console.print("[dim]timings: " + " · ".join(f"{k} {v:.0f}ms" for k, v in t.items()) + "[/dim]")
 
 
 def render_chain(o: dict, rows: int = 8) -> None:

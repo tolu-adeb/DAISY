@@ -135,6 +135,26 @@ class Settings(BaseSettings):
     notify_email_min_severity: str = "warning"
     email_batch_seconds: float = 120            # bundle non-critical signals into one email per window
 
+    # ---------------------------------------------------------------- external signals (docs/11)
+    ext_enabled: bool = True                    # track external trade ideas inside the monitor
+    discord_bot_token: str | None = None        # bot token (NOT a user token) to read signal channels
+    ext_discord_channel_ids: str = ""           # comma-separated channel ids to read ideas from
+    ext_poll_seconds: float = 20                # how often to poll those channels
+    ext_backfill_messages: int = 0              # on first start, also parse this many older messages per channel
+    ext_relay_mode: str = "webhook"             # webhook | reply | none : how decisions go back to the channel
+    ext_relay_webhook_url: str | None = None    # webhook for relays (falls back to ABG_DISCORD_WEBHOOK_URL)
+    ext_relay_ack: bool = True                  # post an "interpreted & tracking" message when an idea is ingested
+    ext_relay_kinds: str = ""                   # comma-separated event kinds to relay (empty = all)
+    ext_account_size: float = 10_000            # paper account used to size tracked ideas
+    ext_risk_pct: float = 1.0                   # % of the paper account risked per idea
+    ext_entry_expiry_days: float = 45           # pending swing ideas expire if the entry isn't reached
+    ext_max_hold_days: float = 90               # active swing ideas are closed after this long
+    ext_approach_pct: float = 1.5               # "approaching entry" heads-up distance
+    ext_min_entry_grade: str = "C"              # grade gate for paper entries (A/B/C/D, or "none")
+    ext_regrade_seconds: float = 900            # re-grade a blocked / pending idea at most this often
+    ext_move_stop_to_breakeven: bool = True     # after TP1, stop -> entry
+    ext_max_entry_distance_pct: float = 35      # reject ideas whose entry is further than this from the price
+
     log_level: str = "WARNING"
 
     # ---------------------------------------------------------------- helpers
@@ -149,6 +169,9 @@ class Settings(BaseSettings):
         disabled = {p.strip().lower() for p in self.disabled_providers.split(",") if p.strip()}
         names = [p.strip().lower() for p in raw.split(",") if p.strip() and p.strip().lower() not in disabled]
         return names or None
+
+    def ext_channel_list(self) -> list[str]:
+        return [c.strip() for c in self.ext_discord_channel_ids.split(",") if c.strip()]
 
     def extra_risk_models(self) -> list[str]:
         return [m.strip() for m in self.risk_models.split(",") if m.strip()]

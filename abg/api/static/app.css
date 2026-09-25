@@ -209,7 +209,7 @@ a.sym:hover { text-decoration: underline; }
 .sig.critical { border-left-color: var(--critical); background: color-mix(in srgb, var(--critical) 10%, var(--surface-2)); }
 .sig.unread { box-shadow: inset 0 0 0 1px var(--accent); }
 .sig .t { font-weight: 600; font-size: 13px; }
-.sig .m { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.sig .m { font-size: 12px; color: var(--text-secondary); margin-top: 2px; white-space: pre-line; max-height: 9.5em; overflow: hidden; }
 .sig .meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 8px; margin-bottom: 2px; }
 .sev { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .sev.critical { color: var(--critical); } .sev.warning { color: color-mix(in srgb, var(--warning) 70%, var(--text-primary)); }
@@ -218,7 +218,7 @@ a.sym:hover { text-decoration: underline; }
 @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, var(--surface-2)); } to { background: var(--surface-2); } }
 td.num { white-space: nowrap; }
 .ticker { width: 84px; }
-@media (max-width: 560px) { .tab, .icon { padding: 6px 7px; } }
+@media (max-width: 560px) { .tab, .icon { padding: 6px 5px; font-size: 13px; } .tabs { flex-wrap: wrap; justify-content: flex-start; gap: 2px; } }
 
 /* ---------------- prediction ---------------- */
 .fc-top { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
@@ -246,3 +246,30 @@ td.num { white-space: nowrap; }
 .scen b { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-secondary); }
 .scen .v { font: 700 18px var(--mono); }
 @media (max-width: 560px) { .scen { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------------ external signals */
+#ext-text { width: 100%; box-sizing: border-box; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; font: 13px/1.45 var(--mono); resize: vertical; }
+.parsed { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px 14px; margin-top: 10px; font-size: 13px; }
+.parsed div span { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }
+.warn-list { margin: 8px 0 0; padding-left: 18px; color: var(--warning); font-size: 12px; }
+.st { font: 600 11px var(--mono); padding: 2px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.st.pending { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.st.active { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, transparent); }
+.st.closed { color: var(--accent); }
+.st.invalidated, .st.rejected { color: var(--down); }
+.st.missed, .st.expired, .st.cancelled { color: var(--text-muted); }
+.grade { font: 700 12px var(--mono); padding: 1px 6px; border-radius: 4px; background: var(--surface-2); }
+.grade.A { color: var(--up); } .grade.B { color: var(--up); opacity: .8; } .grade.C { color: var(--warning); } .grade.D { color: var(--down); }
+#ext-ideas tr.sel td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+#ext-ideas tr { cursor: pointer; }
+.plan { font: 12px var(--mono); white-space: nowrap; }
+.ev { border-left: 3px solid var(--border); padding: 6px 10px; margin-bottom: 10px; background: var(--surface-2); border-radius: 0 6px 6px 0; }
+.ev .t { font-weight: 600; font-size: 13px; } .ev .when { font-size: 11px; color: var(--text-muted); }
+.ev .body { font-size: 12px; color: var(--text-secondary); margin-top: 4px; white-space: pre-line; }
+.ev.entry, .ev.target_hit { border-left-color: var(--up); } .ev.stop_hit, .ev.invalidated, .ev.rejected { border-left-color: var(--down); }
+.ev.entry_blocked, .ev.advisory, .ev.approaching { border-left-color: var(--warning); }
+.ev .relay { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.idea-head { font-size: 13px; margin-bottom: 10px; } .idea-head .raw { font: 12px var(--mono); color: var(--text-muted); margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+.idea-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; } .idea-actions input { width: 90px; }
+.idea-head .plan { white-space: normal; }

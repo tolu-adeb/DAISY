@@ -46,6 +46,7 @@ Precedence: `Settings(...)` kwargs / CLI flags → environment (`ABG_*`) → `.e
 | `ABG_NOTIFY_DESKTOP` / `_MIN_SEVERITY` | true / warning | Native pop-ups (needs `plyer`) |
 | `ABG_DISCORD_WEBHOOK_URL` / `ABG_NOTIFY_DISCORD_MIN_SEVERITY` | – / info | Discord alerts |
 | `ABG_SMTP_HOST`, `ABG_SMTP_PORT`, `ABG_SMTP_USER`, `ABG_SMTP_PASSWORD`, `ABG_SMTP_SSL`, `ABG_EMAIL_FROM`, `ABG_EMAIL_TO`, `ABG_NOTIFY_EMAIL_MIN_SEVERITY`, `ABG_EMAIL_BATCH_SECONDS` | –, 587, –, –, false, –, –, warning, 120 | Email alerts |
+| `ABG_EXT_*`, `ABG_DISCORD_BOT_TOKEN` | see [docs/11 §11.11](11-external-signals.md#1111-settings) | External signals: Discord channels, relay mode, paper sizing, time limits, entry-grade gate |
 | `ABG_LOG_LEVEL` | `WARNING` | |
 
 ## 7.2 Running
@@ -107,7 +108,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-118 tests, all offline:
+139 tests, all offline:
 
 | File | Covers |
 |---|---|
@@ -118,6 +119,7 @@ pytest -q
 | `test_providers.py` | Every adapter against recorded payload shapes (MockTransport), vendor throttle bodies, HTTP status mapping, timeouts, 4 CSV formats |
 | `test_forecast.py` | Simulation reproducibility, ordering, analytic mean and vol checks, tilt direction, barrier odds, calibration coverage, every recommendation guard-rail, engine/API/monitor integration |
 | `test_portfolio_live.py` | Average-cost/realized P&L, oversell & delete guards, backup round-trip, persistence, NYSE holidays, live-bar splicing, every signal family incl. cooldowns/bands/one-shot rules, Discord (429 retry), email digest vs critical, hub isolation, monitor sweeps + single-instance lock + poke, portfolio REST API |
+| `test_extsignals.py` | Parser formats and updates, lifecycle (zone / breakout / short, approach, partials + breakeven + trailing, stop-before-target on ambiguous bars, gap fills, close-basis stops, invalidated / missed / expired, grade gate), tracker ingest/defaults/duplicates/rejections/source updates/market entries, daily-bar catch-up, Discord poller + webhook relay (MockTransport), monitor integration, REST API |
 | `test_engine_risk_api.py` | End-to-end strict-JSON report, partial-failure isolation, fatal history failure, CSV, compare, feature no-look-ahead, baseline monotonicity, plug-in isolation and schema checks, portfolio math, sentiment, mocked Claude (success, cache, fallback), every REST endpoint and error code |
 
 ## 7.6 Known limitations

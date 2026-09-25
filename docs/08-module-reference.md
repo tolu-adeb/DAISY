@@ -247,3 +247,25 @@ See [Portfolio & live signals §9.6](09-portfolio-and-live-signals.md#96-interna
 - Engine hook: `AnalysisEngine._forecast` runs in the compute thread (daily interval only). `_build_report`
   calls `finalize` after risk. The monitor asks for 2,000 paths and records `recommendation`,
   `forecast_confidence` and `prob_up` per symbol.
+
+## `extsignals/*`
+
+See [External signals](11-external-signals.md). Key contracts:
+
+- `parser.parse(text) -> ParsedSignal` is deterministic and does no network calls. `kind` is `idea | update | none`, and
+  `trackable` needs a symbol, direction and entry type. `looks_like_signal(text)` is the cheap chat pre-filter.
+- `lifecycle.step(idea, Obs, approach_pct, move_stop_to_be, allow_entry) -> [event]` is a pure state machine that
+  mutates the idea. `trigger_fill(idea, obs)` gives the fill price or None. `manual_exit` handles source/user exits, and
+  `summary_stats(ideas)` builds the track record (rejected ideas are excluded).
+- `commentary.facts(idea, report, barrier, price)` extracts the live context. `grade(idea, facts)` returns
+  `(A-D, score, reasons)`, and `explain(kind, idea, event, facts, extra)` returns `{title, summary, why, plan, risks, fields}`.
+- `store.ExtSignalStore` works on `signals.sqlite3` (ideas / events / messages / kv). It is thread-safe (RLock) and uses WAL.
+- `tracker.ExtSignalTracker(engine, store, hub=None, relay=None)` provides `ingest(text, source, channel_id, author,
+  message_id, reply_to)`, `on_quotes(quotes)`, `review()`, `catch_up()`, `cancel/close/edit`, `view(idea)` and `stats()`.
+  Mutations are serialised with an asyncio lock. Relays run in background tasks, in order, behind a second lock.
+  Context (analysis + closes) is cached per symbol, and `barrier()` runs `forecast.simulate` on the idea's own levels.
+- `discord.DiscordPoller.poll_once()` uses REST + saved cursors. `DiscordRelay.send(idea, kind, x) -> (status, message_id)`
+  posts via a webhook or as a bot reply. `message_text(m)` flattens content, embeds and forwarded snapshots.
+- `Monitor` builds the tracker and poller when `ABG_EXT_ENABLED`. It runs `catch_up` at start and starts the poller
+  task inside the lock. It adds ext symbols to quote sweeps and calls `review()` on full analysis sweeps.
+  `NotificationHub.publish(sig, skip={"discord"})` avoids a double Discord post when the relay is on.

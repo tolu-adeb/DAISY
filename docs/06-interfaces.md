@@ -25,6 +25,7 @@ Global options go **before** the command: `abg [--demo] [--no-cache] [--csv-dir 
 | `signals` | Signal history | `--limit`, `--symbol` |
 | `monitor` | Live monitor in this window | `--once`, `--interval` |
 | `notify-test` | Test Discord / email / desktop | `--channel` |
+| `ext parse / add / list / show / cancel / close / edit / update / stats / poll / discord-test` | External signals ([docs/11](11-external-signals.md)) | `--author`, `--status`, `--price`, `--fraction`, `--stop`, `-t`, `--send` |
 | `version` | Version | |
 
 Exit codes: 0 ok, 1 no data for the request, 2 handled error (message plus per-provider attempts printed), 130 Ctrl-C.

@@ -18,8 +18,9 @@ abg serve                   # web dashboard at http://127.0.0.1:8000
 | Risk | — | **Versioned feature schema (40 features)**, `RiskModel` plug-in interface, baseline VaR/CVaR model, portfolio risk, training-data export with forward labels |
 | Interfaces | CLI + React | Rich CLI (14 commands), REST API with OpenAPI docs, dashboard, importable Python library |
 | Prediction | — | Monte Carlo ensemble (GBM-t + filtered historical simulation): 1W–1Y return ranges, scenarios, setup target/stop odds, walk-forward calibration, confidence rating, thesis and a guard-railed Strong Buy…Sell model view |
+| External signals | — | Parses swing ideas from pasted messages or Discord channels (entry zone / breakout, stop, targets, updates such as "TP1 hit, stop to BE"), validates them against live data, tracks them for weeks, grades each entry A–D, takes paper entries / partial profits / stops / exits, and relays every decision back to the channel with the reasoning |
 | Portfolio & alerts | — | Saved portfolio (average-cost P&L, stops/targets, watchlist), continuous live monitor, 17 edge-triggered signal types, dashboard + desktop + Discord + email alerts |
-| Tests | — | 118 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
+| Tests | — | 139 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
 
 ## Install
 
@@ -60,6 +61,11 @@ abg portfolio show                       # live P&L, weights, portfolio VaR
 abg alert add NVDA price_above 150
 abg monitor                              # run the live signal monitor in this window
 abg notify-test                          # check Discord / email / desktop alerts
+
+# external signals: interpret, track, relay (see docs/11)
+abg ext add "$NVDA swing long entry zone 117.50-119, SL 112, TP1 130 TP2 138" --author alpha-desk
+abg ext list  |  abg ext show 1  |  abg ext stats
+abg ext discord-test --send              # check the bot token, signal channels and the relay
 abg --demo analyze AAPL                  # offline demo with clearly-flagged simulated data
 ```
 
@@ -89,11 +95,12 @@ asyncio.run(main())
 8. [Module reference](docs/08-module-reference.md): file-by-file, function-by-function internals
 9. [Portfolio & live signals](docs/09-portfolio-and-live-signals.md): saved portfolio, monitor, signal catalogue, Discord/email/desktop alerts
 10. [Prediction](docs/10-prediction.md): Monte Carlo simulation of future returns, calibration, confidence rating, recommendation rules
+11. [External signals](docs/11-external-signals.md): signal parser, trade-idea lifecycle, entry grading, Discord polling and relays
 
 ## Tests
 
 ```bash
-pytest -q          # 118 tests, fully offline (no network, no API keys)
+pytest -q          # 139 tests, fully offline (no network, no API keys)
 ```
 
 > Educational analysis tool, not investment advice.

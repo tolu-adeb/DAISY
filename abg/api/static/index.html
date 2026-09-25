@@ -25,6 +25,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="analyze" role="tab">Analyze</button>
     <button class="tab" data-view="portfolio" role="tab">Portfolio <span id="sig-badge" class="count" hidden>0</span></button>
+    <button class="tab" data-view="signals" role="tab">Signals <span id="ext-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="compare" role="tab">Compare</button>
     <button class="tab" data-view="status" role="tab">Providers</button>
     <button id="theme" class="icon" title="Toggle theme" aria-label="Toggle theme">◐</button>
@@ -145,6 +146,38 @@
   </div>
 </main>
 
+<main id="view-signals" class="view" hidden>
+  <section class="row kpis5" id="ext-kpis"></section>
+  <section class="card monitor-bar" id="ext-status"></section>
+  <div class="pf-grid">
+    <div class="pf-main">
+      <section class="card">
+        <div class="card-head"><h2>Interpret a signal</h2><span class="muted">paste a trade idea from Discord, Telegram, a newsletter…</span></div>
+        <form id="ext-form" autocomplete="off">
+          <textarea id="ext-text" rows="3" maxlength="4000" aria-label="Signal message"
+            placeholder="$NVDA swing long entry zone 117.50-119, SL 112, TP1 130 TP2 138&#10;or an update: TP1 hit on NVDA, moving stop to breakeven"></textarea>
+          <div class="inline-form">
+            <input id="ext-author" placeholder="Source / author (optional)" maxlength="80" aria-label="Source">
+            <button type="button" class="btn" id="ext-preview">Interpret</button>
+            <button class="primary">Track it</button>
+          </div>
+        </form>
+        <div id="ext-parsed"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Tracked ideas</h2>
+          <select id="ext-filter" aria-label="Filter"><option value="open">Open</option><option value="all">All</option><option value="final">Finished</option></select></div>
+        <div class="scroll" id="ext-ideas"></div>
+      </section>
+      <section class="card" id="ext-sources"></section>
+    </div>
+    <aside class="card pf-feed" id="ext-detail">
+      <div class="card-head"><h2>Decision timeline</h2></div>
+      <div id="ext-timeline"><p class="muted">Select an idea to see every decision and the reasoning behind it.</p></div>
+    </aside>
+  </div>
+</main>
+
 <main id="view-status" class="view" hidden>
   <div class="card" id="status-out"></div>
 </main>
@@ -152,5 +185,6 @@
 <script src="/static/app.js"></script>
 <script src="/static/forecast.js"></script>
 <script src="/static/portfolio.js"></script>
+<script src="/static/ext.js"></script>
 </body>
 </html>

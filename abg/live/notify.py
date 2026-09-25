@@ -271,11 +271,15 @@ class NotificationHub:
                 except Exception:
                     pass
 
-    async def publish(self, sig: Signal, persist: bool = True) -> Signal:
+    async def publish(self, sig: Signal, persist: bool = True, skip: set[str] | None = None) -> Signal:
+        """``skip``: channel names not to deliver to (e.g. external-signal events are relayed to
+        Discord by their own relay, so the generic Discord embed is skipped)."""
         if persist:
             sig.id = self.store.save_signal(sig.to_dict())
         self.broadcast("signal", sig.to_dict())
         for ch in self.channels:
+            if skip and ch.name in skip:
+                continue
             if _allowed(sig, ch.min_severity):
                 t = asyncio.ensure_future(self._deliver(ch, sig))
                 self._tasks.add(t)
