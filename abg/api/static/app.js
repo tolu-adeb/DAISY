@@ -57,7 +57,7 @@ async function init() {
 
 function showView(v) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
-  for (const id of ["analyze", "portfolio", "signals", "markets", "compare", "status"]) $("#view-" + id).hidden = id !== v;
+  document.querySelectorAll("main.view").forEach((m) => { m.hidden = m.id !== "view-" + v; });
   if (v === "status") loadStatus();
   if (v === "markets" && window.loadMarkets) window.loadMarkets();
   if (v === "signals" && window.loadExt) window.loadExt();

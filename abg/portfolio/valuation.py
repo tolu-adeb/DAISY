@@ -20,10 +20,12 @@ async def fetch_quotes(engine: "AnalysisEngine", symbols: list[str], use_cache: 
     """Quotes for many symbols concurrently; failures become {'error': ...} (never raise)."""
     async def one(s):
         try:
-            f = await engine.quote(s, use_cache=use_cache)
+            f = await asyncio.wait_for(engine.quote(s, use_cache=use_cache), 20)
             return s, {**f.value.to_dict(), "provider": f.provenance.provider, "cache": f.provenance.cache}
         except ABGError as e:
             return s, {"symbol": s, "error": e.message}
+        except asyncio.TimeoutError:
+            return s, {"symbol": s, "error": "timed out"}
     return dict(await asyncio.gather(*(one(s) for s in symbols)))
 
 

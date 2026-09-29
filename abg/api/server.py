@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -266,4 +266,22 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.get("/", include_in_schema=False)
 async def index():
-    return FileResponse(STATIC / "index.html")
+    """index.html with cache-busting asset URLs (?v=<file mtime>), so a browser never runs a stale script
+    against a newer server."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+
+    def bust(m):
+        f = STATIC / m.group(2)
+        v = int(f.stat().st_mtime) if f.exists() else __version__
+        return f'{m.group(1)}/static/{m.group(2)}?v={v}"'
+    import re as _re
+    html = _re.sub(r'(src="|href=")/static/([\w./-]+)"', bust, html)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+@app.middleware("http")
+async def _static_revalidate(request: Request, call_next):
+    resp = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"      # always revalidate (ETag makes that cheap)
+    return resp

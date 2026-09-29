@@ -27,8 +27,22 @@ GROUPS: list[tuple[str, list[str]]] = [
 ]
 
 
-async def overview(engine, groups: list[tuple[str, list[str]]] | None = None) -> dict:
-    groups = groups or GROUPS
+_CACHE: dict = {}
+
+
+async def overview(engine, groups: list[tuple[str, list[str]]] | None = None, max_age: float = 60) -> dict:
+    """Cached for ``max_age`` seconds so repeated page loads don't re-quote ~30 instruments."""
+    key = id(engine)
+    hit = _CACHE.get(key)
+    if groups is None and hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    out = await _overview(engine, groups or GROUPS)
+    if groups is None:
+        _CACHE[key] = (time.time(), out)
+    return out
+
+
+async def _overview(engine, groups: list[tuple[str, list[str]]]) -> dict:
     syms = [s for _, g in groups for s in g]
     quotes = await fetch_quotes(engine, syms, use_cache=True)
     out = []

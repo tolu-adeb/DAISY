@@ -2,10 +2,14 @@
 "use strict";
 
 async function loadMarkets() {
-  $("#mk-groups").innerHTML = '<p class="muted">Loading markets…</p>';
+  if (!$("#mk-groups").children.length) $("#mk-groups").innerHTML = '<p class="muted">Loading markets… (the first load quotes ~30 instruments and can take a few seconds)</p>';
+  // calendar and models don't depend on market data: render them straight away
+  api("/api/calendar?days=21").then(renderCalendar).catch((e) => { $("#mk-calendar").innerHTML = `<p class="muted">${esc(e.message)}</p>`; });
+  api("/api/models").then((models) => {
+    $("#mk-models").innerHTML = modelHtml(models.grade_model, "Entry grade", "abg train grade") + modelHtml(models.risk_model, "Risk", "abg train risk");
+  }).catch(() => {});
   try {
-    const [m, cal, models] = await Promise.all([api("/api/markets"), api("/api/calendar?days=21").catch(() => null),
-                                                api("/api/models").catch(() => ({}))]);
+    const m = await api("/api/markets");
     const rg = m.regime;
     $("#mk-regime").innerHTML = rg ? `<b>Market regime: ${esc(rg.label)}</b><span class="muted">${esc(rg.summary.split(": ").slice(1).join(": "))}</span>
       ${(rg.notes || []).map((n) => `<span class="neg">${esc(n)}</span>`).join("")}` : '<span class="muted">Regime unavailable</span>';
@@ -17,15 +21,18 @@ async function loadMarkets() {
         ${r.asset_class.includes("future") ? `<td class="n">${fmt(r.multiplier, 0)} · ${fmt(r.tick_value, 2)}</td>` : (g.rows.some((x) => x.asset_class.includes("future")) ? "<td></td>" : "")}</tr>`).join("")}
       </tbody></table></section>`).join("");
     bindSymLinks("#mk-groups");
-    if (cal) {
-      $("#mk-blackout").textContent = `entries pause ${cal.blackout.before_min} min before / ${cal.blackout.after_min} min after macro releases`;
-      $("#mk-calendar").innerHTML = cal.events.length ? cal.events.map((e) => `<div class="cal-row ${e.kind === "earnings" ? "earn" : ""}">
-        <span>${esc(new Date(e.ts * 1000).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }))}</span>
-        <span>${esc(e.name)} ${e.detail ? `<span class="muted">· ${esc(e.detail)}</span>` : ""}${e.estimated ? ' <span class="est">(estimated)</span>' : ""}</span></div>`).join("")
-        : '<p class="muted">No scheduled releases in the next 3 weeks.</p>';
-    }
-    $("#mk-models").innerHTML = modelHtml(models.grade_model, "Entry grade", "abg train grade") + modelHtml(models.risk_model, "Risk", "abg train risk");
-  } catch (e) { $("#mk-groups").innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  } catch (e) {
+    $("#mk-groups").innerHTML = `<section class="card"><h2>Markets unavailable</h2><p class="muted">${esc(e.message)}</p>
+      <p class="muted">If this says "Not Found", the server is still running old code: close its window and start it again.</p></section>`;
+  }
+}
+
+function renderCalendar(cal) {
+  $("#mk-blackout").textContent = `entries pause ${cal.blackout.before_min} min before / ${cal.blackout.after_min} min after macro releases`;
+  $("#mk-calendar").innerHTML = cal.events.length ? cal.events.map((e) => `<div class="cal-row ${e.kind === "earnings" ? "earn" : ""}">
+    <span>${esc(new Date(e.ts * 1000).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }))}</span>
+    <span>${esc(e.name)} ${e.detail ? `<span class="muted">· ${esc(e.detail)}</span>` : ""}${e.estimated ? ' <span class="est">(estimated)</span>' : ""}</span></div>`).join("")
+    : '<p class="muted">No scheduled releases in the next 3 weeks.</p>';
 }
 window.loadMarkets = loadMarkets;
 

@@ -126,6 +126,11 @@ class AnalysisEngine:
     async def history(self, symbol: str, period: str = "1y", interval: str = "1d", source: str | None = None,
                       use_cache: bool = True, warmup: bool = True, ttl: float | None = None) -> Fetched[PriceHistory]:
         sym = normalize_symbol(symbol)
+        if self._yahoo_first(sym, source):
+            try:
+                return await self.history(sym, period, interval, "yahoo", use_cache, warmup, ttl)
+            except ABGError:
+                pass
         end = utcnow().date()
         start = self._window(period, interval, end) if warmup else period_to_start(period, end)
         if ttl is None:
@@ -139,8 +144,19 @@ class AnalysisEngine:
             Capability.HISTORY, sym, lambda p: p.get_history(sym, start, end, interval),
             key=f"{interval}:{start}:{end}", ttl=ttl, interval=interval, only=source, validate=validate, use_cache=use_cache)
 
+    def _yahoo_first(self, sym: str, source: str | None) -> bool:
+        """Futures, indexes, yields, FX and crypto: only Yahoo-style sources carry them, so try Yahoo first
+        instead of burning keyed-provider rate limits on symbols they don't serve."""
+        return (source is None and ("=" in sym or sym.startswith("^") or sym.endswith("-USD") or sym == "DX-Y.NYB")
+                and "yahoo" in self.settings.provider_list() and "yahoo" in self.router.slots)
+
     async def quote(self, symbol: str, source: str | None = None, use_cache: bool = True) -> Fetched[Quote]:
         sym = normalize_symbol(symbol)
+        if self._yahoo_first(sym, source):
+            try:
+                return await self.quote(sym, "yahoo", use_cache)
+            except ABGError:
+                pass
         return await self.router.fetch(Capability.QUOTE, sym, lambda p: p.get_quote(sym), key="q",
                                        ttl=self.settings.ttl_quote, only=source, use_cache=use_cache, persist=False)
 
