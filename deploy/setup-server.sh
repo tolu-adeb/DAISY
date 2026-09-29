@@ -53,6 +53,13 @@ python3 -m venv "$APP_DIR/.venv"
 
 say "4/6 configuration"
 mkdir -p "$DATA_DIR"
+ENV_FILE="${ENV_FILE:-$HOME/.env.server.local}"          # prepared on your PC (keys + tokens), if uploaded
+if [ ! -f "$APP_DIR/.env" ] && [ -f "$ENV_FILE" ]; then
+  cp "$ENV_FILE" "$APP_DIR/.env"
+  grep -q '^ABG_DATA_DIR=' "$APP_DIR/.env" || echo "ABG_DATA_DIR=$DATA_DIR" >> "$APP_DIR/.env"
+  grep -q '^ABG_CACHE_DIR=' "$APP_DIR/.env" || echo "ABG_CACHE_DIR=$DATA_DIR/cache" >> "$APP_DIR/.env"
+  echo "using your prepared settings from $ENV_FILE"
+fi
 if [ ! -f "$APP_DIR/.env" ]; then
   cp "$APP_DIR/.env.example" "$APP_DIR/.env"
   {
