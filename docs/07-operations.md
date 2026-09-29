@@ -43,6 +43,7 @@ Precedence: `Settings(...)` kwargs / CLI flags → environment (`ABG_*`) → `.e
 | `ABG_MONITOR_HISTORY_TTL` | 21600 s | Daily history reuse inside the monitor |
 | `ABG_SIGNAL_COOLDOWN` | 14400 s | Minimum gap before the same signal re-fires |
 | `ABG_PRICE_MOVE_PCT`, `ABG_POSITION_LOSS_PCT`, `ABG_PORTFOLIO_MOVE_PCT`, `ABG_CONCENTRATION_PCT`, `ABG_SETUP_MIN_CONFIDENCE` | 3, 8, 2, 35, 0.75 | Signal thresholds |
+| `ABG_ALERT_CROSS_REARM_PCT` | 0.2 | How far past the level price must move before a repeating cross alert can fire again |
 | `ABG_NOTIFY_DESKTOP` / `_MIN_SEVERITY` | true / warning | Native pop-ups (needs `plyer`) |
 | `ABG_DISCORD_WEBHOOK_URL` / `ABG_NOTIFY_DISCORD_MIN_SEVERITY` | – / info | Discord alerts |
 | `ABG_SMTP_HOST`, `ABG_SMTP_PORT`, `ABG_SMTP_USER`, `ABG_SMTP_PASSWORD`, `ABG_SMTP_SSL`, `ABG_EMAIL_FROM`, `ABG_EMAIL_TO`, `ABG_NOTIFY_EMAIL_MIN_SEVERITY`, `ABG_EMAIL_BATCH_SECONDS` | –, 587, –, –, false, –, –, warning, 120 | Email alerts |

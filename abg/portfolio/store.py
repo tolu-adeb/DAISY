@@ -57,9 +57,13 @@ CREATE TABLE IF NOT EXISTS signal_state (
   PRIMARY KEY (portfolio, symbol, key));
 """
 
+CROSS_KINDS = ("price_cross", "price_cross_up", "price_cross_down")
 RULE_KINDS = {
     "price_above": "Price rises above value",
     "price_below": "Price falls below value",
+    "price_cross": "Price crosses value (either direction)",
+    "price_cross_up": "Price crosses up through value",
+    "price_cross_down": "Price crosses down through value",
     "change_above": "Day change % rises above value",
     "change_below": "Day change % falls below value (use a negative number)",
     "rsi_above": "RSI(14) rises above value",
@@ -299,7 +303,38 @@ class PortfolioStore:
         self._x("UPDATE alert_rules SET enabled=? WHERE id=? AND portfolio=?", (int(enabled), rule_id, self.ensure(portfolio)))
 
     def delete_rule(self, portfolio: str, rule_id: int) -> bool:
-        return self._x("DELETE FROM alert_rules WHERE id=? AND portfolio=?", (rule_id, self.ensure(portfolio))) > 0
+        pf = self.ensure(portfolio)
+        self._x("DELETE FROM signal_state WHERE portfolio=? AND key=?", (pf, f"rule:{rule_id}"))
+        return self._x("DELETE FROM alert_rules WHERE id=? AND portfolio=?", (rule_id, pf)) > 0
+
+    def rule_dicts(self, portfolio: str) -> list[dict]:
+        """Rules for display, with a cross rule's live state (which side price is on, armed or not)."""
+        out = []
+        for r in self.rules(portfolio):
+            d = r.to_dict()
+            if r.kind in CROSS_KINDS:
+                st = self.get_state(r.portfolio, r.symbol, f"rule:{r.id}")
+                d["state"] = st if isinstance(st, dict) else None
+            out.append(d)
+        return out
+
+    def seed_cross(self, rule: AlertRule, price: float | None) -> str | None:
+        """Record which side of the level price starts on, so the first real cross fires.
+
+        Returns a short human note (e.g. "price 152.10 is above 150 — fires on the next cross down"),
+        or None when there is no price to seed from (the monitor then seeds on its first quote)."""
+        if rule.kind not in CROSS_KINDS or not price:
+            return None
+        side = "above" if price >= rule.value else "below"
+        self.set_state(rule.portfolio, rule.symbol, f"rule:{rule.id}", {"side": side, "armed": True})
+        if rule.kind == "price_cross":
+            nxt = "down" if side == "above" else "up"
+        else:
+            nxt = rule.kind.rsplit("_", 1)[1]
+        wait = (rule.kind == "price_cross_up" and side == "above") or (rule.kind == "price_cross_down" and side == "below")
+        return (f"{rule.symbol} is at {price:,.2f}, {side} {rule.value:g} - "
+                + (f"it has to go back {'below' if side == 'above' else 'above'} first, then this fires on the cross {nxt}."
+                   if wait else f"fires when it crosses {nxt} through {rule.value:g}."))
 
     # ------------------------------------------------------------------ signals
     def save_signal(self, sig: dict) -> int:

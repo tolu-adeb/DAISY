@@ -28,9 +28,9 @@ from .discord import API
 
 log = logging.getLogger(__name__)
 GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
-ADMIN = {"track", "close", "cancel", "stop"}
+ADMIN = {"track", "close", "cancel", "stop", "alert"}
 
-S, I, N = 3, 4, 10        # option types: string, integer, number
+S, I, B, N = 3, 4, 5, 10     # option types: string, integer, boolean, number
 COMMANDS = [{
     "name": "abg", "description": "ABG Intelligence Terminal", "type": 1,
     "options": [
@@ -40,6 +40,14 @@ COMMANDS = [{
         {"type": 1, "name": "stats", "description": "Track record by source and signal type"},
         {"type": 1, "name": "risk", "description": "Paper equity, open risk, prop-firm limits"},
         {"type": 1, "name": "markets", "description": "Market regime and the macro calendar"},
+        {"type": 1, "name": "alerts", "description": "Active price alerts on the portfolio / watchlist"},
+        {"type": 1, "name": "alert", "description": "(admin) Alert when a symbol's price crosses a level",
+         "options": [{"type": S, "name": "symbol", "description": "Ticker, e.g. NVDA or NQ", "required": True},
+                     {"type": N, "name": "price", "description": "The level", "required": True},
+                     {"type": S, "name": "direction", "description": "Which way (default: either)", "required": False,
+                      "choices": [{"name": "either way", "value": "any"}, {"name": "crosses up", "value": "up"},
+                                  {"name": "crosses down", "value": "down"}]},
+                     {"type": B, "name": "repeat", "description": "Keep alerting on every cross", "required": False}]},
         {"type": 1, "name": "track", "description": "(admin) Track a signal",
          "options": [{"type": S, "name": "text", "description": "The signal text", "required": True}]},
         {"type": 1, "name": "close", "description": "(admin) Close or trim an open idea",
@@ -187,7 +195,7 @@ class DiscordGateway:
             return
         try:
             if eph:
-                emb = {"title": "Not allowed", "description": "Only the terminal's admins can change ideas. "
+                emb = {"title": "Not allowed", "description": "Only the terminal's admins can change ideas or alerts. "
                        "Ask the owner to add your user id to ABG_DISCORD_ADMIN_IDS.", "color": 0xE34948}
             else:
                 emb = await self.run_command(name, args, user)
@@ -245,7 +253,34 @@ class DiscordGateway:
             lines += ["**Next 7 days:**"] + [f"• {e.date} {e.time or ''} ET — {e.name}{' (est.)' if e.estimated else ''}"
                                                for e in evs[:10]]
             return {"title": "Markets", "description": "\n".join(lines)[:4000], "color": 0x5865F2}
+        if name == "alerts":
+            if self.mon is None:
+                return {"title": "Alerts unavailable", "description": "The portfolio monitor isn't attached.", "color": 0xE34948}
+            rules = [r for r in self.mon.store.rule_dicts(self.mon.pf) if r["enabled"]]
+            lines = [f"#{r['id']} **{r['symbol']}** {r['kind'].replace('_', ' ')} {r['value']:g}"
+                     + (f" · now {r['state']['side']}" if (r.get("state") or {}).get("side") else "")
+                     + (" · repeating" if not r["one_shot"] else "") for r in rules[:40]]
+            return {"title": f"Active alerts ({len(rules)})", "description": "\n".join(lines)[:4000] or "None.",
+                    "color": 0x5865F2}
         who = user.get("username") or "discord"
+        if name == "alert":
+            if self.mon is None:
+                return {"title": "Alerts unavailable", "description": "The portfolio monitor isn't attached.", "color": 0xE34948}
+            from ..markets.instruments import canonical
+            sym = canonical(str(a.get("symbol", "")).upper().lstrip("$"))
+            d = a.get("direction") or "any"
+            kind = {"up": "price_cross_up", "down": "price_cross_down"}.get(d, "price_cross")
+            store = self.mon.store
+            r = store.add_rule(self.mon.pf, sym, kind, float(a["price"]), not bool(a.get("repeat")), f"added by {who} via /abg")
+            try:
+                price = (await tr.engine.quote(sym, use_cache=False)).value.price
+            except ABGError:
+                price = None
+            hint = store.seed_cross(r, price) or "No live price right now; the monitor records the starting side on its first quote."
+            self.mon.poke()
+            return {"title": f"Alert #{r.id}: {sym} {kind.replace('_', ' ')} {r.value:g}",
+                    "description": hint + ("\nRepeating." if not r.one_shot else "\nOne-shot (turns off after it fires)."),
+                    "color": 0x1BAF7A}
         if name == "track":
             res = await tr.ingest(str(a.get("text", "")), source="discord-command", author=who)
             items = res.get("results") or [res]

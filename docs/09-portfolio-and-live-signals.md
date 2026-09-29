@@ -43,6 +43,8 @@ abg portfolio set MSFT --stop 380 --target 470
 abg portfolio show                        # live P&L, weights, portfolio VaR   (--analyze adds signal/risk per row)
 abg portfolio history                     # transaction log  →  abg portfolio remove-tx 7
 abg alert add NVDA price_above 150        # one-shot by default; --repeat to keep it
+abg alert cross NVDA 150                  # fires when price crosses 150, either direction
+abg alert cross NQ 21500 --up --repeat    # only upward crosses, keeps alerting (re-arms, see below)
 abg alert add TSLA rsi_below 30 --repeat --note "oversold watch"
 abg alert list  |  abg alert kinds  |  abg alert remove 3
 abg signals                               # saved signal history
@@ -107,6 +109,30 @@ cooldown (`ABG_SIGNAL_COOLDOWN`, 4 h) stops a condition that keeps flipping back
 | `concentration` | A holding exceeds `ABG_CONCENTRATION_PCT` (35%) of a ≥ 3-position portfolio | info |
 | `recommendation` | The prediction model's view changes (e.g. Hold → Buy), with the thesis headline | info / warning |
 | `custom_rule` | Your rule: `price_above/below`, `change_above/below`, `rsi_above/below`, `score_above/below` | warning |
+| `price_cross` | Your cross alert: `price_cross` (either way), `price_cross_up`, `price_cross_down` | warning |
+
+### Price-cross alerts
+
+`price_above 150` fires as soon as price is above 150, even if it already was when you set the rule.
+A **cross** alert fires only when price actually moves through the level:
+
+- When you add one, the terminal fetches the live price and records which side it starts on. It
+  tells you what will trigger it, for example "NVDA is at 152.10, above 150 - fires when it crosses
+  down through 150". An up-only alert set while price is already above waits for price to drop back
+  below and then cross up again.
+- With the real-time stream on (`ABG_FINNHUB_API_KEY`), crosses are checked on every tick batch
+  (about 1 s). Without the stream, or for futures, the check runs on the fast poll
+  (`ABG_EXT_FAST_POLL_SECONDS`, 15 s), and otherwise on the regular quote sweep. A quick poke
+  through the level that reverses inside one batch still counts; the alert says it was a wick.
+- A `--repeat` alert re-arms only after price has moved `ABG_ALERT_CROSS_REARM_PCT` (0.2%) past the
+  level on the new side, so price chopping around the line sends one alert, not twenty.
+- The dashboard's 🔔 button on any holding or watchlist row pre-fills a cross alert at the current
+  price. The rules list shows which side price is on now and whether a repeating rule is re-arming.
+- From Discord (with the command bot set up, docs/11): `/abg alert symbol:NVDA price:150
+  direction:crosses up` (admins only) and `/abg alerts` to list them.
+
+`price_above` / `price_below` rules also use the streamed tick high/low now, so a spike through
+the threshold between sweeps is not missed.
 
 Signals are rule-based, educational analytics, **not trade instructions**.
 

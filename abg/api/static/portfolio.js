@@ -82,7 +82,8 @@ function renderHoldings(s) {
       <td>${h.signal_label ? `${esc(h.signal_label)} <span class="muted num">${fmt(h.signal_score, 0)}</span>` : '<span class="muted">…</span>'}
         ${h.recommendation ? `<br><span class="rec-pill rec-${esc(h.recommendation.replace(" ", "-"))}" title="Model view (${esc(h.forecast_confidence || "")} confidence), P(up) ${pct(h.prob_up, 0)}">${esc(h.recommendation)}</span>` : ""}</td>
       <td class="lvl lvl-${esc(h.risk_level)}">${h.risk_level ? `<span class="badge"><span class="dot"></span>${esc(h.risk_level)}</span>` : '<span class="muted">…</span>'}</td>
-      <td><button class="btn small" data-sell="${esc(h.symbol)}" data-shares="${h.shares}">Sell</button></td></tr>`).join("")}</tbody></table>`;
+      <td><button class="btn small" data-sell="${esc(h.symbol)}" data-shares="${h.shares}">Sell</button>
+        <button class="x" title="Alert when price crosses a level" data-bell="${esc(h.symbol)}" data-price="${h.price ?? ""}">🔔</button></td></tr>`).join("")}</tbody></table>`;
   bindSymLinks("#pf-holdings");
   $("#pf-holdings").querySelectorAll("input[data-meta]").forEach((inp) => inp.addEventListener("change", async () => {
     const v = inp.value === "" ? null : +inp.value;
@@ -100,6 +101,7 @@ function renderHoldings(s) {
       loadPortfolio(false);
     } catch (e) { toast(e.message); }
   }));
+  $("#pf-holdings").querySelectorAll("[data-bell]").forEach((b) => b.addEventListener("click", () => prefillCross(b.dataset.bell, b.dataset.price)));
   $("#pf-holdings").querySelectorAll("[data-sell]").forEach((b) => b.addEventListener("click", () => {
     $("#tx-side").value = "SELL"; $("#tx-sym").value = b.dataset.sell; $("#tx-shares").value = b.dataset.shares; $("#tx-price").focus();
   }));
@@ -113,17 +115,36 @@ function renderWatch(s) {
     <tbody>${rows.map((w) => `<tr><td><a class="sym" data-sym="${esc(w.symbol)}">${esc(w.symbol)}</a></td><td class="n">${fmt(w.price)}</td>
       <td class="n">${sgn(w.change_pct, 2, "%")}</td><td>${esc(w.signal_label || "…")}</td>
       <td class="lvl lvl-${esc(w.risk_level)}">${w.risk_level ? `<span class="badge"><span class="dot"></span>${esc(w.risk_level)}</span>` : "…"}</td>
-      <td>${esc(w.top_setup || "—")}${w.recommendation ? ` <span class="rec-pill rec-${esc(w.recommendation.replace(" ", "-"))}">${esc(w.recommendation)}</span>` : ""}</td><td><button class="x" title="Stop watching" data-unwatch="${esc(w.symbol)}">×</button></td></tr>`).join("")}</tbody></table>`
+      <td>${esc(w.top_setup || "—")}${w.recommendation ? ` <span class="rec-pill rec-${esc(w.recommendation.replace(" ", "-"))}">${esc(w.recommendation)}</span>` : ""}</td><td><button class="x" title="Alert when price crosses a level" data-bell="${esc(w.symbol)}" data-price="${w.price ?? ""}">🔔</button><button class="x" title="Stop watching" data-unwatch="${esc(w.symbol)}">×</button></td></tr>`).join("")}</tbody></table>`
     : '<p class="muted">Nothing on the watchlist.</p>';
   bindSymLinks("#pf-watch");
+  $("#pf-watch").querySelectorAll("[data-bell]").forEach((b) => b.addEventListener("click", () => prefillCross(b.dataset.bell, b.dataset.price)));
   $("#pf-watch").querySelectorAll("[data-unwatch]").forEach((b) => b.addEventListener("click", async () => {
     try { await api(`/api/portfolio/watchlist/${b.dataset.unwatch}`, { method: "DELETE" }); loadPortfolio(false); } catch (e) { toast(e.message); } }));
+}
+
+const RULE_LABEL = { price_cross: "price crosses", price_cross_up: "price crosses up", price_cross_down: "price crosses down",
+  price_above: "price above", price_below: "price below", change_above: "day change % above", change_below: "day change % below",
+  rsi_above: "RSI above", rsi_below: "RSI below", score_above: "score above", score_below: "score below" };
+
+function crossState(r) {
+  const st = r.state;
+  if (!r.kind.startsWith("price_cross") || !r.enabled) return "";
+  if (!st || !st.side) return ' <span class="muted">· waiting for first price</span>';
+  return ` <span class="muted">· now ${esc(st.side)}${st.armed === false ? " (re-arming)" : ""}</span>`;
+}
+
+function prefillCross(sym, price) {
+  $("#rule-sym").value = sym; $("#rule-kind").value = "price_cross";
+  $("#rule-val").value = price ? (+price).toFixed(price < 10 ? 4 : 2) : "";
+  $("#rule-val").focus(); $("#rule-val").select();
+  $("#rule-form").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function renderRules(s) {
   const rules = s.rules || [];
   $("#pf-rules").innerHTML = rules.length ? `<table>${rules.map((r) => `<tr><td><b>${esc(r.symbol)}</b></td>
-      <td>${esc(r.description.replace(" value", ""))} <b class="num">${fmt(r.value, r.value % 1 ? 2 : 0)}</b></td>
+      <td>${esc(RULE_LABEL[r.kind] || r.description.replace(" value", ""))} <b class="num">${fmt(r.value, r.value % 1 ? 2 : 0)}</b>${crossState(r)}</td>
       <td class="muted">${r.enabled ? (r.one_shot ? "one-shot" : "repeating") : "fired"}</td>
       <td><button class="x" title="Delete rule" data-rule="${r.id}">×</button></td></tr>`).join("")}</table>`
     : '<p class="muted">No custom rules. Built-in signals (setups, crosses, big moves, stops…) run automatically.</p>';
@@ -185,10 +206,13 @@ function bindPortfolioForms() {
   $("#rule-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
-      await api("/api/alerts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      const r = await api("/api/alerts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
         symbol: $("#rule-sym").value.trim().toUpperCase(), kind: $("#rule-kind").value, value: +$("#rule-val").value,
         one_shot: !$("#rule-repeat").checked }) });
-      $("#rule-form").reset(); loadPortfolio(false);
+      const kind = $("#rule-kind").value;
+      $("#rule-form").reset(); $("#rule-kind").value = kind;
+      toast(`Alert #${r.id} added: ${r.symbol} ${RULE_LABEL[r.kind] || r.kind} ${fmt(r.value)}` + (r.hint ? `\n${r.hint}` : ""));
+      loadPortfolio(false);
     } catch (err) { toast(err.message); }
   });
   $("#sig-ack").addEventListener("click", async () => { try { await api("/api/signals/ack", { method: "POST" }); } catch {} PF.unread = 0; updateBadge();
@@ -256,7 +280,9 @@ setInterval(() => { if (pfVisible() && PF.status) renderMonitor(PF.status); }, 1
 (async function initPortfolio() {
   try {
     const a = await api("/api/alerts");
-    $("#rule-kind").innerHTML = Object.entries(a.kinds).map(([k, v]) => `<option value="${esc(k)}" title="${esc(v)}">${esc(k.replace("_", " "))}</option>`).join("");
+    const order = ["price_cross", "price_cross_up", "price_cross_down"];
+    const kinds = Object.entries(a.kinds).sort(([x], [y]) => (order.includes(y) - order.includes(x)) || (order.indexOf(x) - order.indexOf(y)));
+    $("#rule-kind").innerHTML = kinds.map(([k, v]) => `<option value="${esc(k)}" title="${esc(v)}">${esc(RULE_LABEL[k] || k.replaceAll("_", " "))}</option>`).join("");
   } catch {}
   bindPortfolioForms();
   await loadFeed();

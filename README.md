@@ -64,6 +64,7 @@ abg portfolio watch NVDA AMD
 abg portfolio set AAPL --stop 300 --target 380
 abg portfolio show                       # live P&L, weights, portfolio VaR
 abg alert add NVDA price_above 150
+abg alert cross NVDA 150                 # alert when price crosses 150 (--up / --down / --repeat)
 abg monitor                              # run the live signal monitor in this window
 abg notify-test                          # check Discord / email / desktop alerts
 

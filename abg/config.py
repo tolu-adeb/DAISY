@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     portfolio_move_pct: float = 2.0             # alert every +/-2% band of portfolio day change
     concentration_pct: float = 35.0             # alert when one holding exceeds this % of the portfolio
     setup_min_confidence: float = 0.75          # only announce trade setups at/above this confidence
+    alert_cross_rearm_pct: float = 0.2          # a repeating cross alert re-arms once price moves this % past the level
 
     # ---------------------------------------------------------------- notifications
     notify_desktop: bool = True                 # native pop-ups (needs `pip install plyer`); dashboard pop-ups need no install

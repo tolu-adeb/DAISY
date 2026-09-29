@@ -80,7 +80,7 @@ async def snapshot(engine: "AnalysisEngine", store: PortfolioStore, portfolio: s
                    "day_pnl": day_pnl, "day_pct": (day_pnl / prev_val * 100) if prev_val else None,
                    "realized_pnl": store.realized_pnl(pf), "positions": len(positions), "watching": len(watch)},
         "holdings": rows, "watchlist": watch_rows,
-        "rules": [r.to_dict() for r in store.rules(pf)],
+        "rules": store.rule_dicts(pf),
         "risk": {"available": False},
     }
     if with_risk and len(positions) >= 1:

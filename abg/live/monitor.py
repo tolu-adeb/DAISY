@@ -274,8 +274,31 @@ class Monitor:
             self.fast_symbols = sorted(syms)
 
     async def _on_ticks(self, batch: dict[str, dict]) -> None:
+        await self._guard("price alerts", self._check_price_rules(batch))
         if self.ext is not None:
             await self.ext.on_quotes(batch)
+
+    def _price_rule_symbols(self) -> set[str]:
+        return {r.symbol for r in self.store.rules(self.pf) if r.enabled and r.kind.startswith("price_")}
+
+    def _stream_fresh(self, sym: str, max_age: float = 120.0) -> bool:
+        """True when the websocket owns this symbol's price alerts (a REST sweep quote can be older than the
+        last tick, and evaluating both would see phantom crosses)."""
+        st = self.stream
+        if st is None or not st.connected or sym not in st.streamed():
+            return False
+        last = st.last.get(sym) or {}
+        return bool(last.get("ts")) and time.time() - float(last["ts"]) <= max_age
+
+    async def _check_price_rules(self, quotes: dict[str, dict]) -> None:
+        """Price / cross alerts on your portfolio + watchlist symbols, straight from streamed ticks or the
+        fast poll (so a cross is caught within seconds, not at the next 60 s sweep)."""
+        ruled = self._price_rule_symbols()
+        for sym, q in quotes.items():
+            if sym not in ruled or q.get("error") or not q.get("price"):
+                continue
+            for sig in self.signals.price_rules(sym, q["price"], q.get("tick_high"), q.get("tick_low")):
+                await self._emit(sig)
 
     async def _fast_poll_loop(self) -> None:
         """Tracked ideas the stream can't serve (futures, yields, or everything while the stream is down)
@@ -285,11 +308,13 @@ class Monitor:
             try:
                 self._refresh_stream()
                 ext = set(self._ext_symbols())
+                ruled = self._price_rule_symbols()
                 streamed = self.stream.streamed() if self.stream is not None else set()
-                syms = [x for x in ext if x not in streamed and is_session_open(spec_for(x))]
+                syms = [x for x in ext | ruled if x not in streamed and is_session_open(spec_for(x))]
                 if syms:
                     quotes = await fetch_quotes(self.engine, syms, use_cache=False)
-                    await self.ext.on_quotes(quotes)
+                    await self._check_price_rules({k: v for k, v in quotes.items() if k in ruled})
+                    await self.ext.on_quotes({k: v for k, v in quotes.items() if k in ext})
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # never kill the monitor
@@ -388,7 +413,8 @@ class Monitor:
             if q.get("error"):
                 self.errors.append({"ts": time.time(), "where": f"quote {sym}", "error": q["error"][:300]})
                 continue
-            for sig in self.signals.from_quote(sym, q, self.levels.get(sym), positions.get(sym)):
+            for sig in self.signals.from_quote(sym, q, self.levels.get(sym), positions.get(sym),
+                                               price_rules=not self._stream_fresh(sym)):
                 emitted.append(await self._emit(sig))
         self.quotes = quotes
         snap = await snapshot(self.engine, self.store, self.pf, quotes=quotes, analysis=self.analysis, with_risk=False)

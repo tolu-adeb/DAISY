@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..errors import ABGError
 from ..live.monitor import MonitorBusy
-from ..portfolio import RULE_KINDS, snapshot
+from ..portfolio import CROSS_KINDS, RULE_KINDS, snapshot
 from ..utils import jsonable
 
 router = APIRouter(prefix="/api")
@@ -129,14 +129,22 @@ class RuleIn(BaseModel):
 
 @router.get("/alerts")
 async def list_rules(request: Request, portfolio: str | None = None):
-    return {"kinds": RULE_KINDS, "rules": [r.to_dict() for r in request.app.state.store.rules(_pf(request, portfolio))]}
+    return {"kinds": RULE_KINDS, "rules": request.app.state.store.rule_dicts(_pf(request, portfolio))}
 
 
 @router.post("/alerts")
 async def add_rule(request: Request, body: RuleIn, portfolio: str | None = None):
-    r = request.app.state.store.add_rule(_pf(request, portfolio), body.symbol, body.kind, body.value, body.one_shot, body.note)
+    store = request.app.state.store
+    r = store.add_rule(_pf(request, portfolio), body.symbol, body.kind, body.value, body.one_shot, body.note)
+    hint = None
+    if r.kind in CROSS_KINDS:                 # remember which side price starts on so the first real cross fires
+        try:
+            price = (await asyncio.wait_for(request.app.state.engine.quote(r.symbol, use_cache=False), 15)).value.price
+            hint = store.seed_cross(r, price)
+        except (ABGError, asyncio.TimeoutError):
+            hint = "No live price right now - the monitor records the starting side on its first quote."
     _poke(request, analysis=body.kind.startswith(("rsi", "score")))
-    return r.to_dict()
+    return {**r.to_dict(), "hint": hint}
 
 
 @router.delete("/alerts/{rule_id}")

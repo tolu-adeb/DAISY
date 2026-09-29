@@ -11,6 +11,11 @@ Design rules
   fire on first observation, because the condition itself is the news.
 * **Cooldown** (``ABG_SIGNAL_COOLDOWN``, default 4 h) per (symbol, kind, key) stops
   flapping conditions from spamming.
+* **Cross alerts** (``price_cross``, ``price_cross_up``, ``price_cross_down``) remember which side of
+  the level price is on and fire only on an actual crossing - never just because price is already
+  past it.  Streamed ticks carry the high/low of each batch, so a quick poke through the level that
+  reverses before the next sweep still counts.  A repeating cross alert re-arms only after price has
+  moved ``ABG_ALERT_CROSS_REARM_PCT`` past the level, so chop around the line sends one alert, not twenty.
 * **Bands** for magnitudes: a 3 % move fires, a 6 % move fires again, but 3.1 %→3.4 % doesn't.
 
 Severity: ``info`` (FYI), ``warning`` (actionable), ``critical`` (a stop was hit).
@@ -23,7 +28,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from ..portfolio.store import AlertRule, PortfolioStore, Position
+from ..portfolio.store import CROSS_KINDS, AlertRule, PortfolioStore, Position
 from .market_hours import NY
 
 SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
@@ -199,7 +204,8 @@ class SignalEngine:
         return out
 
     # ------------------------------------------------------------------ from a live quote
-    def from_quote(self, symbol: str, q: dict, levels: dict | None = None, position: Position | None = None) -> list[Signal]:
+    def from_quote(self, symbol: str, q: dict, levels: dict | None = None, position: Position | None = None,
+                   price_rules: bool = True) -> list[Signal]:
         out: list[Signal] = []
         price, chg = q.get("price"), q.get("change_pct")
         if not price:
@@ -261,30 +267,83 @@ class SignalEngine:
                                           f"({position.shares:g} shares, {position.shares * (price - position.avg_cost):+,.2f} USD).",
                                           {"price": price, "pnl_pct": pnl}), cooldown=False)
 
-        out += self._rules(symbol, {"price": price, "change": chg})
+        out += self._rules(symbol, {"price": price if price_rules else None, "change": chg})
         return out
 
     # ------------------------------------------------------------------ custom rules
     _METRIC = {"price_above": ("price", 1), "price_below": ("price", -1), "change_above": ("change", 1),
                "change_below": ("change", -1), "rsi_above": ("rsi", 1), "rsi_below": ("rsi", -1),
-               "score_above": ("score", 1), "score_below": ("score", -1)}
+               "score_above": ("score", 1), "score_below": ("score", -1),
+               "price_cross": ("price", 0), "price_cross_up": ("price", 1), "price_cross_down": ("price", -1)}
 
-    def _rules(self, symbol: str, values: dict) -> list[Signal]:
+    def price_rules(self, symbol: str, price: float, high: float | None = None, low: float | None = None) -> list[Signal]:
+        """Only the price rules - cheap enough to run on every streamed tick batch."""
+        if not price:
+            return []
+        return self._rules(symbol, {"price": price, "high": high, "low": low}, price_only=True)
+
+    def _rules(self, symbol: str, values: dict, price_only: bool = False) -> list[Signal]:
         out: list[Signal] = []
         for rule in self.store.rules(self.pf, symbol):
             if not rule.enabled:
                 continue
             metric, direction = self._METRIC[rule.kind]
+            if price_only and metric != "price":
+                continue
             v = values.get(metric)
             if v is None:
                 continue
-            hit = v > rule.value if direction > 0 else v < rule.value
-            changed, old = self._transition(symbol, f"rule:{rule.id}", hit)
-            if hit and (changed or old is None):
+            if rule.kind in CROSS_KINDS:
+                sig = self._cross(symbol, rule, v, values.get("high"), values.get("low"), values.get("change"))
+                if sig is None:
+                    continue
+                self._add(out, sig, cooldown=False)
+            else:
+                probe = v
+                if metric == "price":                      # a tick batch's wick counts
+                    probe = max(v, values.get("high") or v) if direction > 0 else min(v, values.get("low") or v)
+                hit = probe > rule.value if direction > 0 else probe < rule.value
+                changed, old = self._transition(symbol, f"rule:{rule.id}", hit)
+                if not (hit and (changed or old is None)):
+                    continue
                 self._add(out, _rule_signal(symbol, rule, v), cooldown=False)
-                if rule.one_shot:
-                    self.store.set_rule_enabled(self.pf, rule.id, False)
+            if rule.one_shot:
+                self.store.set_rule_enabled(self.pf, rule.id, False)
         return out
+
+    def _cross(self, symbol: str, rule: AlertRule, price: float, high: float | None, low: float | None,
+               change: float | None) -> Signal | None:
+        """Edge-triggered level cross with re-arm hysteresis.  State: {"side": above|below, "armed": bool}."""
+        x = rule.value
+        key = f"rule:{rule.id}"
+        st = self.store.get_state(self.pf, symbol, key)
+        side_now = "above" if price >= x else "below"
+        if not isinstance(st, dict) or st.get("side") not in ("above", "below"):
+            self.store.set_state(self.pf, symbol, key, {"side": side_now, "armed": True})   # first look: just remember
+            return None
+        side, armed = st["side"], bool(st.get("armed", True))
+        hi = max(price, high) if high is not None else price
+        lo = min(price, low) if low is not None else price
+        crossed = None
+        if side == "below" and hi >= x:
+            crossed = "up"
+        elif side == "above" and lo < x:
+            crossed = "down"
+        buf = x * max(self.s.alert_cross_rearm_pct, 0.0) / 100.0
+        if crossed is None:
+            if not armed and (price >= x + buf if side == "above" else price <= x - buf):
+                self.store.set_state(self.pf, symbol, key, {"side": side, "armed": True})
+            return None
+        wanted = rule.kind == "price_cross" or rule.kind.endswith("_" + crossed)
+        fire = armed and wanted
+        # after any cross, the new side must move clear of the level before the next one counts
+        new_side = "above" if crossed == "up" else "below"
+        clear = price >= x + buf if new_side == "above" else price <= x - buf
+        if side_now != new_side:          # poked through and came straight back inside one batch
+            new_side, clear = side_now, False
+        self.store.set_state(self.pf, symbol, key, {"side": new_side, "armed": clear, "last_cross": crossed,
+                                                     "last_cross_at": time.time()})
+        return _cross_signal(symbol, rule, crossed, price, high if crossed == "up" else low, change) if fire else None
 
     # ------------------------------------------------------------------ portfolio level
     def from_snapshot(self, snap: dict) -> list[Signal]:
@@ -324,3 +383,24 @@ def _rule_signal(symbol: str, rule: AlertRule, v: float) -> Signal:
                   f"{symbol} {label} {'above' if up else 'below'} {rule.value:g} (now {v:,.2f})",
                   (rule.note or f"Custom alert #{rule.id}") + (" - rule disabled after firing (one-shot)." if rule.one_shot else ""),
                   {"rule_id": rule.id, "value": v, "threshold": rule.value})
+
+
+def _cross_signal(symbol: str, rule: AlertRule, crossed: str, price: float, extreme: float | None,
+                  change: float | None) -> Signal:
+    up = crossed == "up"
+    x = rule.value
+    back = (up and price < x) or (not up and price >= x)
+    detail = [f"Price {price:,.2f}" + (f" ({change:+.2f}% today)" if change is not None else "") + "."]
+    if back and extreme is not None:
+        detail.append(f"It touched {extreme:,.2f} and is back {'below' if up else 'above'} the level - a wick, not a close.")
+    else:
+        detail.append(f"{abs(price / x - 1) * 100:.2f}% {'above' if up else 'below'} the level.")
+    if rule.note:
+        detail.append(rule.note)
+    tail = ("Rule disabled after firing (one-shot)." if rule.one_shot else
+            "Repeating: re-arms once price moves clear of the level again.")
+    return Signal(symbol, "price_cross", f"{rule.id}:{crossed}", "warning", "bullish" if up else "bearish",
+                  f"{symbol} crossed {'above' if up else 'below'} {x:,.2f} (now {price:,.2f})",
+                  " ".join(detail + [tail]),
+                  {"rule_id": rule.id, "value": price, "threshold": x, "direction": crossed, "wick": back,
+                   "extreme": extreme})

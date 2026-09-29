@@ -257,6 +257,67 @@ async def test_hub_persists_broadcasts_and_isolates_failures(settings, store):
     assert rows[0]["delivered"]["ok"] == "ok" and rows[0]["delivered"]["boom"].startswith("error")
 
 
+def test_price_cross_rearms_and_ignores_chop(settings, store):
+    r = store.add_rule("main", "XYZ", "price_cross", 100, one_shot=False)
+    se = SignalEngine(store, settings)                  # re-arm buffer 0.2% -> 100.20 / 99.80
+    assert se.price_rules("XYZ", 98) == []              # first look only records the side
+    assert se.price_rules("XYZ", 99.5) == []
+    [up] = se.price_rules("XYZ", 100.1)
+    assert up.kind == "price_cross" and up.direction == "bullish" and "crossed above 100.00" in up.title
+    assert se.price_rules("XYZ", 99.95) == []           # chop around the line: no ping-pong alerts
+    assert se.price_rules("XYZ", 100.05) == []
+    assert se.price_rules("XYZ", 101) == []             # clear of the level -> re-armed
+    [down] = se.price_rules("XYZ", 99)
+    assert down.direction == "bearish" and "Repeating" in down.message
+    assert store.rules("main")[0].enabled                 # repeating rule stays on
+    assert store.rule_dicts("main")[0]["state"]["side"] == "below"
+    assert store.delete_rule("main", r.id) and store.get_state("main", "XYZ", f"rule:{r.id}") is None
+
+
+def test_directional_cross_seeding_and_wicks(settings, store):
+    se = SignalEngine(store, settings)
+    up = store.add_rule("main", "AAA", "price_cross_up", 100)
+    hint = store.seed_cross(up, 105)                      # already above: needs to come back below first
+    assert "back below first" in hint
+    assert se.price_rules("AAA", 101) == []
+    assert se.price_rules("AAA", 99) == []               # a cross down doesn't fire an up-only rule
+    [sig] = se.price_rules("AAA", 100.4)
+    assert sig.direction == "bullish" and store.rules("main", "AAA")[0].enabled is False   # one-shot
+    assert se.price_rules("AAA", 90) == [] and se.price_rules("AAA", 110) == []            # disabled now
+
+    dn = store.add_rule("main", "BBB", "price_cross_down", 50)
+    store.seed_cross(dn, 52)
+    [w] = se.price_rules("BBB", 51, high=52.5, low=49.5)  # a streamed batch poked through and bounced
+    assert w.data["wick"] and "touched 49.50" in w.message
+
+    store.add_rule("main", "CCC", "price_above", 50)
+    [hit] = se.price_rules("CCC", 49.8, high=50.3)        # plain threshold rules use the tick high too
+    assert hit.kind == "custom_rule"
+
+
+def test_sweep_quote_can_leave_price_rules_to_the_stream(settings, store):
+    store.add_rule("main", "DDD", "price_cross", 10)
+    store.add_rule("main", "DDD", "change_above", 5)
+    se = SignalEngine(store, settings)
+    se.price_rules("DDD", 9)
+    out = se.from_quote("DDD", {"price": 11, "change_pct": 6}, price_rules=False)
+    assert [s.kind for s in out if s.kind in ("custom_rule", "price_cross")] == ["custom_rule"]   # change rule only
+    assert [s.kind for s in se.price_rules("DDD", 11)] == ["price_cross"]
+
+
+async def test_monitor_fires_cross_alerts_from_ticks(settings, store):
+    store.watch("main", "EEE")
+    store.add_rule("main", "EEE", "price_cross", 20)
+    async with AnalysisEngine(settings) as eng:
+        hub = NotificationHub(settings.model_copy(update={"notify_desktop": False}), store, eng.http)
+        mon = Monitor(eng, store, hub)
+        await mon._on_ticks({"EEE": {"price": 19.5, "tick_high": 19.6, "tick_low": 19.4, "ts": 0}})
+        await mon._on_ticks({"EEE": {"price": 20.4, "tick_high": 20.5, "tick_low": 19.9, "ts": 0}})
+        sigs = store.signals("main", 10)
+        assert [x["kind"] for x in sigs] == ["price_cross"] and mon.signals_emitted == 1
+        await hub.aclose()
+
+
 # ---------------------------------------------------------------- monitor
 async def test_monitor_sweeps_and_single_instance_lock(settings, store):
     store.add_transaction("main", "AAPL", "BUY", 10, 1.0)
@@ -312,6 +373,9 @@ def test_portfolio_api_and_sse(monkeypatch, tmp_path):
         assert c.post("/api/portfolio/watchlist", json={"symbol": "nvda"}).json() == {"symbol": "NVDA"}
         assert c.put("/api/portfolio/positions/AAPL", json={"stop_loss": 10_000}).json()["ok"]
         assert c.post("/api/alerts", json={"symbol": "NVDA", "kind": "price_above", "value": 1}).status_code == 200
+        cr = c.post("/api/alerts", json={"symbol": "NVDA", "kind": "price_cross", "value": 1}).json()
+        assert "above 1" in cr["hint"] and "crosses down" in cr["hint"]
+        assert next(r for r in c.get("/api/alerts").json()["rules"] if r["id"] == cr["id"])["state"]["side"] == "above"
         snap = c.get("/api/portfolio").json()
         assert snap["totals"]["positions"] == 2 and snap["watchlist"][0]["symbol"] == "NVDA" and snap["risk"]["available"]
         run = c.post("/api/monitor/refresh").json()

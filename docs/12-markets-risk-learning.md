@@ -152,8 +152,8 @@ no public URL is needed.
 
 | Command | Who can use it |
 |---|---|
-| `/abg ideas`, `/abg status symbol:`, `/abg stats`, `/abg risk`, `/abg markets` | anyone in the server |
-| `/abg track text:`, `/abg close id: [fraction:]`, `/abg cancel id:`, `/abg stop id: price:` | only user ids in `ABG_DISCORD_ADMIN_IDS`; others get a private "not allowed" |
+| `/abg ideas`, `/abg status symbol:`, `/abg stats`, `/abg risk`, `/abg markets`, `/abg alerts` | anyone in the server |
+| `/abg track text:`, `/abg close id: [fraction:]`, `/abg cancel id:`, `/abg stop id: price:`, `/abg alert symbol: price: [direction:] [repeat:]` | only user ids in `ABG_DISCORD_ADMIN_IDS`; others get a private "not allowed" |
 
 The invite URL needs the **`applications.commands`** scope in addition to `bot`. To get your user id:
 Developer Mode on → right-click your name → Copy User ID.

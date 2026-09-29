@@ -20,7 +20,7 @@ from .cli import _run, _state, app, console
 from .config import Settings
 from .engine import AnalysisEngine
 from .errors import ABGError
-from .portfolio import RULE_KINDS, PortfolioStore, snapshot
+from .portfolio import CROSS_KINDS, RULE_KINDS, PortfolioStore, snapshot
 from .render import num, risk_style, signed
 
 pf_app = typer.Typer(help="Saved portfolio: holdings, watchlist, stops/targets.", no_args_is_help=True)
@@ -243,28 +243,62 @@ def pf_list():
 
 
 # --------------------------------------------------------------------------- alerts
-@alert_app.command("add")
-def alert_add(symbol: str, kind: str = typer.Argument(..., help=" | ".join(RULE_KINDS)), value: float = typer.Argument(...),
-              repeat: bool = typer.Option(False, help="Keep the rule after it fires (default: one-shot)."),
-              note: Optional[str] = None, portfolio: Optional[str] = PF):
-    """Add a custom alert, e.g. `abg alert add NVDA price_above 150`."""
+def _live_price(symbol: str) -> float | None:
+    """Best-effort current price (used to seed cross alerts); never fails the command."""
+    async def go():
+        async with AnalysisEngine(_settings()) as eng:
+            return (await asyncio.wait_for(eng.quote(symbol, use_cache=False), 15)).value.price
+    try:
+        return asyncio.run(go())
+    except Exception:
+        return None
+
+
+def _add_rule(symbol: str, kind: str, value: float, repeat: bool, note: str | None, portfolio: str | None) -> None:
     store, s = _store()
     try:
         r = store.add_rule(_pf(portfolio, s), symbol, kind, value, not repeat, note)
     except ABGError as e:
         _fail(e)
     console.print(f"[green]rule #{r.id}: {r.symbol} {r.kind} {r.value:g}[/green] ({'repeating' if repeat else 'one-shot'})")
+    if r.kind in CROSS_KINDS:
+        hint = store.seed_cross(r, _live_price(r.symbol))
+        console.print(f"[dim]{hint or 'No live price right now - the monitor records the starting side on its first quote.'}[/dim]")
+    if r.symbol not in {p.symbol for p in store.positions(r.portfolio)} | {w["symbol"] for w in store.watchlist(r.portfolio)}:
+        console.print(f"[dim]{r.symbol} isn't held or watched; the monitor tracks it for this rule anyway.[/dim]")
+
+
+@alert_app.command("add")
+def alert_add(symbol: str, kind: str = typer.Argument(..., help=" | ".join(RULE_KINDS)), value: float = typer.Argument(...),
+              repeat: bool = typer.Option(False, help="Keep the rule after it fires (default: one-shot)."),
+              note: Optional[str] = None, portfolio: Optional[str] = PF):
+    """Add a custom alert, e.g. `abg alert add NVDA price_above 150` or `abg alert add NVDA price_cross 150`."""
+    _add_rule(symbol, kind, value, repeat, note, portfolio)
+
+
+@alert_app.command("cross")
+def alert_cross(symbol: str, price: float,
+                up: bool = typer.Option(False, "--up", help="Only when it crosses up through the price."),
+                down: bool = typer.Option(False, "--down", help="Only when it crosses down through the price."),
+                repeat: bool = typer.Option(False, help="Keep alerting on every cross (re-arms after price clears the level)."),
+                note: Optional[str] = None, portfolio: Optional[str] = PF):
+    """Alert when price crosses a level, e.g. `abg alert cross NVDA 150` (either way) or `--up` / `--down`."""
+    if up and down:
+        _fail(ValueError("pick --up or --down (or neither for both directions)"))
+    _add_rule(symbol, "price_cross_up" if up else "price_cross_down" if down else "price_cross", price, repeat, note, portfolio)
 
 
 @alert_app.command("list")
 def alert_list(portfolio: Optional[str] = PF):
     store, s = _store()
     t = Table(box=box.SIMPLE)
-    for c in ("#", "Symbol", "Rule", "Value", "Enabled", "Mode", "Note"):
+    for c in ("#", "Symbol", "Rule", "Value", "Enabled", "Mode", "Now", "Note"):
         t.add_column(c)
-    for r in store.rules(_pf(portfolio, s)):
-        t.add_row(str(r.id), r.symbol, r.kind, f"{r.value:g}", "yes" if r.enabled else "[dim]fired/off[/dim]",
-                  "one-shot" if r.one_shot else "repeat", r.note or "")
+    for r in store.rule_dicts(_pf(portfolio, s)):
+        st = r.get("state") or {}
+        now = (f"{st['side']}" + ("" if st.get("armed", True) else " (re-arming)")) if st.get("side") else ""
+        t.add_row(str(r["id"]), r["symbol"], r["kind"], f"{r['value']:g}", "yes" if r["enabled"] else "[dim]fired/off[/dim]",
+                  "one-shot" if r["one_shot"] else "repeat", now, r["note"] or "")
     console.print(t)
 
 
@@ -277,7 +311,7 @@ def alert_remove(rule_id: int, portfolio: Optional[str] = PF):
 @alert_app.command("kinds")
 def alert_kinds():
     for k, v in RULE_KINDS.items():
-        console.print(f"[bold]{k:14}[/bold] {v}")
+        console.print(f"[bold]{k:17}[/bold] {v}")
 
 
 # --------------------------------------------------------------------------- signals / monitor
