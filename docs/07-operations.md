@@ -47,6 +47,8 @@ Precedence: `Settings(...)` kwargs / CLI flags → environment (`ABG_*`) → `.e
 | `ABG_DISCORD_WEBHOOK_URL` / `ABG_NOTIFY_DISCORD_MIN_SEVERITY` | – / info | Discord alerts |
 | `ABG_SMTP_HOST`, `ABG_SMTP_PORT`, `ABG_SMTP_USER`, `ABG_SMTP_PASSWORD`, `ABG_SMTP_SSL`, `ABG_EMAIL_FROM`, `ABG_EMAIL_TO`, `ABG_NOTIFY_EMAIL_MIN_SEVERITY`, `ABG_EMAIL_BATCH_SECONDS` | –, 587, –, –, false, –, –, warning, 120 | Email alerts |
 | `ABG_EXT_*`, `ABG_DISCORD_BOT_TOKEN` | see [docs/11 §11.11](11-external-signals.md#1111-settings) | External signals: Discord channels, relay mode, paper sizing, time limits, entry-grade gate |
+| `ABG_PROP_*`, `ABG_EXT_MAX_*`, stream / calendar / confirmation / AI / chart / command settings | see [docs/12](12-markets-risk-learning.md) | portfolio and prop-firm limits, real-time, blackouts, learning |
+| `ABG_ADMIN_TOKEN`, `ABG_VIEW_TOKEN`, `ABG_HEALTHCHECK_URL`, `ABG_BACKUP_*`, `ABG_BROKER`, `ABG_ALPACA_*` | see [docs/13](13-deployment.md) | deployment and operations |
 | `ABG_LOG_LEVEL` | `WARNING` | |
 
 ## 7.2 Running
@@ -108,7 +110,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-148 tests, all offline:
+171 tests, all offline:
 
 | File | Covers |
 |---|---|
@@ -120,6 +122,7 @@ pytest -q
 | `test_forecast.py` | Simulation reproducibility, ordering, analytic mean and vol checks, tilt direction, barrier odds, calibration coverage, every recommendation guard-rail, engine/API/monitor integration |
 | `test_portfolio_live.py` | Average-cost/realized P&L, oversell & delete guards, backup round-trip, persistence, NYSE holidays, live-bar splicing, every signal family incl. cooldowns/bands/one-shot rules, Discord (429 retry), email digest vs critical, hub isolation, monitor sweeps + single-instance lock + poke, portfolio REST API |
 | `test_extsignals.py` | Standard labeled/report formats (fixtures/signals_std.txt), multi-signal splitting, classification, scale-in tranches and scale-outs, stop-range / near-stop / near-target heads-ups, earnings blackout, entry changes, Discord embed limits; free-text parser formats and updates, lifecycle (zone / breakout / short, approach, partials + breakeven + trailing, stop-before-target on ambiguous bars, gap fills, close-basis stops, invalidated / missed / expired, grade gate), tracker ingest/defaults/duplicates/rejections/source updates/market entries, daily-bar catch-up, Discord poller + webhook relay (MockTransport), monitor integration, REST API |
+| `test_markets_ops.py` | Instrument mapping and futures/micro sizing, sessions, calendar dates/estimates/overrides/blackouts, Finnhub earnings, heat/position/correlation limits and prop-firm rules, websocket stream (local fake server), tick wicks, Discord slash commands (fake gateway) and the admin gate, API tokens, backups, Alpaca bridge, 1h confirmation, AI parse guard, grade and risk model training, chart PNG, weekly recap |
 | `test_engine_risk_api.py` | End-to-end strict-JSON report, partial-failure isolation, fatal history failure, CSV, compare, feature no-look-ahead, baseline monotonicity, plug-in isolation and schema checks, portfolio math, sentiment, mocked Claude (success, cache, fallback), every REST endpoint and error code |
 
 ## 7.6 Known limitations

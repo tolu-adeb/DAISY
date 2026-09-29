@@ -161,6 +161,62 @@ class Settings(BaseSettings):
     ext_earnings_warn_days: int = 5             # warn this many days before a known earnings date
     ext_earnings_blackout_days: int = 1         # no new entries within this many days of earnings
 
+    # ---------------------------------------------------------------- portfolio-level risk across tracked ideas
+    ext_max_open_positions: int = 8             # concurrent active ideas
+    ext_max_heat_pct: float = 6.0               # sum of open risk (to the stops) as % of the account
+    ext_max_correlated: int = 2                 # active ideas in one correlation cluster (|rho| >= threshold)
+    ext_correlation_threshold: float = 0.7      # 90-day daily-return correlation that counts as "the same bet"
+    ext_max_sector: int = 3                     # active ideas in one sector / futures group
+    ext_resize_to_fit: bool = True              # shrink a new entry to fit the remaining heat / loss budget
+
+    # ---------------------------------------------------------------- prop-firm / funded-account guardrails
+    prop_enabled: bool = False
+    prop_account_size: float = 50_000           # starting balance of the evaluation / funded account
+    prop_daily_loss_limit: float = 0            # $ max loss per trading day (0 = off)
+    prop_max_drawdown: float = 0                # $ trailing drawdown from the equity high (0 = off)
+    prop_drawdown_mode: str = "eod"             # eod (trails end-of-day highs) | intraday (trails every new high)
+    prop_drawdown_lock: bool = True             # trailing stops rising once it reaches the starting balance
+    prop_max_contracts: int = 0                 # max contracts per position (0 = no cap)
+    prop_warn_pct: float = 70                   # warn when this % of a limit is used
+
+    # ---------------------------------------------------------------- real-time prices
+    ext_realtime: bool = True                   # Finnhub websocket stream (needs ABG_FINNHUB_API_KEY)
+    ext_stream_flush_seconds: float = 1.0       # batch ticks into one tracking step per symbol at most this often
+    ext_fast_poll_seconds: float = 15           # symbols the stream can't serve (futures, yields) are polled this often
+
+    # ---------------------------------------------------------------- calendar & market filter
+    ext_event_blackout_before_min: int = 30     # no new entries this long before a high-impact macro release
+    ext_event_blackout_after_min: int = 15
+    ext_event_blackout_classes: str = "future,etf,index,fx,stock"  # which instruments macro blackouts apply to
+    ext_market_filter: bool = True              # grade longs down in a risk-off tape (SPY/QQQ trend, VIX)
+    ext_auto_earnings: bool = True              # look up earnings dates (Finnhub) for tracked symbols
+
+    # ---------------------------------------------------------------- entry confirmation, AI, charts
+    ext_confirm_timeframe: str = "1h"           # zone entries wait for a reversal bar on this timeframe (none|15m|1h)
+    ext_confirm_max_wait_hours: float = 24      # after this long in the zone without confirmation, enter anyway
+    ext_ai_parse: bool = True                   # Claude reads posts the rule parser can't (needs ANTHROPIC_API_KEY)
+    ext_ai_narrative: bool = True               # 2-3 sentence plain-English read on key Discord messages
+    ext_relay_charts: bool = True               # attach a chart image to key Discord messages (needs matplotlib)
+    ext_grade_model: str = "auto"               # auto (learned grade when validated) | learned | rules
+
+    # ---------------------------------------------------------------- Discord commands & scheduled posts
+    discord_commands: bool = True               # /abg slash commands through the bot (gateway)
+    discord_admin_ids: str = ""                 # user ids allowed to change things via commands (comma-separated)
+    discord_guild_id: str | None = None         # register commands in this server (default: the signal channel's server)
+    ext_weekly_recap: bool = True               # Friday after the close: performance recap
+    ext_week_ahead: bool = True                 # Sunday evening: macro calendar + earnings for tracked symbols
+
+    # ---------------------------------------------------------------- operations
+    admin_token: str | None = None              # required for any change through the dashboard/API when set
+    view_token: str | None = None               # when set, even viewing needs a token (view or admin)
+    healthcheck_url: str | None = None          # dead-man's switch ping (e.g. healthchecks.io) every 5 min
+    backup_hour: int = 2                        # nightly SQLite backups at this NY hour (-1 = off)
+    backup_keep: int = 14                       # days of backups to keep
+    broker: str = "none"                        # none | alpaca_paper
+    alpaca_key_id: str | None = None
+    alpaca_secret_key: str | None = None
+    alpaca_live: bool = False                   # never on unless you explicitly set it
+
     log_level: str = "WARNING"
 
     # ---------------------------------------------------------------- helpers

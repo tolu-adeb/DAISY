@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     from .portfolio_routes import start_monitor
 
     s = Settings()
+    app.state.settings = s
     app.state.engine = AnalysisEngine(s)
     app.state.store = PortfolioStore.from_settings(s)
     app.state.hub = NotificationHub(s, app.state.store, app.state.engine.http)
@@ -68,6 +69,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ABG Intelligence Terminal API", version=__version__, lifespan=lifespan,
               description="Multi-source stock analytics for AI Business Group. Educational use - not investment advice.")
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+def _settings_of(request: Request) -> Settings:
+    return getattr(request.app.state, "settings", None) or Settings()
+
+
+from ..ops import auth as _auth  # noqa: E402
+
+app.middleware("http")(_auth.middleware(_settings_of))
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])
 
 
@@ -107,6 +117,36 @@ async def _t(coro):
 @app.get("/api/health")
 async def health(request: Request):
     return {"status": "ok", "version": __version__}
+
+
+class _Login(BaseModel):
+    token: str
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, body: _Login):
+    s = _settings_of(request)
+    fake = type("R", (), {"headers": {"authorization": f"Bearer {body.token}"}, "cookies": {}})()
+    r = _auth.role(s, fake)
+    if r == "none" or (not s.admin_token and not s.view_token):
+        return JSONResponse({"role": r}, status_code=401 if r == "none" else 200)
+    resp = JSONResponse({"role": r})
+    resp.set_cookie("abg_token", body.token, httponly=True, samesite="strict", max_age=60 * 60 * 24 * 30,
+                    secure=request.url.scheme == "https")
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"role": "none"})
+    resp.delete_cookie("abg_token")
+    return resp
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    s = _settings_of(request)
+    return {"role": _auth.role(s, request), "protected": bool(s.admin_token or s.view_token)}
 
 
 @app.get("/api/status")
@@ -215,8 +255,10 @@ from .portfolio_routes import router as portfolio_router  # noqa: E402
 app.include_router(portfolio_router)
 
 from .ext_routes import router as ext_router  # noqa: E402
+from .markets_routes import router as markets_router  # noqa: E402
 
 app.include_router(ext_router)
+app.include_router(markets_router)
 
 # --------------------------------------------------------------------------- dashboard
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

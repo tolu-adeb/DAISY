@@ -119,26 +119,42 @@ def clean(text: str) -> str:
 
 
 # --------------------------------------------------------------------------- symbol
+FUT_HINT = re.compile(r"\bfutures?\b|\bcontracts?\b|\bticks?\b|\bhandles?\b|\bglobex\b|\bcme\b|\bmicros?\b", re.I)
+
+
 def find_symbol(t: str) -> tuple[str | None, str]:
+    hint = bool(FUT_HINT.search(t))
+    m = re.search(r"(?<![\w])/([A-Za-z0-9]{1,4})\b|\b([A-Z0-9]{1,4})1!", t)          # /NQ, NQ1! (futures spellings)
+    if m:
+        return _map_symbol((m.group(1) or m.group(2)).upper(), True)
+    m = re.search(r"\b([A-Z]{1,3})([FGHJKMNQUVXZ])(\d{2}|\d{4})\b", t)             # NQZ26 / NQZ2026
+    if m:
+        from ..markets.instruments import FUTURES
+        if m.group(1) in FUTURES:
+            return _map_symbol(m.group(1), True)
     m = re.search(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])", t)
     if m:
-        return _map_symbol(m.group(1).upper())
-    m = re.search(r"\b(?:ticker|symbol)\s*[:=]\s*([A-Za-z]{1,5}(?:\.[A-Za-z])?)\b", t, re.I)
+        return _map_symbol(m.group(1).upper(), hint)
+    m = re.search(r"\b(?:ticker|symbol)\s*[:=]\s*([A-Za-z0-9^=.\-]{1,10})", t, re.I)
     if m:
-        return _map_symbol(m.group(1).upper())
-    for tok in re.findall(r"(?<![\w$.])([A-Z]{1,5}(?:\.[A-Z])?)(?![\w])", t):
-        if tok in STOPWORDS or (len(tok) == 1 and tok not in {"F", "T", "C", "V", "X", "O", "K"}):
+        return _map_symbol(m.group(1).upper(), hint)
+    for tok in re.findall(r"(?<![\w$.])([A-Z0-9]{1,6}(?:\.[A-Z])?)(?![\w])", t):
+        if tok in STOPWORDS or tok.isdigit() or (len(tok) == 1 and tok not in {"F", "T", "C", "V", "X", "O", "K"}):
             continue
-        return _map_symbol(tok)
+        if not tok[0].isalpha() and tok not in ("6E", "6J", "6B", "6A", "6C"):
+            continue
+        return _map_symbol(tok, hint)
     return None, "stock"
 
 
-def _map_symbol(s: str) -> tuple[str, str]:
-    if s in FUTURES:
-        return f"{s}=F", "future"
-    if s in CRYPTO:
-        return f"{s}-USD", "crypto"
-    return s, "etf" if s in ETFS else "stock"
+_KIND = {"future": "future", "bond_future": "future", "crypto": "crypto", "etf": "etf", "bond_etf": "etf",
+         "fx": "fx", "index": "index", "yield": "index", "volatility": "index"}
+
+
+def _map_symbol(s: str, futures_hint: bool = False) -> tuple[str, str]:
+    from ..markets.instruments import canonical, spec_for
+    c = canonical(s, futures_hint)
+    return c, _KIND.get(spec_for(c).asset_class, "stock")
 
 
 # --------------------------------------------------------------------------- follow-ups
@@ -196,7 +212,7 @@ def parse_many(text: str) -> list[ParsedSignal]:
 def _from_structured(st: dict, raw: str) -> ParsedSignal:
     p = ParsedSignal(raw=raw, format="structured", meta=st["meta"])
     if st["symbol"]:
-        p.symbol, p.instrument = _map_symbol(st["symbol"])
+        p.symbol, p.instrument = _map_symbol(st["symbol"], bool(FUT_HINT.search(raw)))
     else:
         p.symbol, p.instrument = find_symbol(clean(raw))
     ev, sv, tv = st["entry"], st["stop"], st["targets"]

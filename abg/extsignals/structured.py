@@ -156,7 +156,7 @@ def parse_structured(block: str) -> dict | None:
     tk = fields.get("ticker")
     sym = None
     if tk:
-        m = re.search(r"\$?([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)\b", tk)
+        m = re.search(r"\$?(/?[A-Za-z0-9^]{1,6}(?:[.\-=][A-Za-z]{1,3})?(?:1!)?)", tk)
         sym = m.group(1).upper() if m else None
     if not sym and header:
         sym = header[0]

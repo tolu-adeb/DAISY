@@ -20,6 +20,7 @@ async function api(path, opts) {
   const res = await fetch(path, opts);
   let body;
   try { body = await res.json(); } catch { body = null; }
+  if (res.status === 401 && window.authPrompt) { window.authPrompt(); }
   if (!res.ok) {
     const e = body?.error || {};
     let msg = e.message || `HTTP ${res.status}`;
@@ -56,8 +57,9 @@ async function init() {
 
 function showView(v) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
-  for (const id of ["analyze", "portfolio", "signals", "compare", "status"]) $("#view-" + id).hidden = id !== v;
+  for (const id of ["analyze", "portfolio", "signals", "markets", "compare", "status"]) $("#view-" + id).hidden = id !== v;
   if (v === "status") loadStatus();
+  if (v === "markets" && window.loadMarkets) window.loadMarkets();
   if (v === "signals" && window.loadExt) window.loadExt();
   if (v === "portfolio" && window.loadPortfolio) {
     window.loadPortfolio();

@@ -272,3 +272,24 @@ See [External signals](11-external-signals.md). Key contracts:
 - `Monitor` builds the tracker and poller when `ABG_EXT_ENABLED`. It runs `catch_up` at start and starts the poller
   task inside the lock. It adds ext symbols to quote sweeps and calls `review()` on full analysis sweeps.
   `NotificationHub.publish(sig, skip={"discord"})` avoids a double Discord post when the relay is on.
+
+## `markets/*`, `live/stream.py`, `live/scheduler.py`, `ops/*`, `brokers/*`, `train.py`
+
+See [chapter 12](12-markets-risk-learning.md) and [chapter 13](13-deployment.md). Key contracts:
+
+- `instruments.canonical(sym, futures_hint)` / `spec_for(sym)` → `InstrumentSpec` (multiplier, tick, session, micro).
+  `size_position(spec, budget, entry, stop, max_units)` → {units, risk, note}. `is_session_open(spec, now)`.
+- `overview.overview(engine)` → groups + yield curve. `RegimeCache(engine).get()` → {label, score, summary, notes}.
+  `regime_from_series(spy, qqq, vix, tnx)` is the pure version the backtester uses.
+- `calendar.builtin_events(start, end, user_file)`; `Calendar.blackout(now, before_min, after_min)`,
+  `Calendar.earnings(sym)`, `Calendar.upcoming(symbols, days)`.
+- `extsignals.riskgate.RiskGate.check(idea, price)` → (allowed, reason, reduced budget); `equity()`; `limits()`.
+- `live.stream.PriceStream(key, on_flush)` with `set_symbols()` → symbols to poll instead, `run()`, `status()`.
+- `extsignals.confirm.confirm_entry(tracker, idea, price)` → (ok, reason).
+- `extsignals.ai.SignalAI.parse(text)` / `.narrative(kind, idea, x)`; `extsignals.charts.render(idea, ohlc)` → PNG bytes.
+- `extsignals.gateway.DiscordGateway` (slash commands); `live.scheduler.Scheduler` (recaps, calendar posts, backups,
+  health pings, watchdog).
+- `extsignals.backtest.Backtester(engine, gate).run(messages)` → report; `load_messages`, `fetch_discord_history`,
+  `generate_setups`. `extsignals.learn.GradeModel` (train / load / predict). `risk.learned.LearnedRiskModel`, auto-registered.
+- `ops.auth.role(settings, request)` and middleware; `ops.backup.backup_databases(dir, keep)`;
+  `brokers.alpaca.AlpacaBroker.on_event(idea, event)`.

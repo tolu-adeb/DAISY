@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
 from dataclasses import fields
 from datetime import datetime, timezone
@@ -35,7 +34,7 @@ from ..utils import jsonable, normalize_symbol
 from . import commentary as cm
 from .classify import classify
 from .lifecycle import OPEN_STATES, Idea, Obs, manual_exit, plan_tranches, step, summary_stats, trigger_fill
-from .parser import ParsedSignal, parse
+from .parser import ParsedSignal, looks_like_signal, parse
 from .store import ExtSignalStore
 from .structured import split_signals
 
@@ -75,6 +74,19 @@ class ExtSignalTracker:
         self.relay_kinds = set(kinds) if kinds else None
         self.last_quotes_at: float | None = None
         self.last_review_at: float | None = None
+        from ..markets.calendar import Calendar
+        from ..markets.overview import RegimeCache
+        from .riskgate import RiskGate
+        self.calendar = Calendar(engine, self.s)
+        self.regime = RegimeCache(engine)
+        self.gate = RiskGate(self)
+        self.ai = None                        # set by the monitor when ANTHROPIC_API_KEY is configured
+        self.charts = None
+        self.broker = None
+        if self.s.broker == "alpaca_paper":
+            from ..brokers.alpaca import AlpacaBroker
+            b = AlpacaBroker(self.s, engine.http)
+            self.broker = b if b.enabled else None
 
     # ================================================================== context
     def symbols(self) -> list[str]:
@@ -97,7 +109,7 @@ class ExtSignalTracker:
         except Exception:  # pragma: no cover - defensive
             log.exception("context for %s failed", sym)
             return c
-        c = {"ts": time.time(), "report": r, "close": h.value.df["close"]}
+        c = {"ts": time.time(), "report": r, "close": h.value.df["close"], "ohlc": h.value.df}
         self._ctx[sym] = c
         return c
 
@@ -123,7 +135,7 @@ class ExtSignalTracker:
         if len(close) < 150:
             return None
         r = ctx["report"] or {}
-        horizon = int(idea.flags.get("horizon_td") or 30)
+        horizon = max(5, int(idea.flags.get("horizon_td") or 30))    # the simulator's shortest horizon is 5 days
         cfg = fcast.ForecastConfig(paths=1500, primary_horizon=horizon, equity_premium=self.s.forecast_equity_premium,
                                    signal_tilt=self.s.forecast_signal_tilt)
         play = {"name": f"idea #{idea.id}", "direction": idea.direction,
@@ -141,11 +153,36 @@ class ExtSignalTracker:
     async def _regrade(self, idea: Idea, price: float | None, max_age: float = 600) -> dict:
         ctx = await self.context(idea.symbol, max_age=max_age)
         b = await self.barrier(idea, ctx, price)
-        f = cm.facts(idea, (ctx or {}).get("report"), b, price)
+        regime = await self.regime.get() if self.s.ext_market_filter else None
+        f = cm.facts(idea, (ctx or {}).get("report"), b, price, regime)
         if ctx:
             idea.grade, idea.grade_score, idea.grade_reasons = cm.grade(idea, f)
             idea.flags["graded_at"] = time.time()
+            gm = self.grade_model()
+            if gm is not None:
+                from .learn import grade_features
+                pr = gm.predict(grade_features(idea, f, price))
+                idea.meta["learned"] = {"p_win": round(pr["p_win"], 3), "exp_r": round(pr["exp_r"], 3),
+                                        "grade": pr["grade"], "rule_grade": idea.grade}
+                if self.s.ext_grade_model != "rules" and (gm.usable or self.s.ext_grade_model == "learned"):
+                    idea.grade_reasons = [f"{'+' if pr['exp_r'] >= 0 else '-'} learned model: {pr['p_win']:.0%} win odds, "
+                                          f"{pr['exp_r']:+.2f}R expected (rule grade {idea.grade})"] + idea.grade_reasons
+                    idea.grade = pr["grade"]
         return f
+
+    def grade_model(self):
+        """The trained grade model (``abg train grade``), reloaded when the file changes."""
+        from pathlib import Path
+
+        from .learn import GradeModel
+        p = Path(self.s.data_dir).expanduser() / "models" / "grade_model.json"
+        try:
+            mt = p.stat().st_mtime
+        except OSError:
+            return None
+        if getattr(self, "_gm", None) is None or self._gm[0] != mt:
+            self._gm = (mt, GradeModel.load(p))
+        return self._gm[1]
 
     # ================================================================== ingest
     async def ingest(self, text: str, *, source: str = "manual", channel_id: str | None = None,
@@ -192,6 +229,19 @@ class ExtSignalTracker:
             res = await self.apply_update(p, text, channel_id=channel_id, author=author, reply_to=reply_to)
             record(res["outcome"], (res.get("idea") or {}).get("id"))
             return {**base, **res}
+        if (p.kind != "idea" or not p.trackable) and self.ai is not None and parsed is None and looks_like_signal(text):
+            ai_items = await self.ai.parse(text)
+            if len(ai_items) == 1:
+                p = ai_items[0]
+                base = {"parsed": p.to_dict()}
+            elif len(ai_items) > 1:
+                results = [await self._ingest_one(text, source=source, channel_id=channel_id, channel_name=channel_name,
+                                                  author=author, message_id=f"{message_id}#{k}" if message_id else None,
+                                                  parsed=it) for k, it in enumerate(ai_items, 1)]
+                record("multi")
+                first = next((r for r in results if r.get("idea")), results[0])
+                return {"outcome": "multi", "results": results, "parsed": first.get("parsed", {}),
+                        "idea": first.get("idea"), "message": f"{len(results)} signals read by AI"}
         if p.kind != "idea" or not p.trackable:
             record("ignored")
             why = "; ".join(p.warnings) or "no ticker / direction / entry found"
@@ -218,6 +268,12 @@ class ExtSignalTracker:
                     parse_confidence=p.confidence, warnings=list(p.warnings), soft_stop=p.soft_stop,
                     meta=dict(p.meta))
         reject = self._prepare(idea, p, price, ctx)
+        if reject is None and self.s.ext_auto_earnings and not idea.meta.get("next_earnings"):
+            e = await self.calendar.earnings(sym)
+            if e:
+                idea.meta["next_earnings"] = e["date"]
+                idea.meta["earnings_hour"] = e.get("hour")
+                idea.meta["earnings_source"] = "finnhub"
         if reject is None:
             dup = self._duplicate(idea)
             if dup:
@@ -380,12 +436,31 @@ class ExtSignalTracker:
         idea.flags["added_targets"] = [level]
         idea.meta["scale_out_basis"] = basis
 
-    def _resize(self, idea: Idea) -> None:
-        """Paper size, fixed-fractional on the planned entry: account x risk% / risk per share."""
-        risk = abs(idea.ref_entry - idea.stop) if (idea.ref_entry is not None and idea.stop is not None) else 0.0
-        budget = self.s.ext_account_size * self.s.ext_risk_pct / 100
-        sh = budget / risk if risk else 0.0
-        idea.shares = float(math.floor(sh)) if (idea.instrument in ("stock", "etf", "option") and sh >= 1) else round(sh, 4)
+    def _resize(self, idea: Idea, budget: float | None = None) -> None:
+        """Paper size, fixed-fractional on the planned entry: account x risk% / risk per unit, in whole
+        shares or contracts (futures fall back to the micro contract when one full contract is too big)."""
+        from ..markets.instruments import FUTURES, size_position, spec_for
+        if idea.ref_entry is None or idea.stop is None:
+            idea.shares = 0.0
+            return
+        budget = self.s.ext_account_size * self.s.ext_risk_pct / 100 if budget is None else budget
+        spec = spec_for(idea.symbol, idea.instrument == "future")
+        max_units = self.s.prop_max_contracts if (spec.is_future and self.s.prop_max_contracts) else None
+        sz = size_position(spec, budget, idea.ref_entry, idea.stop, max_units)
+        contract = spec.root
+        if sz["units"] < 1 and spec.is_future and spec.micro:
+            m = FUTURES[spec.micro]
+            sz = size_position(m, budget, idea.ref_entry, idea.stop, max_units)
+            if sz["units"] >= 1:
+                spec, contract = m, m.root
+        if idea.instrument in ("stock", "etf", "option") and sz["units"] == 0 and budget > 0:
+            sz["units"] = round(budget / abs(idea.ref_entry - idea.stop), 4)      # fractional shares as a last resort
+        idea.shares = sz["units"]
+        idea.flags["multiplier"] = spec.multiplier
+        idea.meta["instrument"] = {"asset_class": spec.asset_class, "contract": contract, "multiplier": spec.multiplier,
+                                   "tick": spec.tick, "tick_value": spec.tick_value, "group": spec.group,
+                                   "unit": "contract" if spec.is_future else "coin" if spec.asset_class == "crypto"
+                                   else "unit" if spec.asset_class == "fx" else "share", "note": sz.get("note")}
 
     def _duplicate(self, idea: Idea) -> Idea | None:
         for o in self.store.ideas(OPEN_STATES, symbol=idea.symbol, limit=20):
@@ -408,13 +483,47 @@ class ExtSignalTracker:
                 price = q.get("price")
                 if q.get("error") or not price:
                     continue
-                n += await self._observe(idea, Obs(now, price, price, price))
+                hi, lo = q.get("tick_high", price), q.get("tick_low", price)      # stream batches carry the wick
+                n += await self._observe(idea, Obs(now, price, max(hi, price), min(lo, price)))
                 if (after_close and idea.status == "active" and idea.stop_basis == "close"
                         and idea.flags.get("close_checked") != after_close):
                     idea.flags["close_checked"] = after_close        # judge close-basis stops on the session close
                     n += await self._observe(idea, Obs(now, price, price, price, open=price, bar=True))
+            for w in self.gate.limits():
+                await self._emit_limit(w)
         self.last_quotes_at = now
         return n
+
+    async def _emit_limit(self, w: dict) -> None:
+        eq = w["equity"]
+        sev = "critical" if w["level"] == "breach" else "warning"
+        used = "REACHED" if w["level"] == "breach" else f"{w['used_pct']:.0f}% used"
+        title = f"{'🚨' if w['level'] == 'breach' else '⚠️'} {w['name']} {used}"
+        lines = [w["detail"], f"Paper equity {eq['equity']:,.2f} · today {eq['day_pnl']:+,.2f} · open risk "
+                 f"{eq['heat']:,.2f} ({eq['heat_pct']:.1f}%) · {eq['open']} open"]
+        lines.append("New entries are blocked until there is room again." if w["level"] == "breach" else
+                     "New entries will be sized down to fit what's left; consider tightening stops.")
+        await self.post_portfolio(title, lines, sev, key=f"limit:{w['key']}:{w['level']}")
+
+    async def post_portfolio(self, title: str, lines: list[str], severity: str = "info", key: str = "portfolio",
+                             embed: dict | None = None) -> None:
+        """Book-level message (limits, recaps, calendar) to the hub and the Discord relay."""
+        text = "\n".join(f"• {x}" for x in lines)
+        relay_on = self.relay is not None and getattr(self.relay, "enabled", False)
+        if self.hub is not None:
+            try:
+                await self.hub.publish(Signal("PORTFOLIO", "ext_portfolio", f"{key}:{time.time():.0f}", severity,
+                                              "neutral", title, text[:1800], portfolio=self.s.default_portfolio),
+                                       skip={"discord"} if relay_on else None)
+            except Exception:  # pragma: no cover
+                log.exception("hub publish failed")
+        if relay_on:
+            e = embed or {"title": title[:256], "description": text[:4000],
+                          "color": 0xD03B3B if severity == "critical" else 0xF2B33D if severity == "warning" else 0x5865F2,
+                          "footer": {"text": "ABG Intelligence Terminal · paper tracking · not investment advice"}}
+            t = asyncio.ensure_future(self.relay.post_embed(e))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
 
     @staticmethod
     def _after_close() -> str | None:
@@ -442,6 +551,34 @@ class ExtSignalTracker:
                             f"entries are paused around the report to avoid gap risk")
             idea.flags.pop("blocked_at", None) if idea.flags.get("block_kind") != "earnings" else None
             idea.flags["block_kind"] = "earnings"
+        if triggered and allow_entry and not o.bar:
+            cls = (idea.meta.get("instrument") or {}).get("asset_class", "stock")
+            cls = {"bond_future": "future", "bond_etf": "etf", "yield": "index", "volatility": "index"}.get(cls, cls)
+            if cls in self.s.ext_event_blackout_classes.split(","):
+                ev_now = self.calendar.blackout(before_min=self.s.ext_event_blackout_before_min,
+                                                after_min=self.s.ext_event_blackout_after_min)
+                if ev_now:
+                    allow_entry = False
+                    block_reason = (f"{ev_now.name} at {ev_now.time} ET: new entries pause "
+                                    f"{self.s.ext_event_blackout_before_min} min before and "
+                                    f"{self.s.ext_event_blackout_after_min} min after the release")
+        if triggered and allow_entry:
+            ok, why, budget = await self.gate.check(idea, o.price)
+            if not ok:
+                allow_entry, block_reason = False, why
+            elif budget is not None:
+                self._resize(idea, budget)
+                idea.flags["resized"] = why
+                if not idea.shares:
+                    allow_entry, block_reason = False, why + ", which is less than one unit"
+        if triggered and allow_entry and not o.bar and idea.entry_type == "zone":
+            from .confirm import confirm_entry
+            ok, why = await confirm_entry(self, idea, o.price)
+            if not ok:
+                allow_entry, block_reason = False, why
+                idea.flags["block_kind"] = "confirm"
+            elif why:
+                idea.flags["confirm_note"] = why
         if triggered and allow_entry and idea.grade == "A" and len(idea.tranches) > 1 and not o.bar:
             idea.tranches = [{**idea.tranches[0], "frac": 1.0}]
             idea.flags["full_size_reason"] = ("Grade A: full size at the zone edge, because strong setups often "
@@ -458,6 +595,11 @@ class ExtSignalTracker:
         for ev in evs:
             if ev["type"] == "entry_blocked" and block_reason:
                 ev["reason"] = block_reason
+                if idea.flags.get("block_kind") == "confirm" and block_reason.startswith("waiting"):
+                    ev["type"] = "awaiting_confirmation"
+            if ev["type"] == "entry":
+                for k in ("block_kind", "zone_touched_at"):
+                    idea.flags.pop(k, None)
         if was_pending and idea.status in ("active", "closed") and idea.entry_at:
             idea.max_hold_until = idea.entry_at + idea.flags.get("max_hold_days", self.s.ext_max_hold_days) * 86400
             idea.flags["entry_trend"] = ((self._ctx.get(idea.symbol) or {}).get("report") or {}).get("regime", {}).get("trend")
@@ -790,10 +932,19 @@ class ExtSignalTracker:
             x["summary"] = f"(from the {ev['catch_up']} daily bar, while the monitor was offline) " + x["summary"]
         if ev.get("note") and ev["note"] not in x["summary"]:
             x["why"].insert(0, ev["note"])
+        if self.ai is not None:
+            nar = await self.ai.narrative(kind, idea, x)
+            if nar:
+                x["narrative"] = nar
         text = cm.to_text(x)
         eid = self.store.add_event(idea.id, {**ev, "price": price}, x["title"], text,
                                    jsonable({"explain": x, "event": ev, "idea": self.view(idea)}))
         relay_on = self._relay_wanted(kind)
+        if self.broker is not None and kind in ("entry", "scale_in", "stop_moved", "target_hit", "trim", "stop_hit",
+                                                "breakeven_stop", "trailing_stop", "time_exit", "exit", "cancelled"):
+            st = await self.broker.on_event(idea, ev)
+            self.store.mark_relayed(eid, "alpaca", st)
+            self.store.save(idea)
         if self.hub is not None:
             sig = Signal(idea.symbol, f"ext_{kind}", f"{idea.id}:{kind}:{ev.get('target_index', '')}:{eid}",
                          SEVERITY.get(kind, "info"), "bullish" if idea.long else "bearish", x["title"],
@@ -806,7 +957,13 @@ class ExtSignalTracker:
             except Exception:  # pragma: no cover - never let alerts break tracking
                 log.exception("hub publish failed")
         if relay_on:
-            t = asyncio.ensure_future(self._relay(idea.id, eid, kind, x))
+            image = None
+            if self.charts:
+                from .charts import CHART_KINDS, render
+                ohlc = (self._ctx.get(idea.symbol) or {}).get("ohlc")
+                if kind in CHART_KINDS and ohlc is not None:
+                    image = await asyncio.to_thread(render, idea, ohlc)
+            t = asyncio.ensure_future(self._relay(idea.id, eid, kind, x, image))
             self._tasks.add(t)
             t.add_done_callback(self._tasks.discard)
         return eid
@@ -818,11 +975,11 @@ class ExtSignalTracker:
             return False
         return self.relay_kinds is None or kind in self.relay_kinds
 
-    async def _relay(self, idea_id: int, eid: int, kind: str, x: dict) -> None:
+    async def _relay(self, idea_id: int, eid: int, kind: str, x: dict, image: bytes | None = None) -> None:
         async with self._relay_lock:                   # keep channel order == event order
             idea = self.store.get(idea_id)
             try:
-                status, ref = await asyncio.wait_for(self.relay.send(idea, kind, x), timeout=60)
+                status, ref = await asyncio.wait_for(self.relay.send(idea, kind, x, image=image), timeout=60)
             except Exception as e:
                 status, ref = f"error: {getattr(e, 'message', None) or type(e).__name__}: {str(e)[:120]}", None
                 log.warning("relay failed for idea %s %s: %s", idea_id, kind, status)

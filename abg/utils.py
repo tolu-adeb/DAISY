@@ -15,7 +15,7 @@ import pandas as pd
 
 from .errors import InvalidSymbolError
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-^=]{0,14}$")
+_SYMBOL_RE = re.compile(r"^\^?[A-Z0-9][A-Z0-9.\-=]{0,14}$")   # optional leading ^ for indexes (^VIX, ^TNX)
 
 
 def normalize_symbol(symbol: str) -> str:

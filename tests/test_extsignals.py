@@ -163,7 +163,7 @@ class FakeRelay:
     def __init__(self):
         self.sent = []
 
-    async def send(self, idea, kind, x):
+    async def send(self, idea, kind, x, image=None):
         self.sent.append((kind, x["title"]))
         return "ok", f"m{len(self.sent)}"
 
@@ -175,7 +175,7 @@ class FakeRelay:
 async def tracker(tmp_path):
     s = Settings(provider_order="market", cache_enabled=False, cache_dir=tmp_path / "c", data_dir=tmp_path / "d",
                  ai_enabled=False, max_retries=0, hedge_delay=0.0, anthropic_api_key=None, ext_min_entry_grade="none",
-                 _env_file=None)
+                 ext_confirm_timeframe="none", ext_market_filter=False, ext_auto_earnings=False, _env_file=None)
     m = Market(s)
     eng = AnalysisEngine(s, providers=[m])
     tr = ExtSignalTracker(eng, ExtSignalStore.from_settings(s), None, FakeRelay(), s)
@@ -291,7 +291,8 @@ async def test_discord_poller_ingests_and_relays(tmp_path):
 
     s = Settings(provider_order="market", cache_enabled=False, cache_dir=tmp_path / "c", data_dir=tmp_path / "d",
                  ai_enabled=False, max_retries=0, discord_bot_token="T", ext_discord_channel_ids="C1",
-                 ext_relay_webhook_url="https://discord.com/api/webhooks/999/abc", ext_min_entry_grade="none", _env_file=None)
+                 ext_relay_webhook_url="https://discord.com/api/webhooks/999/abc", ext_min_entry_grade="none",
+                 ext_confirm_timeframe="none", ext_relay_charts=False, _env_file=None)
     http = HttpClient(transport=httpx.MockTransport(handler))
     eng = AnalysisEngine(s, providers=[Market(s)], http=http)
     relay = DiscordRelay(s, http)
@@ -354,7 +355,7 @@ async def test_monitor_tracks_external_ideas_without_a_portfolio(tmp_path):
     from abg.portfolio import PortfolioStore
     s = Settings(provider_order="market", cache_enabled=False, cache_dir=tmp_path / "c", data_dir=tmp_path / "d",
                  ai_enabled=False, max_retries=0, hedge_delay=0.0, ext_min_entry_grade="none", notify_desktop=False,
-                 _env_file=None)
+                 ext_confirm_timeframe="none", discord_commands=False, _env_file=None)
     m = Market(s)
     eng = AnalysisEngine(s, providers=[m])
     store = PortfolioStore.from_settings(s)

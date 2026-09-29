@@ -54,7 +54,8 @@ def embed_for(idea, kind: str, x: dict) -> dict:
                            "inline": False})
     inline = [{"name": k, "value": _clip(str(v), 256), "inline": True} for k, v in list((x.get("fields") or {}).items())[:9]]
     src = f" · source: {idea.author}" if idea.author else ""
-    e = {"title": _clip(x["title"], 256), "description": _clip(x.get("summary") or "", 1500),
+    desc = (x.get("summary") or "") + (f"\n\n*{x['narrative']}*" if x.get("narrative") else "")
+    e = {"title": _clip(x["title"], 256), "description": _clip(desc, 1800),
          "color": COLORS.get(kind, 0x9A9892), "fields": [],
          "footer": {"text": _clip(f"idea #{idea.id} · {idea.symbol} {idea.direction}{src} · paper tracking by "
                                   f"ABG Intelligence Terminal · not investment advice", 2048)},
@@ -95,17 +96,20 @@ class DiscordRelay:
     def describe(self) -> dict:
         return {"enabled": self.enabled, "mode": self.mode, "webhook": bool(self.webhook), "bot": bool(self.token)}
 
-    async def send(self, idea, kind: str, x: dict) -> tuple[str, str | None]:
-        payload = {"username": "ABG Signal Tracker", "embeds": [embed_for(idea, kind, x)],
-                   "allowed_mentions": {"parse": []}}
+    async def send(self, idea, kind: str, x: dict, image: bytes | None = None) -> tuple[str, str | None]:
+        emb = embed_for(idea, kind, x)
+        if image:
+            emb["image"] = {"url": "attachment://chart.png"}
+        payload = {"username": "ABG Signal Tracker", "embeds": [emb], "allowed_mentions": {"parse": []}}
         if self.mode == "reply" and self.token and idea.channel_id:
             body = {"embeds": payload["embeds"], "allowed_mentions": {"parse": []}}
             if idea.message_id:
-                body["message_reference"] = {"message_id": idea.message_id, "fail_if_not_exists": False}
+                body["message_reference"] = {"message_id": idea.message_id.split("#")[0], "fail_if_not_exists": False}
             resp = await self._post(f"{API}/channels/{idea.channel_id}/messages", body,
-                                    headers={"Authorization": f"Bot {self.token}"})
+                                    headers={"Authorization": f"Bot {self.token}"}, image=image)
         elif self.webhook:
-            resp = await self._post(self.webhook + ("&" if "?" in self.webhook else "?") + "wait=true", payload)
+            resp = await self._post(self.webhook + ("&" if "?" in self.webhook else "?") + "wait=true", payload,
+                                    image=image)
         else:
             return "skipped: no relay destination for this idea", None
         try:
@@ -113,16 +117,52 @@ class DiscordRelay:
         except Exception:
             return "ok", None
 
-    async def _post(self, url: str, body: dict, headers: dict | None = None):
+    async def post_embed(self, embed: dict) -> str:
+        """A book-level embed (limits, recaps, calendar) to the relay webhook / first signal channel."""
+        payload = {"username": "ABG Signal Tracker", "embeds": [embed], "allowed_mentions": {"parse": []}}
+        try:
+            if self.webhook:
+                await self._post(self.webhook, payload)
+            elif self.token and self.s.ext_channel_list():
+                await self._post(f"{API}/channels/{self.s.ext_channel_list()[0]}/messages",
+                                 {"embeds": [embed], "allowed_mentions": {"parse": []}},
+                                 headers={"Authorization": f"Bot {self.token}"})
+            else:
+                return "skipped"
+            return "ok"
+        except Exception as e:  # pragma: no cover
+            log.warning("portfolio relay failed: %s", e)
+            return f"error: {e}"
+
+    async def _post(self, url: str, body: dict, headers: dict | None = None, image: bytes | None = None):
         await self.limiter.acquire(max_wait=30)
         for attempt in range(3):
             try:
+                if image:
+                    return await self._post_multipart(url, body, headers, image)
                 return await self.http.request("POST", url, provider="discord", json=body, headers=headers)
             except RateLimited as e:
                 if attempt < 2:
                     await asyncio.sleep(min(float(e.retry_after or 2), 10))
                     continue
                 raise
+
+
+    async def _post_multipart(self, url: str, body: dict, headers: dict | None, image: bytes):
+        import json as _json
+
+        from ..errors import ProviderError
+        body = {**body, "attachments": [{"id": 0, "filename": "chart.png"}]}
+        try:
+            resp = await self.http.raw.post(url, data={"payload_json": _json.dumps(body)},
+                                            files={"files[0]": ("chart.png", image, "image/png")}, headers=headers)
+        except Exception as e:
+            raise ProviderError(f"network error: {type(e).__name__}: {e}", provider="discord") from None
+        if resp.status_code == 429:
+            raise RateLimited("HTTP 429", provider="discord", retry_after=float(resp.headers.get("retry-after", 2)))
+        if resp.status_code >= 400:
+            raise ProviderError(f"HTTP {resp.status_code} {resp.text[:160]}", provider="discord")
+        return resp
 
 
 def message_text(m: dict) -> str:

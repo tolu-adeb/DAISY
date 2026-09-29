@@ -21,6 +21,7 @@ dependencies = [
   "fastapi>=0.110",
   "uvicorn>=0.27",
   "tzdata>=2024.1",
+  "websockets>=12",
 ]
 
 [project.optional-dependencies]
@@ -28,8 +29,9 @@ yfinance = ["yfinance>=0.2.50"]
 fast = ["scipy>=1.10"]
 parquet = ["pyarrow>=14"]
 desktop = ["plyer>=2.1"]
+charts = ["matplotlib>=3.7"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
-all = ["yfinance>=0.2.50", "scipy>=1.10", "pyarrow>=14", "plyer>=2.1", "pytest>=8", "pytest-asyncio>=0.23"]
+all = ["yfinance>=0.2.50", "scipy>=1.10", "pyarrow>=14", "plyer>=2.1", "matplotlib>=3.7", "pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 abg = "abg.cli:app"

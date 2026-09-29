@@ -1,0 +1,13 @@
+services:
+  abg:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ABG_DATA_DIR: /data
+    volumes:
+      - abg-data:/data
+    ports:
+      - "127.0.0.1:8000:8000"     # localhost only; publish with `tailscale serve --bg 8000`
+volumes:
+  abg-data:

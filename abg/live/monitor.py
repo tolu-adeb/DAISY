@@ -129,7 +129,12 @@ class Monitor:
         self._stop = asyncio.Event()
         # external signals (docs/11): tracked trade ideas + Discord poller / relay
         self.ext = self.poller = None
+        self.stream = None
+        self.gateway = None
+        self.scheduler = None
         self._poll_task: asyncio.Task | None = None
+        self._aux_tasks: list[asyncio.Task] = []
+        self.fast_symbols: list[str] = []
         if self.s.ext_enabled:
             try:
                 from ..extsignals.discord import DiscordPoller, DiscordRelay
@@ -139,6 +144,20 @@ class Monitor:
                 self.ext = ExtSignalTracker(engine, ExtSignalStore.from_settings(self.s), hub,
                                             relay if relay.enabled else None)
                 self.poller = DiscordPoller(self.s, engine.http, self.ext, relay)
+                if self.s.ext_realtime and self.s.finnhub_api_key:
+                    from .stream import PriceStream
+                    self.stream = PriceStream(self.s.finnhub_api_key, self._on_ticks, self.s.ext_stream_flush_seconds)
+                if self.s.anthropic_api_key and self.s.ai_enabled and (self.s.ext_ai_parse or self.s.ext_ai_narrative):
+                    from ..extsignals.ai import SignalAI
+                    self.ext.ai = SignalAI(self.s, engine.http)
+                if self.s.ext_relay_charts:
+                    from ..extsignals.charts import charts_available
+                    self.ext.charts = charts_available()
+                if self.s.discord_commands and self.s.discord_bot_token:
+                    from ..extsignals.gateway import DiscordGateway
+                    self.gateway = DiscordGateway(self.s, engine.http, self.ext, self)
+                from .scheduler import Scheduler
+                self.scheduler = Scheduler(self)
             except Exception as e:   # pragma: no cover - never block the portfolio monitor
                 log.exception("external signals disabled")
                 self.errors.append({"ts": time.time(), "where": "ext init", "error": str(e)[:300]})
@@ -172,6 +191,15 @@ class Monitor:
                 await self._guard("ext catch-up", self.ext.catch_up())
             if self.poller is not None and self.poller.enabled:
                 self._poll_task = asyncio.ensure_future(self.poller.run())
+            if self.stream is not None:
+                self._refresh_stream()
+                self._aux_tasks.append(asyncio.ensure_future(self.stream.run()))
+            if self.ext is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self._fast_poll_loop()))
+            if self.gateway is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self.gateway.run()))
+            if self.scheduler is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self.scheduler.run()))
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -209,6 +237,15 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
+            for comp in (self.stream, self.gateway, self.scheduler):
+                if comp is not None:
+                    comp.stop()
+            for t in self._aux_tasks:
+                try:
+                    await asyncio.wait_for(t, 5)
+                except BaseException:
+                    t.cancel()
+            self._aux_tasks = []
             if self.ext is not None:
                 await self.ext.drain(10)
             self.running = False
@@ -227,6 +264,40 @@ class Monitor:
     # ------------------------------------------------------------------ sweeps
     def _ext_symbols(self) -> list[str]:
         return self.ext.symbols() if self.ext is not None else []
+
+    def _refresh_stream(self) -> None:
+        """Stream every tracked symbol the websocket can serve; the rest go to the fast poll."""
+        syms = set(self._ext_symbols()) | set(self.store.symbols(self.pf))
+        if self.stream is not None:
+            self.fast_symbols = self.stream.set_symbols(syms)
+        else:
+            self.fast_symbols = sorted(syms)
+
+    async def _on_ticks(self, batch: dict[str, dict]) -> None:
+        if self.ext is not None:
+            await self.ext.on_quotes(batch)
+
+    async def _fast_poll_loop(self) -> None:
+        """Tracked ideas the stream can't serve (futures, yields, or everything while the stream is down)
+        are re-quoted every ABG_EXT_FAST_POLL_SECONDS while their session is open."""
+        from ..markets.instruments import is_session_open, spec_for
+        while not self._stop.is_set():
+            try:
+                self._refresh_stream()
+                ext = set(self._ext_symbols())
+                streamed = self.stream.streamed() if self.stream is not None else set()
+                syms = [x for x in ext if x not in streamed and is_session_open(spec_for(x))]
+                if syms:
+                    quotes = await fetch_quotes(self.engine, syms, use_cache=False)
+                    await self.ext.on_quotes(quotes)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # never kill the monitor
+                self.errors.append({"ts": time.time(), "where": "fast poll", "error": f"{type(e).__name__}: {e}"[:300]})
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self.s.ext_fast_poll_seconds)
+            except asyncio.TimeoutError:
+                pass
 
     async def _ext_quotes(self, quotes: dict[str, dict]) -> None:
         """Advance tracked external ideas (fetching quotes the portfolio sweep didn't cover)."""
@@ -347,7 +418,12 @@ class Monitor:
             "next_quote_in_s": in_(self.next_quote_at), "next_analysis_in_s": in_(self.next_analysis_at),
             "sweeps": self.sweeps, "signals_emitted": self.signals_emitted, "errors": list(self.errors)[-10:],
             "channels": self.hub.describe(), "now": wall,
-            "external": ({**self.ext.status(), "discord": self.poller.describe() if self.poller else None}
+            "external": ({**self.ext.status(), "discord": self.poller.describe() if self.poller else None,
+                          "stream": self.stream.status() if self.stream else {"enabled": False,
+                                                                                "hint": "set ABG_FINNHUB_API_KEY"},
+                          "fast_poll": self.fast_symbols,
+                          "commands": self.gateway.status() if self.gateway else {"enabled": False},
+                          "scheduler": self.scheduler.status() if self.scheduler else None}
                          if self.ext is not None else None),
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

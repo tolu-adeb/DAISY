@@ -348,7 +348,7 @@ account you use for your funded-trading or copier setup. The terminal only suppo
    - Under *Privileged Gateway Intents*, turn on **Message Content Intent** and click **Save**.
      Without this intent, the bot sees empty messages.
 3. **OAuth2 → URL Generator**:
-   - Scopes: tick **bot**.
+   - Scopes: tick **bot** and **applications.commands** (the second one enables the `/abg` slash commands).
    - Bot permissions: tick **View Channels** and **Read Message History**. If you'll use reply mode,
      also tick **Send Messages** and **Embed Links**.
    - Open the generated URL and add the bot to **ABG Signals**.

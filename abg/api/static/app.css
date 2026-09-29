@@ -275,3 +275,19 @@ td.num { white-space: nowrap; }
 .idea-head .plan { white-space: normal; }
 .parsed-block { border-top: 1px dashed var(--border); margin-top: 10px; padding-top: 8px; }
 .small-type { font-size: 11px; white-space: nowrap; }
+
+/* ------------------------------------------------------------------ markets */
+.mk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.mk-grid table td, .mk-grid table th { padding: 4px 6px; }
+.mk-name { color: var(--text-muted); font-size: 11px; display: block; }
+.curve { display: flex; align-items: flex-end; gap: 10px; height: 90px; margin: 8px 0 4px; }
+.curve div { flex: 1; background: color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 4px 4px 0 0; position: relative; min-height: 4px; }
+.curve div span { position: absolute; top: -18px; left: 0; right: 0; text-align: center; font: 600 11px var(--mono); }
+.curve-labels { display: flex; gap: 10px; font-size: 11px; color: var(--text-muted); } .curve-labels span { flex: 1; text-align: center; }
+.cal-row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.cal-row.earn { color: var(--accent); } .cal-row .est { color: var(--text-muted); font-size: 11px; }
+.risk-bars { display: grid; gap: 8px; margin-top: 8px; }
+.risk-bar { font-size: 12px; } .risk-bar .track { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; margin-top: 3px; }
+.risk-bar .fill { height: 100%; background: var(--up); } .risk-bar .fill.warn { background: var(--warning); } .risk-bar .fill.bad { background: var(--down); }
+.role-badge { font: 600 11px var(--mono); padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); }
+body.readonly form button.primary, body.readonly .idea-actions, body.readonly #tx-form, body.readonly #rule-form, body.readonly #watch-form { display: none; }

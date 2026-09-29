@@ -367,6 +367,7 @@ def version():
 
 from . import cli_portfolio  # noqa: E402,F401  (registers portfolio / alert / signals / monitor commands)
 from . import cli_ext  # noqa: E402,F401  (registers `abg ext ...` external-signal commands)
+from . import cli_more  # noqa: E402,F401  (markets, calendar, backtest, train, backup)
 
 if __name__ == "__main__":  # pragma: no cover
     app()

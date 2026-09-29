@@ -131,6 +131,19 @@ class Idea:
             edge = lo
         return (edge / price - 1) * 100
 
+    def open_pnl(self, price: float | None) -> float:
+        if self.entry_price is None or not price or self.status != "active":
+            return 0.0
+        move = (price - self.entry_price) if self.long else (self.entry_price - price)
+        return move * self.shares * self.remaining * self.flags.get("multiplier", 1.0)
+
+    def open_risk(self) -> float:
+        """$ lost if the current stop is hit (negative = the stop locks in profit)."""
+        if self.status != "active" or self.stop is None or self.entry_price is None:
+            return 0.0
+        move = (self.entry_price - self.stop) if self.long else (self.stop - self.entry_price)
+        return move * self.shares * self.remaining * self.flags.get("multiplier", 1.0)
+
     def open_r(self, price: float) -> float:
         if self.entry_price is None or not self.risk_per_share:
             return 0.0
@@ -391,7 +404,7 @@ def _exit(idea: Idea, px: float, frac: float, ts: float, kind: str, **data) -> d
     move = (px - e) if idea.long else (e - px)
     idea.realized_r += (move / r * frac) if r else 0.0
     idea.realized_pct += move / e * 100 * frac
-    idea.realized_pnl += move * idea.shares * frac
+    idea.realized_pnl += move * idea.shares * frac * idea.flags.get("multiplier", 1.0)   # $ per point for futures
     idea.exit_value += px * frac
     idea.remaining = round(idea.remaining - frac, 10)
     return _event(kind, px, fraction=frac, r=(move / r) if r else None, pct=move / e * 100, **data)

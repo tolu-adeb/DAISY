@@ -91,6 +91,11 @@ class AnalysisEngine:
         self.providers = providers if providers is not None else build_providers(s, self.http)
         self.router = ProviderRouter(self.providers, s, self.cache)
         risk_if.discover(s.extra_risk_models())
+        try:                                            # model trained with `abg train risk`, if any
+            from .risk.learned import autoload
+            autoload(s)
+        except Exception:  # pragma: no cover - a bad model file must never stop the engine
+            log.exception("learned risk model not loaded")
 
     async def __aenter__(self) -> "AnalysisEngine":
         return self

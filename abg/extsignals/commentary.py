@@ -28,7 +28,8 @@ EMOJI = {"ingested": "📥", "approaching": "👀", "entry": "🟢", "scale_in":
          "entry_changed": "✏️", "entry_adjust": "🧭", "target_near": "🎯", "target_hit": "💰", "stop_moved": "🔒",
          "soft_stop": "🟠", "stop_near": "⚠️", "stop_hit": "🛑", "breakeven_stop": "⚪", "trailing_stop": "🟡",
          "time_exit": "⌛", "exit": "🔵", "trim": "✂️", "invalidated": "❌", "missed": "💨", "expired": "🕓",
-         "cancelled": "🚫", "advisory": "⚠️", "source_update": "📣", "rejected": "⛔", "earnings_soon": "📅"}
+         "cancelled": "🚫", "advisory": "⚠️", "source_update": "📣", "rejected": "⛔", "earnings_soon": "📅",
+         "awaiting_confirmation": "⏳"}
 
 
 def fmt(x, nd=2) -> str:
@@ -79,7 +80,7 @@ def days_until(iso: str | None) -> int | None:
 
 
 # =========================================================================== facts
-def facts(idea: Idea, report: dict | None, barrier: dict | None, price: float | None) -> dict:
+def facts(idea: Idea, report: dict | None, barrier: dict | None, price: float | None, regime: dict | None = None) -> dict:
     r = report or {}
     ind = r.get("indicators") or {}
     sig = r.get("signal") or {}
@@ -122,7 +123,7 @@ def facts(idea: Idea, report: dict | None, barrier: dict | None, price: float | 
         "sma50": ind.get("sma_50"), "sma200": ind.get("sma_200"), "vwap": ind.get("vwap_20"),
         "pe": fund.get("pe"), "forward_pe": fund.get("forward_pe"), "w52h": fund.get("week52_high"),
         "w52l": fund.get("week52_low"), "sector": fund.get("sector"),
-        "earnings": earn, "earnings_days": days_until(earn), "has_report": bool(r),
+        "earnings": earn, "earnings_days": days_until(earn), "has_report": bool(r), "regime": regime,
     }
 
 
@@ -194,6 +195,13 @@ def grade(idea: Idea, f: dict) -> tuple[str, float, list[str]]:
     if se is not None and abs(se) > 0.2:
         s += 0.5 if se * sgn > 0 else -0.5
         why.append(f"{'+' if se * sgn > 0 else '-'} news sentiment {se:+.2f}")
+    rg = f.get("regime") or {}
+    lab = rg.get("label")
+    if lab and idea.meta.get("instrument", {}).get("asset_class", "stock") in ("stock", "etf", "future"):
+        adj = {"risk-off": -1.0, "mixed": -0.25, "risk-on": 0.25}.get(lab, 0.0) * sgn
+        if adj:
+            s += adj
+            why.append(f"{'+' if adj > 0 else '-'} market is {lab} ({rg.get('summary', '').split(': ', 1)[-1][:90]})")
     res = f.get("resistances") or []
     e, t1 = f.get("entry_ref"), (idea.targets or [None])[-1]
     if idea.long and e and t1 and any(e * 1.01 < x < t1 * 0.99 for x in res):
@@ -308,6 +316,9 @@ def context_lines(idea: Idea, f: dict, price: float | None) -> list[str]:
         se = f["sentiment"]
         out.append(f"News: tone {se:+.2f} over {f.get('articles')} articles "
                    f"({'positive' if se > 0.15 else 'negative' if se < -0.15 else 'mixed'})")
+    if (f.get("regime") or {}).get("summary"):
+        out.append("Market: " + f["regime"]["summary"] + ("; " + "; ".join(f["regime"]["notes"][:2])
+                                                          if f["regime"].get("notes") else ""))
     ed = f.get("earnings_days")
     if ed is not None and ed >= 0:
         out.append(f"Earnings: {nice_date(f['earnings'])} (in {ed} day{'s' if ed != 1 else ''})"
@@ -362,9 +373,14 @@ def plan_lines(idea: Idea, f: dict, extra: dict) -> list[str]:
     elif idea.status == "active" and open_tranches(idea):
         out.append("Resting add: " + ", ".join(f"{t['frac']:.0%} at {fmt(t['level'])}" for t in open_tranches(idea))
                    + " (cancelled once the first target is hit)")
+    inst = idea.meta.get("instrument") or {}
     st = f"Stop {fmt(idea.stop)}"
     if f.get("stop_atr"):
         st += f" ({f['stop_atr']:.1f} ATR)"
+    if inst.get("unit") == "contract" and idea.stop is not None and planned_entry(idea):
+        pts = abs(planned_entry(idea) - idea.stop)
+        st += (f"; {pts:g} pts = {pts / inst['tick']:.0f} ticks = ${pts * inst['multiplier']:,.0f} per "
+               f"{inst.get('contract')} contract")
     if idea.soft_stop is not None:
         st += f"; warning at {fmt(idea.soft_stop)} (top of the source's stop range)"
     if idea.stop_basis == "close":
@@ -383,9 +399,15 @@ def plan_lines(idea: Idea, f: dict, extra: dict) -> list[str]:
         out.append("Exits: equal slices at each level; stop → breakeven after the first, then trails to the prior level")
     elif n == 1 and idea.meta.get("scale_out_note") and idea.status == "pending":
         out.append("Exit: " + idea.meta["scale_out_note"])
+    mult = idea.flags.get("multiplier", 1.0)
     if idea.shares:
-        risk = (idea.risk_per_share or 0) * idea.shares
-        out.append(f"Size (paper): {idea.shares:g} units ≈ {fmt(risk)} at risk ({extra.get('risk_pct', 1):g}% of the account)")
+        risk = (idea.risk_per_share or 0) * idea.shares * mult
+        unit = inst.get("unit", "unit")
+        what = (f"{idea.shares:g} {inst.get('contract', '')} contract{'s' if idea.shares != 1 else ''}"
+                if unit == "contract" else f"{idea.shares:g} {unit}{'s' if idea.shares != 1 else ''}")
+        out.append(f"Size (paper): {what} ≈ ${fmt(risk)} at risk ({extra.get('risk_pct', 1):g}% of the account)")
+    elif inst.get("note"):
+        out.append(f"Size: {inst['note']}")
     return out
 
 
@@ -472,7 +494,11 @@ def explain(kind: str, idea: Idea, ev: dict, f: dict, extra: dict | None = None)
         summary = (f"Price reached the entry ({levels_line(idea)}). Paper position opened: {how}"
                    + (f"; the rest is resting at {', '.join(fmt(p) for p in pend)}." if pend else ".")
                    + (f" {idea.flags['full_size_reason']}" if idea.flags.get("full_size_reason") and full else ""))
-        why = why_lines(f, idea, [f"Entry grade {idea.grade}: " + "; ".join(x[2:] for x in idea.grade_reasons
+        if idea.flags.get("confirm_note"):
+            why_first = [idea.flags["confirm_note"]]
+        else:
+            why_first = []
+        why = why_first + why_lines(f, idea, [f"Entry grade {idea.grade}: " + "; ".join(x[2:] for x in idea.grade_reasons
                                                                            if x.startswith("+"))[:240]]
                         if idea.grade else [])
         if len(fills) == 1 and pend:
@@ -492,6 +518,13 @@ def explain(kind: str, idea: Idea, ev: dict, f: dict, extra: dict | None = None)
         why = [x[2:] for x in idea.grade_reasons if x.startswith("-")] or idea.grade_reasons
         plan = [f"Re-grading every {extra.get('regrade_min', 15):g} min while pending; enters automatically if it improves",
                 "Still invalidated if the stop trades first, or expires if never taken"] + plan[:2]
+    elif kind == "awaiting_confirmation":
+        title = f"{EMOJI[kind]} {sym} is in the zone: waiting for a reversal before entering{tag}"
+        summary = f"Price {fmt(px)} reached {levels_line(idea)}. {(ev.get('reason') or '').capitalize()}."
+        why = ["Touching the zone isn't enough: waiting for buyers (or sellers, for a short) to show up on the "
+               "shorter timeframe avoids buying into a level that is breaking"] + f["aligned"][:2]
+        plan = ["Enters automatically on a reversal bar (close beyond the prior bar, or a 9-EMA reclaim)",
+                "Enters anyway after the maximum wait; still invalidated if the stop trades first"] + plan[:3]
     elif kind == "entry_changed":
         title = f"{EMOJI[kind]} {sym} entry changed → {fmt(idea.entry_low)}–{fmt(idea.entry_high)}"
         summary = f"{(ev.get('reason') or 'Updated').capitalize()}. Old zone {fmt((ev.get('old') or [None])[0])}–" \
@@ -655,7 +688,7 @@ SECTIONS = [("why", "Why", 6), ("context", "Market context", 7), ("thesis", "Sou
 
 
 def to_text(x: dict, footer: str = "") -> str:
-    lines = [x["summary"]]
+    lines = [x["summary"]] + ([f"**Read:** {x['narrative']}"] if x.get("narrative") else [])
     for key, name, n in SECTIONS:
         if x.get(key):
             lines.append(f"**{name}:**\n" + "\n".join(f"• {w}" for w in x[key][:n]))

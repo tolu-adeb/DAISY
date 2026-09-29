@@ -20,7 +20,12 @@ abg serve                   # web dashboard at http://127.0.0.1:8000
 | Prediction | — | Monte Carlo ensemble (GBM-t + filtered historical simulation): 1W–1Y return ranges, scenarios, setup target/stop odds, walk-forward calibration, confidence rating, thesis and a guard-railed Strong Buy…Sell model view |
 | External signals | — | Parses swing ideas from pasted messages or Discord channels (entry zone / breakout, stop, targets, updates such as "TP1 hit, stop to BE"), validates them against live data, tracks them for weeks, grades each entry A–D, takes paper entries / partial profits / stops / exits, and relays every decision back to the channel with the reasoning |
 | Portfolio & alerts | — | Saved portfolio (average-cost P&L, stops/targets, watchlist), continuous live monitor, 17 edge-triggered signal types, dashboard + desktop + Discord + email alerts |
-| Tests | — | 148 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
+| Futures, bonds & markets | — | Instrument registry (index / Treasury / energy / metal / FX futures, micros, bond ETFs, yields, crypto, FX), contract sizing with $/point and ticks, Markets tab with the yield curve and a market-regime filter |
+| Real-time & calendar | — | Finnhub websocket stream (1-second batches with wicks), 15-second polling for futures, FOMC / CPI / jobs calendar with entry blackouts, automatic earnings dates |
+| Portfolio & prop-firm risk | — | Heat, position, correlation and sector limits across all ideas; daily-loss and trailing-drawdown guardrails that shrink or block entries |
+| Learning & backtests | — | Replays your sources' calls on history with no look-ahead; trained entry-grade and risk models with walk-forward validation |
+| Ops | — | Admin / view tokens, systemd + Tailscale deployment script, nightly backups, dead-man's switch, Discord slash commands, weekly recaps, Alpaca paper-trading bridge |
+| Tests | — | 171 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
 
 ## Install
 
@@ -66,6 +71,14 @@ abg notify-test                          # check Discord / email / desktop alert
 abg ext add "$NVDA swing long entry zone 117.50-119, SL 112, TP1 130 TP2 138" --author alpha-desk
 abg ext list  |  abg ext show 1  |  abg ext stats
 abg ext discord-test --send              # check the bot token, signal channels and the relay
+
+# markets, risk, learning (see docs/12)
+abg markets                              # futures, rates & yield curve, FX, commodities, crypto, VIX + regime
+abg calendar -s NVDA                     # FOMC / CPI / jobs releases + earnings
+abg ext risk                             # paper equity, open risk, prop-firm room
+abg ext backtest signals.txt             # replay dated calls; or --discord CHANNEL_ID
+abg train all                            # learned entry grade + learned risk model
+abg backup                               # back up the databases now
 abg --demo analyze AAPL                  # offline demo with clearly-flagged simulated data
 ```
 
@@ -96,11 +109,13 @@ asyncio.run(main())
 9. [Portfolio & live signals](docs/09-portfolio-and-live-signals.md): saved portfolio, monitor, signal catalogue, Discord/email/desktop alerts
 10. [Prediction](docs/10-prediction.md): Monte Carlo simulation of future returns, calibration, confidence rating, recommendation rules
 11. [External signals](docs/11-external-signals.md): signal parser, trade-idea lifecycle, entry grading, Discord polling and relays
+12. [Markets, real-time, risk & learning](docs/12-markets-risk-learning.md): futures & bonds, streaming prices, calendar, portfolio and prop-firm risk, confirmation, AI, charts, slash commands, backtests, model training, broker bridge
+13. [Deployment](docs/13-deployment.md): always-on server, Tailscale, tokens, backups, health checks, updates
 
 ## Tests
 
 ```bash
-pytest -q          # 148 tests, fully offline (no network, no API keys)
+pytest -q          # 171 tests, fully offline (no network, no API keys)
 ```
 
 > Educational analysis tool, not investment advice.
