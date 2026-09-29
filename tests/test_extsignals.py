@@ -196,7 +196,8 @@ async def test_tracker_ingest_enter_targets_and_relay(tracker):
     await tr.on_quotes({"ABC": {"price": 97.0}})
     await tr.on_quotes({"ABC": {"price": 104.5}})
     idea = tr.store.get(i["id"])
-    assert idea.status == "active" and idea.targets_hit == [0] and idea.stop == 97.0
+    # scale-in: 50% at 98 (zone top, crossed from 100) + 50% at 97 (midpoint) -> breakeven = average 97.5
+    assert idea.status == "active" and idea.targets_hit == [0] and idea.entry_price == 97.5 and idea.stop == 97.5
     types = [e["type"] for e in reversed(tr.store.events(i["id"]))]
     assert types == ["ingested", "entry", "target_hit", "stop_moved"]
     ev = tr.store.events(i["id"])[-2]                       # the entry event carries the explanation
@@ -256,7 +257,10 @@ async def test_catch_up_replays_missed_daily_bars(tracker):
                                    "low": [98, 96, 94.2, 96.5], "close": [99, 97, 96, 99.5], "volume": 1e6}, index=days)
     n = await tr.catch_up()
     i = tr.store.get(i.id)
-    assert n >= 2 and i.status == "closed" and i.entry_price == 95 and i.targets_hit == [0]
+    # scale-in: 50% at 95 (zone top) + 50% at 94.5 (midpoint, the 94.2 low reached it); a scale-out was added
+    # before the single 103 target (1.7R away), then the final target closed the trade
+    assert n >= 3 and i.status == "closed" and i.entry_price == pytest.approx(94.75) and i.filled == 1.0
+    assert i.flags["added_targets"] and i.targets_hit == [0, 1] and i.realized_r > 1
     assert any("daily bar" in e["text"] for e in tr.store.events(i.id))
 
 
@@ -370,3 +374,138 @@ async def test_monitor_tracks_external_ideas_without_a_portfolio(tmp_path):
         mon.ext.store.close()
         store.close()
         await eng.aclose()
+
+
+# =========================================================================== standard signal formats
+STD = (__import__("pathlib").Path(__file__).parent / "fixtures" / "signals_std.txt").read_text(encoding="utf-8")
+
+
+def test_structured_formats_parse_levels_not_prose():
+    from abg.extsignals.parser import parse_many
+    ps = parse_many(STD)
+    got = [(p.symbol, p.direction, p.entry_low, p.entry_high, p.stop, p.soft_stop, p.targets) for p in ps]
+    assert got == [("SMTC", "long", 168, 175, 145, None, [205]), ("IT", "long", 170, 175, 145, None, [220]),
+                   ("DIS", "long", 104.5, 105, 99, 99.79, [112]), ("PG", "long", 145.5, 148.35, 138.92, 138.98, [153])]
+    assert all(p.format == "structured" and not p.warnings for p in ps)
+    dis, pg = ps[2].meta, ps[3].meta
+    assert dis["setup"] == "Bull flag" and dis["rr_stated"] == 1.6 and dis["fund_score"] == 8 and dis["confidence"] == 8
+    assert dis["catalyst"].startswith("Box office") and dis["risk_note"].startswith("People are cutting cable")
+    assert dis["next_earnings"].endswith("-11-12") and pg["next_earnings"] == "2026-10-22"
+    assert ps[0].meta["company"] == "Semtech" and any("68 times" in r for r in ps[0].meta["source_risks"])
+    assert any("stalled near $203" in r for r in ps[1].meta["source_risks"])
+
+
+def test_classification():
+    from abg.extsignals.classify import classify
+    from abg.extsignals.parser import parse_many
+    smtc, it, dis, pg = parse_many(STD)
+    c = classify(smtc.raw, direction="long", entry_type="zone", entry_low=168, entry_high=175, stop=145, price=180)
+    assert c["pattern"] == "Pullback" and c["basis"] == "Fundamental" and "Growth" in c["themes"]
+    assert c["horizon"].startswith("Position") and c["entry_style"] == "Limit on a dip into the zone"
+    assert classify(it.raw, direction="long", price=185, entry_low=170, entry_high=175, stop=145)["basis"] == "Hybrid"
+    assert classify(dis.raw, setup=dis.meta["setup"], direction="long")["pattern"] == "Continuation"
+    c = classify(pg.raw, setup=pg.meta["setup"], direction="long")
+    assert c["pattern"] == "Reversal / base" and "Quality / income" in c["themes"]
+
+
+def test_split_and_entry_updates():
+    from abg.extsignals.parser import parse
+    from abg.extsignals.structured import split_signals
+    assert len(split_signals(STD)) == 4
+    assert len(split_signals("Ticker: AAA\nEntry: 1-2\nStop: 0.5\n\nTicker: BBB\nEntry: 3\nStop: 2")) == 2
+    u = parse("new buying zone 165-170 on IT")
+    assert (u.kind, u.action, u.symbol, u.new_entry) == ("update", "move_entry", "IT", [165, 170])
+
+
+def test_scale_in_tranches_and_heads_up():
+    from abg.extsignals.lifecycle import plan_tranches
+    i = mk(entry_low=96.0, entry_high=100.0, stop=92.0, stop_initial=92.0, targets=[110.0], soft_stop=93.0)
+    plan_tranches(i, 0.5)
+    ev = step(i, q(99.5))
+    assert ev[0]["type"] == "entry" and i.filled == 0.5 and i.remaining == 0.5 and i.entry_price == 99.5
+    ev = step(i, q(97.8), near_pct=1.0)
+    assert ev[0]["type"] == "scale_in" and i.filled == 1.0 and i.entry_price == pytest.approx(98.75)  # limit fills at 98
+    assert [e["type"] for e in step(i, q(92.9), near_pct=1.0)] == ["soft_stop", "stop_near"]
+    assert step(i, q(92.8), near_pct=1.0) == []                   # each warning once
+    assert step(i, q(109.2), near_pct=1.0)[0]["type"] == "target_near"
+    ev = step(i, q(110.5))
+    assert ev[0]["type"] == "target_hit" and i.status == "closed" and i.realized_r > 1.5
+
+
+def test_first_target_cancels_unfilled_tranche():
+    from abg.extsignals.lifecycle import plan_tranches
+    i = mk(entry_low=96.0, entry_high=100.0, stop=92.0, stop_initial=92.0, targets=[104.0, 108.0])
+    plan_tranches(i, 0.5)
+    step(i, q(99.8))
+    ev = step(i, q(104.2))
+    assert ev[0]["type"] == "target_hit" and ev[0]["cancelled_tranches"] == [98.0]
+    assert i.remaining == pytest.approx(0.25)                    # half of the half that filled
+    assert step(i, q(97.9)) and i.filled == 0.5                  # no adding after profit-taking
+
+
+async def test_tracker_std_signals_end_to_end(tracker):
+    tr = tracker
+    tr.market.price = 180.0                                        # SMTC above its 168-175 zone
+    r = await tr.ingest(STD.split("–––")[0], author="desk", channel_id="C", message_id="m1")
+    i = tr.store.get(r["idea"]["id"])
+    assert i.meta["class"]["pattern"] == "Pullback" and i.timeframe == "position"
+    assert [t["level"] for t in i.tranches] == [175, 171.5]        # scale in: zone top + midpoint
+    assert i.targets == [205] and "only" in i.meta["scale_out_note"]   # 205 is ~1.1R away: no partial
+    ev = tr.store.events(i.id)[0]
+    x = ev["data"]["explain"]
+    assert "Pullback" in ev["title"] and x["thesis"] and x["context"] and x["watch"] and x["plan"]
+    assert any("68 times" in line for line in x["risks"])
+    await tr.on_quotes({"SMTC": {"price": 174.0}})
+    await tr.on_quotes({"SMTC": {"price": 171.0}})
+    i = tr.store.get(i.id)
+    assert i.filled == 1.0 and i.entry_price == pytest.approx(173.25)
+    kinds = [e["type"] for e in reversed(tr.store.events(i.id))]
+    assert kinds[:3] == ["ingested", "entry", "scale_in"]
+
+
+async def test_tracker_reclaim_scale_out_and_entry_change(tracker):
+    tr = tracker
+    tr.market.price = 160.0                                        # IT below its 170-175 zone
+    r = await tr.ingest(STD.split("–––")[1], author="desk")
+    i = tr.store.get(r["idea"]["id"])
+    assert i.flags["approach"] == "from_below" and i.entry_type == "breakout_above"
+    assert i.targets == [203.0, 220.0] and "source" in i.meta["scale_out_basis"]   # the $203 double top
+    u = await tr.ingest("new buying zone 150-155 on IT", author="desk")
+    i = tr.store.get(i.id)
+    assert u["outcome"] == "updated" and (i.entry_low, i.entry_high) == (150, 155) and i.entry_type == "zone"
+    assert tr.store.events(i.id)[0]["type"] == "entry_changed"
+
+
+async def test_multi_message_and_earnings_blackout(tracker):
+    tr = tracker
+    tr.market.price = 104.8
+    blocks = STD.split("–––")
+    r = await tr.ingest(blocks[2] + "\n–––\n" + blocks[3], author="desk", channel_id="C", message_id="m9")
+    assert r["outcome"] == "multi" and len(r["results"]) == 2 and tr.store.seen("C", "m9")
+    assert tr.store.by_message("C", "m9#1").symbol == "DIS"
+    dis = tr.store.by_message("C", "m9#1")
+    assert dis.soft_stop == 99.79 and dis.status == "active"      # price inside the zone: entered on ingest
+    assert tr.store.by_message("C", "m9#2").status == "rejected"   # PG's levels are 30% from this fake price
+    tr.market.price = 150.0
+    pg = tr.store.get((await tr.ingest(blocks[3], author="desk2"))["idea"]["id"])
+    assert pg.status == "pending" and pg.soft_stop is None          # 138.92-138.98 is one stop, not a range
+    # earnings tomorrow blocks a new entry
+    import datetime as _dt
+    tomorrow = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
+    tr.market.price = 100.0
+    r = await tr.ingest(f"Ticker: ABC\nEntry: $99 - $101\nStop Loss: $95\nTake Profit: $104\nNext Earnings: {tomorrow}")
+    i = tr.store.get(r["idea"]["id"])
+    evs = {e["type"]: e for e in tr.store.events(i.id)}
+    assert i.status == "pending" and "earnings_soon" in evs and "earnings" in evs["entry_blocked"]["text"]
+
+
+def test_discord_embed_fits_limits():
+    from abg.extsignals.discord import embed_for
+    i = mk(meta={"class": {"label": "Pullback long · Hybrid"}}, author="desk")
+    x = {"title": "T" * 300, "summary": "S" * 3000, "why": ["w" * 400] * 8, "context": ["c" * 400] * 8,
+         "thesis": ["t" * 400] * 8, "plan": ["p" * 400] * 8, "risks": ["r" * 400] * 8, "watch": ["x" * 400] * 4,
+         "fields": {"Price": "1", "Type": "Pullback"}}
+    e = embed_for(i, "entry", x)
+    total = len(e["title"]) + len(e["description"]) + len(e["footer"]["text"]) + \
+        sum(len(f["name"]) + len(f["value"]) for f in e["fields"])
+    assert total <= 6000 and all(len(f["value"]) <= 1024 for f in e["fields"]) and len(e["fields"]) <= 25

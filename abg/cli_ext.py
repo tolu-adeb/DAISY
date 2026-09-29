@@ -82,6 +82,13 @@ def render_parsed(p: dict) -> None:
                 ("fraction", p.get("fraction"))]
     for k, v in rows:
         t.add_row(k, str(v) if v not in (None, "") else "—")
+    m = p.get("meta") or {}
+    for k, lab in (("setup", "setup"), ("reason", "reason"), ("catalyst", "catalyst"), ("next_earnings", "earnings"),
+                   ("rr_stated", "source R:R")):
+        if m.get(k):
+            t.add_row(lab, str(m[k])[:120])
+    if p.get("soft_stop"):
+        t.add_row("stop range", f"{p['soft_stop']} – {p['stop']}")
     for w in p.get("warnings") or []:
         t.add_row("[yellow]warning[/yellow]", w)
     console.print(Panel(t, title="Interpretation", border_style="cyan"))
@@ -115,8 +122,14 @@ def render_ideas(ideas: list[dict]) -> None:
 @ext_app.command("parse")
 def parse_cmd(text: str = typer.Argument(..., help="The signal message (quote it).")):
     """Show how a message is interpreted (no network, nothing is tracked)."""
-    from .extsignals.parser import parse
-    render_parsed(parse(text).to_dict())
+    from .extsignals.classify import classify
+    from .extsignals.parser import parse_many
+    for p in parse_many(text):
+        render_parsed(p.to_dict())
+        if p.kind == "idea":
+            c = classify(p.raw, setup=p.meta.get("setup"), direction=p.direction, entry_type=p.entry_type,
+                         entry_low=p.entry_low, entry_high=p.entry_high, stop=p.stop, timeframe=p.timeframe)
+            console.print(f"  [cyan]type:[/cyan] {c['label']} · {c['horizon']}  [dim]({'; '.join(c['evidence'])})[/dim]")
 
 
 @ext_app.command("add")
@@ -124,13 +137,16 @@ def add_cmd(text: str = typer.Argument(..., help="The signal message (quote it).
             author: Optional[str] = typer.Option(None, help="Who posted it (for per-source stats).")):
     """Interpret a message and start tracking it (or apply it as an update to a tracked idea)."""
     async def fn(tr, s):
-        res = await tr.ingest(text, author=author)
-        render_parsed(res["parsed"])
-        color = {"tracking": "green", "updated": "cyan", "rejected": "red"}.get(res["outcome"], "yellow")
-        console.print(f"[bold {color}]{res['outcome'].upper()}[/]: {res['message']}")
-        if res.get("idea"):
-            for e in reversed(tr.store.events(res["idea"]["id"], limit=10)):
-                console.print(Panel(e["text"], title=e["title"], border_style="dim"))
+        top = await tr.ingest(text, author=author)
+        if top["outcome"] == "multi":
+            console.print(f"[bold]{top['message']}[/bold]")
+        for res in top.get("results") or [top]:
+            render_parsed(res["parsed"])
+            color = {"tracking": "green", "updated": "cyan", "rejected": "red"}.get(res["outcome"], "yellow")
+            console.print(f"[bold {color}]{res['outcome'].upper()}[/]: {res['message']}")
+            if res.get("idea"):
+                for e in reversed(tr.store.events(res["idea"]["id"], limit=10)):
+                    console.print(Panel(e["text"], title=e["title"], border_style="dim"))
     _with_tracker(fn)
 
 

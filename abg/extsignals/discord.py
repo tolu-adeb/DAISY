@@ -29,6 +29,8 @@ from .parser import looks_like_signal
 log = logging.getLogger(__name__)
 API = "https://discord.com/api/v10"
 COLORS = {"ingested": 0x5865F2, "approaching": 0xF2B33D, "entry": 0x1BAF7A, "entry_blocked": 0x9A9892,
+          "scale_in": 0x1BAF7A, "entry_changed": 0x5865F2, "entry_adjust": 0xF2B33D, "target_near": 0x2ECC71,
+          "soft_stop": 0xE67E22, "stop_near": 0xE67E22, "earnings_soon": 0xF2B33D,
           "target_hit": 0x2ECC71, "stop_moved": 0x3498DB, "stop_hit": 0xE34948, "breakeven_stop": 0x9A9892,
           "trailing_stop": 0xF1C40F, "time_exit": 0x9A9892, "exit": 0x3498DB, "trim": 0x1ABC9C,
           "invalidated": 0xE34948, "missed": 0x9A9892, "expired": 0x9A9892, "cancelled": 0x9A9892,
@@ -41,19 +43,37 @@ def _clip(s: str, n: int) -> str:
 
 
 def embed_for(idea, kind: str, x: dict) -> dict:
+    """Rich embed: decision in the description, one field per analysis section, key numbers inline.
+    Kept under Discord's limits (6,000 characters per embed, 1,024 per field, 25 fields)."""
+    from .commentary import SECTIONS
     fields = []
-    for name, key, n in (("Why", "why", 8), ("Plan", "plan", 6), ("Risks", "risks", 5)):
-        items = x.get(key) or []
+    for key, name, n in SECTIONS:
+        items = [i for i in (x.get(key) or []) if i]
         if items:
-            fields.append({"name": name, "value": _clip("\n".join(f"• {i}" for i in items[:n]), 1024), "inline": False})
-    for k, v in list((x.get("fields") or {}).items())[:9]:
-        fields.append({"name": k, "value": _clip(str(v), 256), "inline": True})
+            fields.append({"name": name, "value": _clip("\n".join(f"• {_clip(i, 300)}" for i in items[:n]), 1024),
+                           "inline": False})
+    inline = [{"name": k, "value": _clip(str(v), 256), "inline": True} for k, v in list((x.get("fields") or {}).items())[:9]]
     src = f" · source: {idea.author}" if idea.author else ""
-    return {"title": _clip(x["title"], 256), "description": _clip(x.get("summary") or "", 4000),
-            "color": COLORS.get(kind, 0x9A9892), "fields": fields[:25],
-            "footer": {"text": _clip(f"idea #{idea.id} · {idea.symbol} {idea.direction}{src} · paper tracking by "
-                                     f"ABG Intelligence Terminal · not investment advice", 2048)},
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    e = {"title": _clip(x["title"], 256), "description": _clip(x.get("summary") or "", 1500),
+         "color": COLORS.get(kind, 0x9A9892), "fields": [],
+         "footer": {"text": _clip(f"idea #{idea.id} · {idea.symbol} {idea.direction}{src} · paper tracking by "
+                                  f"ABG Intelligence Terminal · not investment advice", 2048)},
+         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    budget = 5800 - len(e["title"]) - len(e["description"]) - len(e["footer"]["text"])
+    for fl in inline + fields:                       # numbers first, then sections until the budget runs out
+        cost = len(fl["name"]) + len(fl["value"])
+        if cost > budget:
+            if not fl["inline"] and budget > 200:
+                fl = {**fl, "value": _clip(fl["value"], budget - len(fl["name"]) - 5)}
+                cost = len(fl["name"]) + len(fl["value"])
+            else:
+                continue
+        e["fields"].append(fl)
+        budget -= cost
+    # sections read better before the numbers: move the inline block to the end
+    e["fields"] = [f for f in e["fields"] if not f["inline"]] + [f for f in e["fields"] if f["inline"]]
+    e["fields"] = e["fields"][:25]
+    return e
 
 
 class DiscordRelay:
@@ -221,8 +241,9 @@ class DiscordPoller:
                             text, source="discord", channel_id=cid, channel_name=name,
                             author=(m.get("author") or {}).get("username"), message_id=m["id"],
                             reply_to=ref.get("message_id") if ref.get("channel_id", cid) == cid else None)
-                        oc = res.get("outcome")
-                        stats["ideas" if oc == "tracking" else "updates" if oc == "updated" else "ignored"] += 1
+                        for r in (res.get("results") or [res]):
+                            oc = r.get("outcome")
+                            stats["ideas" if oc == "tracking" else "updates" if oc == "updated" else "ignored"] += 1
                     else:
                         stats["ignored"] += 1
                 self.store.set_kv(key, m["id"])

@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     ext_regrade_seconds: float = 900            # re-grade a blocked / pending idea at most this often
     ext_move_stop_to_breakeven: bool = True     # after TP1, stop -> entry
     ext_max_entry_distance_pct: float = 35      # reject ideas whose entry is further than this from the price
+    ext_scale_in: bool = True                   # zones: split the entry between the zone edge and midpoint
+    ext_scale_in_split: float = 0.5             # fraction bought at the zone edge
+    ext_scale_out: bool = True                  # single far target: add a partial exit before it
+    ext_scale_out_min_r: float = 1.5            # ... only when the target is at least this many R away
+    ext_earnings_warn_days: int = 5             # warn this many days before a known earnings date
+    ext_earnings_blackout_days: int = 1         # no new entries within this many days of earnings
 
     log_level: str = "WARNING"
 

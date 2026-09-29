@@ -62,7 +62,8 @@ function renderIdeas() {
     <th class="n">To entry / Entry</th><th>Grade</th><th class="n">R</th><th>Source</th><th class="n">Age</th></tr></thead><tbody>${rows.map((i) => `
     <tr data-id="${i.id}" class="${i.id === EXT.sel ? "sel" : ""}">
       <td class="n">${i.id}</td>
-      <td><a class="sym" data-sym="${esc(i.symbol)}">${esc(i.symbol)}</a> <span class="${i.direction === "long" ? "pos" : "neg"}">${i.direction === "long" ? "▲" : "▼"}</span></td>
+      <td><a class="sym" data-sym="${esc(i.symbol)}">${esc(i.symbol)}</a> <span class="${i.direction === "long" ? "pos" : "neg"}">${i.direction === "long" ? "▲" : "▼"}</span>
+        ${i.type ? `<div class="muted small-type">${esc(i.type)}</div>` : ""}</td>
       <td><span class="st ${esc(i.status)}">${esc(i.status)}</span></td>
       <td class="plan">${esc(planText(i))}</td>
       <td class="n">${fmt(i.last_price)}</td>
@@ -121,6 +122,24 @@ async function showIdea(id, scroll) {
 }
 
 function renderParsed(res) {
+  if (res.items && res.items.length > 1) {                       // preview of a multi-signal message
+    $("#ext-parsed").innerHTML = `<p class="muted">${res.items.length} signals found in this message</p>`;
+    const box = document.createElement("div");
+    res.items.forEach((it) => { renderOne(it); box.insertAdjacentHTML("beforeend", `<div class="parsed-block">${$("#ext-parsed-one").innerHTML}</div>`); });
+    $("#ext-parsed").appendChild(box); return;
+  }
+  if (res.results && res.results.length) {                       // tracked a multi-signal message
+    $("#ext-parsed").innerHTML = `<p><b>${esc(res.message)}</b></p>`;
+    res.results.forEach((r) => { renderOne(r); $("#ext-parsed").insertAdjacentHTML("beforeend", `<div class="parsed-block">${$("#ext-parsed-one").innerHTML}</div>`); });
+    return;
+  }
+  renderOne(res);
+  $("#ext-parsed").innerHTML = $("#ext-parsed-one").innerHTML;
+}
+
+function renderOne(res) {
+  let tmp = $("#ext-parsed-one");
+  if (!tmp) { tmp = document.createElement("div"); tmp.id = "ext-parsed-one"; tmp.hidden = true; document.body.appendChild(tmp); }
   const p = res.parsed || res;
   const cell = (k, v) => `<div><span>${k}</span>${v == null || v === "" ? "—" : esc(v)}</div>`;
   let html;
@@ -132,11 +151,16 @@ function renderParsed(res) {
       ${cell("entry", (p.entry_type || "").replace("_", " ") + " " + (p.entry_low === p.entry_high ? lvl(p.entry_low) : lvl(p.entry_low) + "–" + lvl(p.entry_high)))}
       ${cell("stop", p.stop == null ? "auto (2×ATR)" : lvl(p.stop) + (p.stop_basis === "close" ? " on close" : ""))}
       ${cell("targets", p.targets?.length ? p.targets.map(lvl).join(" / ") : "auto (2R / 3R)")}
-      ${cell("timeframe", p.timeframe)}${cell("parse confidence", fmt(p.confidence * 100, 0) + "%")}</div>`;
+      ${cell("timeframe", p.timeframe)}${cell("parse confidence", fmt(p.confidence * 100, 0) + "%")}
+      ${p.soft_stop ? cell("stop range", lvl(p.soft_stop) + " – " + lvl(p.stop)) : ""}
+      ${p.class ? cell("type", p.class.label + " · " + p.class.horizon) : ""}
+      ${p.meta?.setup ? cell("setup", p.meta.setup) : ""}${p.meta?.next_earnings ? cell("earnings", p.meta.next_earnings) : ""}
+      ${p.meta?.rr_stated ? cell("source R:R", p.meta.rr_stated + "R") : ""}</div>`;
   } else html = '<p class="muted">Not recognised as a trade idea or an update.</p>';
   const w = (p.warnings || []).map((x) => `<li>${esc(x)}</li>`).join("");
   const outcome = res.outcome ? `<p><b class="${res.outcome === "tracking" || res.outcome === "updated" ? "pos" : res.outcome === "rejected" ? "neg" : ""}">${esc(res.outcome.toUpperCase())}</b> — ${esc(res.message)}</p>` : "";
-  $("#ext-parsed").innerHTML = outcome + html + (w ? `<ul class="warn-list">${w}</ul>` : "");
+  const sym = res.idea ? `<p class="muted">${esc(res.idea.symbol)} · ${esc(res.idea.type || "")}</p>` : "";
+  $("#ext-parsed-one").innerHTML = outcome + sym + html + (w ? `<ul class="warn-list">${w}</ul>` : "");
 }
 
 (function initExt() {
@@ -153,7 +177,7 @@ function renderParsed(res) {
       const r = await api("/api/ext/ingest", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, author: $("#ext-author").value.trim() || null }) });
       renderParsed(r);
-      if (r.outcome === "tracking" || r.outcome === "updated") $("#ext-text").value = "";
+      if (["tracking", "updated", "multi"].includes(r.outcome)) $("#ext-text").value = "";
       await loadExt(r.idea?.id);
     } catch (e) { toast(e.message); } finally { busy(false); }
   });

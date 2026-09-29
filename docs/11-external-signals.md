@@ -56,7 +56,43 @@ or cancel.
 | `AMD 170c 11/15 entry 3.20-3.50` | option: premium levels, **rejected** unless they're underlying prices |
 | `TSLA long here sl 240 tp 280` | market entry at the live price |
 
-The parser first normalises phrases ("take profit" → tp, "stop loss" → sl, arrows → targets) and
+**Report-style / labeled signals (the standard format).** Many services post a write-up (prose full
+of revenue, EPS, percentages, dates and Fib levels) followed by labeled levels, or a labeled card:
+
+```
+SMTC | Semtech                                   Ticker: DIS
+The business is growing fast … 68 times …       Setup: Bull flag
+                                                 Entry: $104.50 – $105
+Buying zone: $168-$175                           Stop Loss: $99.79 – $99
+Stop loss: $145                                  Take Profit: $112
+Target: $205                                     Risk to Reward: 1.60R
+                                                 Fundamentally Ranking Company: 8.0/10
+                                                 Reason: … Key Catalyst: … Next Earnings: November 12
+                                                 Confidence Score: 8/10
+```
+
+When a block has an entry label plus a stop or target label, levels are read **only from the
+labeled lines** (`extsignals/structured.py`), so numbers in the prose are never mistaken for levels.
+Everything else is kept for the analysis:
+
+| Label (any casing) | Used as |
+|---|---|
+| `Entry`, `Buying zone`, `Buy zone`, `Entry zone`, `Accumulation zone` … | entry zone (one value = a single level) |
+| `Stop`, `Stop loss`, `SL`, `Invalidation` | stop. A range (`$99.79 – $99`) means the outer value is the hard stop and the inner one is a warning level |
+| `Target`, `Take profit`, `TP1/2`, `PT`, `Price target` | targets |
+| `Ticker` / `Symbol`, or a `SMTC \| Semtech` header line | symbol (+ company name) |
+| `Setup`, `Pattern` | the setup, used for classification |
+| `Risk to Reward` | the source's R:R, compared with ours |
+| `Fundamentally …`, `Can financials … target`, `Confidence score` | source scores (x/10) |
+| `Reason`, `Thesis` · `Key catalyst` · `An issue you should know`, `Risks` | source thesis, catalyst and risk note |
+| `Next earnings` | earnings date (`November 12`, `October 22, 2026`, `11/12`) → warnings and entry blackout |
+| prose | a 2-sentence summary plus the sentences that describe risks ("expensive", "cyclical", "stalled near $203") |
+
+**Several signals in one message** are split on separator lines (`–––`, `---`, `***`, `===`) or on
+repeated `Ticker:` lines. Each one becomes its own idea: its message id gets a `#1`, `#2`… suffix, and
+it gets its own Discord relay.
+
+The free-text parser first normalises phrases ("take profit" → tp, "stop loss" → sl, arrows → targets) and
 strips emoji, markdown, dates, percentages, times, option strikes and holding periods. A small
 tokenizer then assigns each number to the current role (entry / stop / target). Modifiers such as
 *above / below / breakout / market / here* pick the entry trigger, and the direction comes from
@@ -75,6 +111,7 @@ ticker from the same author/channel. With no ticker, it uses that source's only 
 | `trim half AMD` | close 50% of what's left |
 | `closing TSLA here` / `AAPL stopped out` | close the paper position at the live price |
 | `cancel the SPY short` | cancel a pending idea, or close an active one |
+| `new buying zone 165-170 on IT` / `IT: adjust entry to 168` | move the entry of a pending idea (re-plans the scale-in and size) |
 
 ## 11.3 Validation and defaults (`tracker._prepare`)
 
@@ -90,8 +127,44 @@ ticker from the same author/channel. With no ticker, it uses that source's only 
 | max hold after entry | swing `ABG_EXT_MAX_HOLD_DAYS` (90), position ×3; a stated holding period ×1.5 |
 | paper size | `ABG_EXT_ACCOUNT_SIZE × ABG_EXT_RISK_PCT% / (entry edge − stop)` |
 
-"Entry edge" is the worst price of the zone: the top for a long, the bottom for a short. R:R and
-sizing are planned from it, so filling lower in the zone only improves the trade.
+"Entry edge" is the worst price of the zone: the top for a long, the bottom for a short. Sizing is
+planned from it, so filling lower in the zone only improves the trade.
+
+**How the zone is approached.** The live price at ingest decides the entry style:
+
+| Where the price is (long) | Entry | Why |
+|---|---|---|
+| above the zone | resting limits on a dip, **scaled in**: 50% at the zone top, 50% at the zone midpoint | a better average when the dip extends |
+| inside the zone | first half now, second half at the midpoint | |
+| below the zone | wait for a **reclaim**: enter when price trades back up into the zone | buying under the source's level would mean catching a falling knife; the reclaim shows buyers defend it |
+
+A grade-A setup takes full size at the zone edge, because strong setups often don't offer the deeper
+fill. Narrow zones (< 0.4%), breakouts and market entries use a single fill. `ABG_EXT_SCALE_IN=false`
+turns scaling in off.
+
+**Scale-out plan.** With several targets, an equal slice is taken at each. With one target at least
+`ABG_EXT_SCALE_OUT_MIN_R` (1.5R) away, a partial exit (50%) is added before it, at:
+1. a level the source itself calls resistance ("stalled near $203 twice" → 203), else
+2. the first chart resistance 40–85% of the way to the target, else
+3. halfway.
+
+A single target closer than 1.5R is taken in one go, and the message says so. After the first exit
+the stop moves to breakeven (the average entry); after later exits it trails to the prior level. An
+unfilled scale-in tranche is cancelled once profits are being taken.
+
+**Signal type** is classified automatically for every idea (`extsignals/classify.py`, by content,
+never by source):
+
+| Dimension | Values | From |
+|---|---|---|
+| pattern | Pullback · Breakout · Continuation · Reversal / base · Mean reversion · Momentum · Event · Breakdown | the `Setup:` label first, then text cues, then geometry (a long zone below the price is a pullback) |
+| basis | Technical · Fundamental · Hybrid | counts of fundamental (revenue, EPS, margins, guidance, valuation…) vs technical (Fib, support, flag, structure…) references |
+| themes | Growth · Value · Quality / income · Turnaround · AI / semis · Momentum | text cues |
+| horizon | Day · Swing (days–weeks) · Position swing (weeks–months) | timeframe words; a stop ≥ 12% from the entry on a fundamental/hybrid thesis is a position swing (longer expiry and hold) |
+
+For your four sample signals: SMTC is *Pullback · Fundamental (Growth, AI / semis) · Position swing*,
+IT is *Pullback · Hybrid · Position swing*, DIS is *Continuation (bull flag) · Hybrid · Swing*, and PG
+is *Reversal / base (double bottom) · Hybrid (Quality / income) · Swing*.
 
 ## 11.4 The lifecycle (`extsignals/lifecycle.py`)
 
@@ -100,21 +173,26 @@ sizing are planned from it, so filling lower in the zone only improves the trade
 
 ```
 pending ─► approaching (once, within ABG_EXT_APPROACH_PCT)
-   │   ─► entry_blocked (grade below ABG_EXT_MIN_ENTRY_GRADE; re-graded every ABG_EXT_REGRADE_SECONDS)
+   │   ─► entry_blocked (grade below the gate, or earnings within ABG_EXT_EARNINGS_BLACKOUT_DAYS)
+   │   ─► entry_changed (source "new buying zone …" / user edit)   entry_adjust (suggestion, plan unchanged)
    │   ─► invalidated (stop traded, or gapped through it, before entry)
-   │   ─► missed      (TP1 reached, or the fill would already be past TP1)
+   │   ─► missed      (the source's first target reached without an entry)
    │   ─► expired     (entry never reached in time)
-   └─► entry ─► target_hit (equal slice per target) ─► stop_moved (→ breakeven after TP1, → prior target after TP2+)
-             ├─► stop_hit / breakeven_stop / trailing_stop
-             ├─► time_exit (max hold)
+   └─► entry (first tranche) ─► scale_in (second tranche at the zone midpoint)
+             ├─► target_near (heads-up) ─► target_hit (scale-out / TPn) ─► stop_moved (breakeven, then trail)
+             ├─► soft_stop (inside the source's stop range) ─► stop_near (heads-up) ─► stop_hit
+             ├─► breakeven_stop / trailing_stop / time_exit
+             ├─► earnings_soon (ABG_EXT_EARNINGS_WARN_DAYS before the report)
              └─► exit / trim (source or user)
 ```
+
+Heads-ups fire once each. The "near" distance is half a day's ATR, clamped to 0.6–2.5%.
 
 **Entry triggers**
 
 | Type | Fills when | Fill price |
 |---|---|---|
-| zone (long) | price trades at or below the top of the zone | the open if it opened inside/below the zone, else the zone top |
+| zone tranche (long) | price trades at or below the tranche level | live quotes: the level when price crossed it since the last quote, the current price if it was already through; daily bars: the open if it gapped below, else the level |
 | zone (short) | price trades at or above the bottom of the zone | mirror |
 | breakout_above / limit_above | high ≥ level | max(level, open) (gaps fill at the open) |
 | breakdown_below / limit_below | low ≤ level | min(level, open) |
@@ -141,7 +219,8 @@ When the price reaches the entry, the setup is graded **A–D** from the live an
 | simulated P(TP1 before stop) | ≥ 45% (+1) | < 30% (−1) |
 | reward:risk to TP1 | ≥ 1.5 (+1) | < 1.0 (−1) |
 | RSI | room to run (+0.5) | stretched > 75 / < 25 (−0.5) |
-| stop distance in ATR | | < 0.5 × ATR (noise) or > 4 × ATR (−0.5) |
+| stop distance in ATR | | < 0.5 × ATR (noise) or > 6 × ATR (−0.5) |
+| chart resistance between the entry and the target | | −0.25 |
 | baseline risk level | | High / Extreme (−1) |
 | prediction model view | agrees (+0.5) | opposes (−0.5) |
 | news sentiment (≥ 3 articles) | agrees (+0.5) | opposes (−0.5) |
@@ -156,10 +235,44 @@ GBM with Student-t shocks plus filtered historical simulation, 1,500 paths. They
 idea's own stop and targets, starting from the zone midpoint (pending) or the live price (active),
 over a horizon set by the timeframe (swing ≈ 30 trading days).
 
+**Entry suggestions (`entry_adjust`).** Pending ideas are re-checked on each analysis sweep. The
+source's plan is never changed automatically; these are suggestions, sent once each:
+
+- **Deeper entry.** The idea grades D, and a support between the stop and the zone would improve
+  reward:risk by more than 0.2R with the same stop. The suggestion names the new zone.
+- **Running away.** Price is more than 2 ATR past the zone in a trend without pulling back. The
+  message says whether a small starter at market would still have ≥ 1.2R to the target, or that
+  chasing isn't worth it.
+
+**Earnings.** A `Next earnings` date from the post gives an `earnings_soon` warning
+`ABG_EXT_EARNINGS_WARN_DAYS` (5) before the report. For an open trade the options are hold, trim, or
+lock gains. New entries are paused within `ABG_EXT_EARNINGS_BLACKOUT_DAYS` (1) of the report.
+
 **Advisories.** On every analysis sweep, active trades are re-checked. At least two of these
 conditions produce one `advisory`, with a suggested 1.5 × ATR stop: the trend turned against the
 trade, the signal opposes it by 30 or more, the model flipped, or risk is High/Extreme. The same
 advisory repeats at most once a day. An advisory is a warning, not an automatic exit.
+
+## 11.5b What every message contains
+
+Each message is built from the same sections (`commentary.explain`), so the reasoning is always
+there. Follow-up updates are kept short and never repeat stale entry-time reasons.
+
+| Section | Contents |
+|---|---|
+| Title | what happened, with the signal type and grade (`🟢 ENTRY IT LONG @ 175.00 (50% size) · Pullback · grade C`) |
+| Summary | the decision in plain words: fills, sizes, resting orders, realized R |
+| Why | the evidence now: grade reasons, the Monte Carlo split (reach target first / stop first / still between), prediction model, composite signal, indicators for / against |
+| Market context | structure vs the 50/200-day, momentum (RSI, MACD, ADX), where price is vs the plan in % and ATR, support / resistance vs the levels, volatility and stop distance, volume, valuation and 52-week position, news tone, days to earnings |
+| Source thesis | type, the source's setup, reason, catalyst, scores, and their R:R vs ours ("source 1.60R vs 1.24R: their figure assumes the best fill and the tight stop") |
+| Plan | scale-in, stop (+ warning level), each exit with its R and why it's there, size |
+| Risks | the source's own flagged risks plus evidence against the trade |
+| Watch | invalidation, entry window, what would improve the setup, earnings decision |
+
+Message types: `ingested`, `approaching`, `entry`, `scale_in`, `entry_blocked`, `entry_changed`,
+`entry_adjust`, `target_near`, `target_hit`, `stop_moved`, `soft_stop`, `stop_near`, `stop_hit`,
+`breakeven_stop`, `trailing_stop`, `time_exit`, `exit`, `trim`, `earnings_soon`, `advisory`,
+`invalidated`, `missed`, `expired`, `cancelled`, `rejected`, `source_update`.
 
 ## 11.6 Discord: reading signal channels
 
@@ -372,6 +485,9 @@ Live updates go out as the SSE event `ext` on `/api/signals/stream`.
 | `ABG_EXT_REGRADE_SECONDS` | 900 | re-grade interval for pending / blocked ideas |
 | `ABG_EXT_MOVE_STOP_TO_BREAKEVEN` | true | stop → entry after TP1 |
 | `ABG_EXT_MAX_ENTRY_DISTANCE_PCT` | 35 | typo guard |
+| `ABG_EXT_SCALE_IN` / `ABG_EXT_SCALE_IN_SPLIT` | true / 0.5 | zone entries: split between the edge and the midpoint |
+| `ABG_EXT_SCALE_OUT` / `ABG_EXT_SCALE_OUT_MIN_R` | true / 1.5 | add a partial exit before a single far target |
+| `ABG_EXT_EARNINGS_WARN_DAYS` / `ABG_EXT_EARNINGS_BLACKOUT_DAYS` | 5 / 1 | earnings warning and entry pause |
 
 ## 11.12 Limitations
 

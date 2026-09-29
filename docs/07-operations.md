@@ -108,7 +108,7 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-139 tests, all offline:
+148 tests, all offline:
 
 | File | Covers |
 |---|---|
@@ -119,7 +119,7 @@ pytest -q
 | `test_providers.py` | Every adapter against recorded payload shapes (MockTransport), vendor throttle bodies, HTTP status mapping, timeouts, 4 CSV formats |
 | `test_forecast.py` | Simulation reproducibility, ordering, analytic mean and vol checks, tilt direction, barrier odds, calibration coverage, every recommendation guard-rail, engine/API/monitor integration |
 | `test_portfolio_live.py` | Average-cost/realized P&L, oversell & delete guards, backup round-trip, persistence, NYSE holidays, live-bar splicing, every signal family incl. cooldowns/bands/one-shot rules, Discord (429 retry), email digest vs critical, hub isolation, monitor sweeps + single-instance lock + poke, portfolio REST API |
-| `test_extsignals.py` | Parser formats and updates, lifecycle (zone / breakout / short, approach, partials + breakeven + trailing, stop-before-target on ambiguous bars, gap fills, close-basis stops, invalidated / missed / expired, grade gate), tracker ingest/defaults/duplicates/rejections/source updates/market entries, daily-bar catch-up, Discord poller + webhook relay (MockTransport), monitor integration, REST API |
+| `test_extsignals.py` | Standard labeled/report formats (fixtures/signals_std.txt), multi-signal splitting, classification, scale-in tranches and scale-outs, stop-range / near-stop / near-target heads-ups, earnings blackout, entry changes, Discord embed limits; free-text parser formats and updates, lifecycle (zone / breakout / short, approach, partials + breakeven + trailing, stop-before-target on ambiguous bars, gap fills, close-basis stops, invalidated / missed / expired, grade gate), tracker ingest/defaults/duplicates/rejections/source updates/market entries, daily-bar catch-up, Discord poller + webhook relay (MockTransport), monitor integration, REST API |
 | `test_engine_risk_api.py` | End-to-end strict-JSON report, partial-failure isolation, fatal history failure, CSV, compare, feature no-look-ahead, baseline monotonicity, plug-in isolation and schema checks, portfolio math, sentiment, mocked Claude (success, cache, fallback), every REST endpoint and error code |
 
 ## 7.6 Known limitations

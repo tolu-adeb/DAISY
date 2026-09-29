@@ -71,6 +71,10 @@ class Idea:
     mae_pct: float = 0.0                   # max adverse excursion since entry
     flags: dict = field(default_factory=dict)
     relay_ref: str | None = None           # our first relay message id (for threaded replies)
+    soft_stop: float | None = None         # inner edge of a stop range: a warning, not an exit
+    meta: dict = field(default_factory=dict)       # source thesis, scores, classification, earnings date
+    tranches: list = field(default_factory=list)   # scale-in plan: [{level, frac, fill, at, cancelled}]
+    filled: float = 0.0                    # fraction of the planned size bought so far
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,6 +151,66 @@ class Obs:
     bar: bool = False                      # True for daily-bar catch-up
 
 
+def plan_tranches(idea: Idea, split: float = 0.5, min_width_pct: float = 0.4) -> list:
+    """Scale-in plan for a zone: ``split`` at the near edge, the rest at the zone midpoint.
+    Narrow zones, breakouts and market entries use one tranche at the trigger."""
+    lo, hi = idea.entry_low, idea.entry_high
+    if (idea.entry_type == "zone" and lo is not None and hi is not None and hi > lo
+            and (hi - lo) / hi * 100 >= min_width_pct and 0 < split < 1):
+        near = hi if idea.long else lo
+        idea.tranches = [{"level": near, "frac": split, "fill": None, "at": None, "cancelled": False},
+                         {"level": round((lo + hi) / 2, 4), "frac": round(1 - split, 6), "fill": None, "at": None,
+                          "cancelled": False}]
+    else:
+        idea.tranches = [{"level": None, "frac": 1.0, "fill": None, "at": None, "cancelled": False}]
+    return idea.tranches
+
+
+def _level_fill(idea: Idea, level: float, o: "Obs", prev: float | None = None) -> float | None:
+    """Resting limit at ``level``.  Daily bars: the open if it gapped through, else the level.  Live
+    quotes: the level when price crossed it since the last quote, the current price if it was already
+    through the level when the order was placed."""
+    op = o.open if o.open is not None else o.price
+    if idea.long:
+        if o.low > level:
+            return None
+        if o.bar:
+            return op if op <= level else level
+        return level if (prev is not None and prev > level) else o.price
+    if o.high < level:
+        return None
+    if o.bar:
+        return op if op >= level else level
+    return level if (prev is not None and prev < level) else o.price
+
+
+def _fill_tranches(idea: Idea, o: "Obs", first_fill: float | None = None, prev: float | None = None) -> list[dict]:
+    """Fill every open tranche this observation reaches.  Updates entry_price (average), filled, remaining."""
+    if not idea.tranches:
+        idea.tranches = [{"level": None, "frac": 1.0, "fill": None, "at": None, "cancelled": False}]
+    new = []
+    for i, t in enumerate(idea.tranches):
+        if t["fill"] is not None or t.get("cancelled"):
+            continue
+        px = (first_fill if (i == 0 and first_fill is not None) else
+              trigger_fill(idea, o) if t["level"] is None else _level_fill(idea, t["level"], o, prev))
+        if px is None:
+            continue
+        t["fill"], t["at"] = px, o.ts
+        new.append({"tranche": i, "price": px, "frac": t["frac"]})
+    if new:
+        done = [t for t in idea.tranches if t["fill"] is not None]
+        idea.filled = round(sum(t["frac"] for t in done), 10)
+        idea.entry_price = sum(t["fill"] * t["frac"] for t in done) / idea.filled
+        idea.remaining = round(idea.remaining + sum(x["frac"] for x in new), 10) if idea.status == "active" \
+            else idea.filled
+    return new
+
+
+def open_tranches(idea: Idea) -> list[dict]:
+    return [t for t in idea.tranches if t["fill"] is None and not t.get("cancelled")]
+
+
 def _event(kind: str, price: float, **data) -> dict:
     return {"type": kind, "price": price, **data}
 
@@ -174,13 +238,14 @@ def trigger_fill(idea: Idea, o: Obs) -> float | None:
 
 
 def step(idea: Idea, o: Obs, *, approach_pct: float = 1.5, move_stop_to_be: bool = True,
-         allow_entry: bool = True) -> list[dict]:
+         allow_entry: bool = True, near_pct: float | None = None) -> list[dict]:
     """Advance the idea with one observation.  Mutates ``idea`` and returns emitted events.
 
     ``allow_entry=False`` means the grade gate is closed: an entry trigger emits
     ``entry_blocked`` instead of filling (the tracker re-grades later).
     """
     ev: list[dict] = []
+    prev = idea.last_price
     idea.last_price, idea.last_checked_at = o.price, o.ts
     if idea.status not in OPEN_STATES:
         return ev
@@ -189,8 +254,11 @@ def step(idea: Idea, o: Obs, *, approach_pct: float = 1.5, move_stop_to_be: bool
         if idea.expires_at and o.ts > idea.expires_at:
             idea.status, idea.closed_at, idea.close_reason = "expired", o.ts, "entry never reached"
             return [_event("expired", o.price)]
-        t1 = idea.targets[0] if idea.targets else None
-        fill = trigger_fill(idea, o)
+        added = set(idea.flags.get("added_targets") or [])      # our own scale-out levels don't make it "missed"
+        t1 = next((t for t in idea.targets if t not in added), None)
+        first = idea.tranches[0] if idea.tranches else None
+        fill = (_level_fill(idea, first["level"], o, prev) if (first and first.get("level") is not None)
+                else trigger_fill(idea, o))
         stop_hit_pre = idea.stop is not None and ((o.low <= idea.stop) if idea.long else (o.high >= idea.stop))
         if fill is not None and idea.stop is not None and ((fill <= idea.stop) if idea.long else (fill >= idea.stop)):
             idea.status, idea.closed_at, idea.close_reason = "invalidated", o.ts, "gapped through the stop before entry"
@@ -215,14 +283,22 @@ def step(idea: Idea, o: Obs, *, approach_pct: float = 1.5, move_stop_to_be: bool
                 idea.flags["blocked_at"] = o.ts
                 ev.append(_event("entry_blocked", fill))
             return ev
-        idea.status, idea.entry_price, idea.entry_at = "active", fill, o.ts
+        fills = _fill_tranches(idea, o, first_fill=fill, prev=prev)
+        idea.status, idea.entry_at = "active", o.ts
         idea.flags.pop("blocked_at", None)
         if idea.stop_initial is None:
             idea.stop_initial = idea.stop
-        ev.append(_event("entry", fill, zone=[idea.entry_low, idea.entry_high]))
+        ev.append(_event("entry", idea.entry_price, zone=[idea.entry_low, idea.entry_high], fills=fills,
+                         fraction=idea.filled, pending_tranches=[t["level"] for t in open_tranches(idea)]))
         # a daily bar that fills can also hit the stop/targets later that same bar: fall through
 
     # ---- active
+    if idea.filled <= 0:                                   # ideas entered before scale-in plans existed
+        idea.filled = 1.0
+    if open_tranches(idea) and idea.entry_at != o.ts:     # scale in on the way down (long) / up (short)
+        fills = _fill_tranches(idea, o, prev=prev)
+        if fills:
+            ev.append(_event("scale_in", fills[-1]["price"], fills=fills, fraction=idea.filled, avg=idea.entry_price))
     e = idea.entry_price
     fav = ((o.high / e - 1) if idea.long else (1 - o.low / e)) * 100
     adv = ((o.low / e - 1) if idea.long else (1 - o.high / e)) * 100
@@ -251,9 +327,13 @@ def step(idea: Idea, o: Obs, *, approach_pct: float = 1.5, move_stop_to_be: bool
             break
         # resting limit: fills at the target, or better if a daily bar gapped through it at the open
         px = (max(t, op) if idea.long else min(t, op)) if o.bar else t
-        frac = idea.remaining if i == n - 1 else min(idea.remaining, 1.0 / n)
+        frac = idea.remaining if i == n - 1 else min(idea.remaining, idea.filled / n)
         idea.targets_hit.append(i)
-        ev.append(_exit(idea, px, frac, o.ts, "target_hit", target_index=i, target=t))
+        cancelled = []
+        for tr in open_tranches(idea):                    # no adding once profits are being taken
+            tr["cancelled"] = True
+            cancelled.append(tr["level"])
+        ev.append(_exit(idea, px, frac, o.ts, "target_hit", target_index=i, target=t, cancelled_tranches=cancelled))
         if idea.remaining <= 1e-9:
             idea.status, idea.closed_at, idea.close_reason = "closed", o.ts, f"final target {i + 1} hit"
             return ev
@@ -270,6 +350,37 @@ def step(idea: Idea, o: Obs, *, approach_pct: float = 1.5, move_stop_to_be: bool
     if idea.max_hold_until and o.ts > idea.max_hold_until and idea.status == "active":
         ev.append(_exit(idea, o.price, idea.remaining, o.ts, "time_exit"))
         idea.status, idea.closed_at, idea.close_reason = "closed", o.ts, "maximum holding period reached"
+        return ev
+    if idea.status == "active":
+        ev += _heads_up(idea, o, near_pct)
+    return ev
+
+
+def _heads_up(idea: Idea, o: Obs, near_pct: float | None) -> list[dict]:
+    """One-off warnings while a trade is open: stop range entered, stop close, next target close."""
+    ev = []
+    px = o.price
+    ss = idea.soft_stop
+    if ss is not None and idea.stop is not None and not idea.flags.get("soft_stop_alerted") and \
+            ((o.low <= ss) if idea.long else (o.high >= ss)) and ((ss > idea.stop) if idea.long else (ss < idea.stop)):
+        idea.flags["soft_stop_alerted"] = True
+        ev.append(_event("soft_stop", px, soft=ss, hard=idea.stop))
+    if not near_pct or not px:
+        return ev
+    if idea.stop is not None:
+        d = ((px - idea.stop) if idea.long else (idea.stop - px)) / px * 100
+        if 0 < d <= near_pct and not idea.flags.get("stop_near"):
+            idea.flags["stop_near"] = True
+            ev.append(_event("stop_near", px, distance_pct=d, stop=idea.stop))
+        elif d > 2 * near_pct:
+            idea.flags.pop("stop_near", None)
+    nxt = next(((j, t) for j, t in enumerate(idea.targets) if j not in idea.targets_hit), None)
+    if nxt:
+        j, t = nxt
+        d = ((t - px) if idea.long else (px - t)) / px * 100
+        if 0 < d <= near_pct and idea.flags.get("target_near") != j:
+            idea.flags["target_near"] = j
+            ev.append(_event("target_near", px, distance_pct=d, target=t, target_index=j))
     return ev
 
 

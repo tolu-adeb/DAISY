@@ -33,18 +33,25 @@ from ..live.signals import Signal
 from ..models import Quote
 from ..utils import jsonable, normalize_symbol
 from . import commentary as cm
-from .lifecycle import OPEN_STATES, Idea, Obs, manual_exit, step, summary_stats, trigger_fill
+from .classify import classify
+from .lifecycle import OPEN_STATES, Idea, Obs, manual_exit, plan_tranches, step, summary_stats, trigger_fill
 from .parser import ParsedSignal, parse
 from .store import ExtSignalStore
+from .structured import split_signals
 
 log = logging.getLogger(__name__)
 NY = ZoneInfo("America/New_York")
 _QF = {f.name for f in fields(Quote)}
 
-SEVERITY = {"entry": "warning", "target_hit": "warning", "stop_hit": "critical", "trailing_stop": "warning",
-            "breakeven_stop": "warning", "time_exit": "warning", "exit": "warning", "trim": "warning",
-            "entry_blocked": "warning", "advisory": "warning"}
-BARRIER_KINDS = {"ingested", "approaching", "entry", "entry_blocked", "target_hit", "advisory"}
+SEVERITY = {"entry": "warning", "scale_in": "warning", "target_hit": "warning", "stop_hit": "critical",
+            "trailing_stop": "warning", "breakeven_stop": "warning", "time_exit": "warning", "exit": "warning",
+            "trim": "warning", "entry_blocked": "warning", "advisory": "warning", "soft_stop": "warning",
+            "stop_near": "warning", "entry_changed": "warning", "earnings_soon": "warning"}
+BARRIER_KINDS = {"ingested", "approaching", "entry", "entry_blocked", "target_hit", "advisory", "entry_changed",
+                 "entry_adjust"}
+LEVEL_CUE = __import__("re").compile(
+    r"(?:stall\w*|reject\w*|resistance|double top|ceiling|prior high|highs?|top)\D{0,30}?\$(\d{1,6}(?:\.\d+)?)|"
+    r"\$(\d{1,6}(?:\.\d+)?)\D{0,25}?(?:resistance|double top|ceiling|prior high)", 2)
 # (entry expiry days, max hold days, barrier horizon in trading days); swing uses the settings
 TIMEFRAMES = {"scalp": (1, 2, 3), "day": (2, 3, 5), "position": (None, None, 90)}
 
@@ -144,10 +151,34 @@ class ExtSignalTracker:
     async def ingest(self, text: str, *, source: str = "manual", channel_id: str | None = None,
                      channel_name: str | None = None, author: str | None = None, message_id: str | None = None,
                      reply_to: str | None = None, parsed: ParsedSignal | None = None) -> dict:
-        """Interpret one message.  Returns {outcome, message, idea?, parsed}.
+        """Interpret one message, which may hold several ideas (––– separated / repeated Ticker: blocks).
 
-        outcomes: tracking | updated | duplicate | rejected | ignored | unmatched
+        Returns {outcome, message, idea?, parsed} for a single idea, or {outcome: "multi", results: [...]}.
+        outcomes: tracking | updated | duplicate | rejected | ignored | unmatched | multi
         """
+        blocks = split_signals(text) if parsed is None else [text]
+        if len(blocks) <= 1:
+            return await self._ingest_one(text, source=source, channel_id=channel_id, channel_name=channel_name,
+                                          author=author, message_id=message_id, reply_to=reply_to, parsed=parsed)
+        if message_id and channel_id and self.store.seen(channel_id, message_id):
+            return {"outcome": "duplicate", "message": "message already processed", "parsed": {}, "results": []}
+        results = []
+        for k, b in enumerate(blocks, 1):
+            results.append(await self._ingest_one(
+                b, source=source, channel_id=channel_id, channel_name=channel_name, author=author,
+                message_id=f"{message_id}#{k}" if message_id else None, reply_to=reply_to if k == 1 else None))
+        if message_id and channel_id:
+            self.store.record_message(channel_id, message_id, author, text, "multi", None)
+        counts: dict[str, int] = {}
+        for r in results:
+            counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+        first = next((r for r in results if r.get("idea")), results[0])
+        return {"outcome": "multi", "results": results, "parsed": first.get("parsed", {}), "idea": first.get("idea"),
+                "message": f"{len(blocks)} signals: " + ", ".join(f"{v} {k}" for k, v in counts.items())}
+
+    async def _ingest_one(self, text: str, *, source: str = "manual", channel_id: str | None = None,
+                          channel_name: str | None = None, author: str | None = None, message_id: str | None = None,
+                          reply_to: str | None = None, parsed: ParsedSignal | None = None) -> dict:
         p = parsed or parse(text)
         base = {"parsed": p.to_dict()}
         if message_id and channel_id and self.store.seen(channel_id, message_id):
@@ -184,7 +215,8 @@ class ExtSignalTracker:
                     entry_high=p.entry_high, stop=p.stop, targets=list(p.targets), stop_basis=p.stop_basis,
                     instrument=p.instrument, timeframe=p.timeframe, source=source, channel_id=channel_id,
                     channel_name=channel_name, author=author, message_id=message_id, raw=text[:4000],
-                    parse_confidence=p.confidence, warnings=list(p.warnings))
+                    parse_confidence=p.confidence, warnings=list(p.warnings), soft_stop=p.soft_stop,
+                    meta=dict(p.meta))
         reject = self._prepare(idea, p, price, ctx)
         if reject is None:
             dup = self._duplicate(idea)
@@ -256,6 +288,21 @@ class ExtSignalTracker:
         if not idea.targets:
             return "all targets are on the wrong side of the entry"
         idea.stop_initial = idea.stop
+        if idea.soft_stop is not None and not ((idea.stop < idea.soft_stop < idea.entry_low) if idea.long
+                                               else (idea.entry_high < idea.soft_stop < idea.stop)):
+            idea.soft_stop = None
+        if idea.soft_stop is not None and abs(idea.soft_stop - idea.stop) / idea.stop < 0.002:
+            idea.soft_stop = None                              # a few cents apart: one stop, no extra warning
+        cls = classify(p.raw or idea.raw, setup=idea.meta.get("setup"), direction=idea.direction,
+                       entry_type=idea.entry_type, entry_low=idea.entry_low, entry_high=idea.entry_high,
+                       stop=idea.stop, price=price, timeframe=idea.timeframe)
+        if cls["horizon"].startswith("Position") and idea.timeframe == "swing":
+            idea.timeframe = "position"
+        self._replan_entry(idea, price)
+        idea.meta["class"] = classify(p.raw or idea.raw, setup=idea.meta.get("setup"), direction=idea.direction,
+                                      entry_type=idea.entry_type, entry_low=idea.entry_low,
+                                      entry_high=idea.entry_high, stop=idea.stop, price=price, timeframe=idea.timeframe)
+        self._plan_scale_out(idea, ctx)
         # time limits
         exp_d, hold_d, horizon = TIMEFRAMES.get(idea.timeframe, (None, None, 30))
         exp_d = exp_d or s.ext_entry_expiry_days * (2 if idea.timeframe == "position" else 1)
@@ -269,6 +316,69 @@ class ExtSignalTracker:
         idea.flags["horizon_td"] = min(252, horizon)
         self._resize(idea)
         return None
+
+    def _replan_entry(self, idea: Idea, price: float | None) -> None:
+        """Decide how the zone is approached and the scale-in plan.
+
+        A long zone *below* the price is a limit on a dip (scale in: edge + midpoint).  If the price is
+        already *below* the zone, buying immediately would mean catching a falling knife under the
+        source's level, so the entry waits for a reclaim: it triggers when price trades back up into
+        the zone (mirror for shorts)."""
+        idea.flags.pop("approach", None)
+        if idea.entry_type in ("zone", "breakout_above", "breakdown_below") and idea.flags.get("orig_type"):
+            idea.entry_type = idea.flags["orig_type"]
+        if idea.entry_type == "zone" and price is not None and idea.entry_low is not None:
+            if idea.long and price < idea.entry_low:
+                idea.flags["orig_type"] = "zone"
+                idea.entry_type, idea.flags["approach"] = "breakout_above", "from_below"
+            elif not idea.long and price > idea.entry_high:
+                idea.flags["orig_type"] = "zone"
+                idea.entry_type, idea.flags["approach"] = "breakdown_below", "from_above"
+                idea.flags["zone_low"] = idea.entry_low
+                idea.entry_low = idea.entry_high
+        if self.s.ext_scale_in:
+            plan_tranches(idea, self.s.ext_scale_in_split)
+        else:
+            plan_tranches(idea, 1.0)
+        self._resize(idea)
+
+    def _plan_scale_out(self, idea: Idea, ctx: dict | None) -> None:
+        """One source target far enough away (>= ABG_EXT_SCALE_OUT_MIN_R): add a partial exit before it,
+        preferring a level the source itself calls resistance, then chart resistance, then halfway."""
+        if not self.s.ext_scale_out or len(idea.targets) != 1 or idea.stop is None:
+            return
+        pe, t = cm.planned_entry(idea), idea.targets[0]
+        if not pe:
+            return
+        r = abs(pe - idea.stop)
+        dist = (t - pe) if idea.long else (pe - t)
+        if r <= 0 or dist / r < self.s.ext_scale_out_min_r:
+            idea.meta["scale_out_note"] = (f"single exit at the target: it is only {dist / r:.1f}R away, "
+                                           f"too close to split profitably")
+            return
+        lo_b, hi_b = (pe + 0.4 * dist, pe + 0.85 * dist) if idea.long else (pe - 0.85 * dist, pe - 0.4 * dist)
+        level, basis = None, None
+        cues = []
+        for m in LEVEL_CUE.finditer(idea.meta.get("thesis") or idea.raw or ""):
+            v = float(m.group(1) or m.group(2))
+            if lo_b <= v <= hi_b:
+                cues.append(v)
+        if cues:
+            level = min(cues) if idea.long else max(cues)
+            basis = f"level the source flags as resistance ({level:g})"
+        else:
+            res = ((ctx or {}).get("report") or {}).get("levels", {}).get("resistance" if idea.long else "support") or []
+            inside = sorted(x for x in res if lo_b <= x <= hi_b)
+            if inside:
+                level = inside[0] if idea.long else inside[-1]
+                basis = "first chart resistance before the target" if idea.long else "first chart support before the target"
+            else:
+                level = pe + dist * 0.5 if idea.long else pe - dist * 0.5
+                basis = "halfway to the target"
+        level = round(level, 2)
+        idea.targets = [level, t]
+        idea.flags["added_targets"] = [level]
+        idea.meta["scale_out_basis"] = basis
 
     def _resize(self, idea: Idea) -> None:
         """Paper size, fixed-fractional on the planned entry: account x risk% / risk per share."""
@@ -317,15 +427,37 @@ class ExtSignalTracker:
         if idea.status == "active" and idea.entry_at and idea.max_hold_until is None:
             idea.max_hold_until = idea.entry_at + idea.flags.get("max_hold_days", self.s.ext_max_hold_days) * 86400
         gate = (self.s.ext_min_entry_grade or "none").strip()
+        block_reason = None
+        triggered = idea.status == "pending" and trigger_fill(idea, o) is not None
         if allow_entry is None:
             allow_entry = True
-            if idea.status == "pending" and gate.lower() != "none" and trigger_fill(idea, o) is not None:
+            if triggered and gate.lower() != "none":
                 if idea.grade is None or time.time() - idea.flags.get("graded_at", 0) > self.s.ext_regrade_seconds:
                     await self._regrade(idea, o.price, max_age=min(600, self.s.ext_regrade_seconds))
                 allow_entry = cm.grade_ok(idea.grade, gate)
+        ed = cm.days_until((idea.meta or {}).get("next_earnings"))
+        if triggered and allow_entry and ed is not None and 0 <= ed <= self.s.ext_earnings_blackout_days:
+            allow_entry = False
+            block_reason = (f"earnings are on {idea.meta['next_earnings']} (in {ed} day{'s' if ed != 1 else ''}); "
+                            f"entries are paused around the report to avoid gap risk")
+            idea.flags.pop("blocked_at", None) if idea.flags.get("block_kind") != "earnings" else None
+            idea.flags["block_kind"] = "earnings"
+        if triggered and allow_entry and idea.grade == "A" and len(idea.tranches) > 1 and not o.bar:
+            idea.tranches = [{**idea.tranches[0], "frac": 1.0}]
+            idea.flags["full_size_reason"] = ("Grade A: full size at the zone edge, because strong setups often "
+                                              "don't offer the deeper fill.")
+        if ed is not None and 0 <= ed <= self.s.ext_earnings_warn_days and \
+                idea.flags.get("earnings_warned") != idea.meta.get("next_earnings"):
+            idea.flags["earnings_warned"] = idea.meta.get("next_earnings")
+            self.store.save(idea)
+            await self._emit(idea, {"type": "earnings_soon", "price": o.price,
+                                    "blackout_days": self.s.ext_earnings_blackout_days})
         was_pending = idea.status == "pending"
         evs = step(idea, o, approach_pct=self.s.ext_approach_pct, move_stop_to_be=self.s.ext_move_stop_to_breakeven,
-                   allow_entry=allow_entry)
+                   allow_entry=allow_entry, near_pct=self._near_pct(idea))
+        for ev in evs:
+            if ev["type"] == "entry_blocked" and block_reason:
+                ev["reason"] = block_reason
         if was_pending and idea.status in ("active", "closed") and idea.entry_at:
             idea.max_hold_until = idea.entry_at + idea.flags.get("max_hold_days", self.s.ext_max_hold_days) * 86400
             idea.flags["entry_trend"] = ((self._ctx.get(idea.symbol) or {}).get("report") or {}).get("regime", {}).get("trend")
@@ -335,6 +467,11 @@ class ExtSignalTracker:
                 ev.update(extra)
             await self._emit(idea, {**ev, "ts": o.ts if not o.bar else time.time()})
         return len(evs)
+
+    def _near_pct(self, idea: Idea) -> float:
+        """Heads-up distance for stop / target warnings: half a day's ATR, between 0.6% and 2.5%."""
+        atr_pct = (((self._ctx.get(idea.symbol) or {}).get("report") or {}).get("indicators") or {}).get("atr_pct")
+        return float(min(2.5, max(0.6, 0.5 * atr_pct))) if atr_pct else 1.0
 
     async def catch_up(self) -> int:
         """Replay completed daily bars missed while nothing was running (e.g. PC was off for a week)."""
@@ -380,6 +517,8 @@ class ExtSignalTracker:
                 f = await self._regrade(idea, price, max_age=self.s.monitor_analysis_interval * 0.8)
                 if idea.status == "active" and price:
                     n += await self._advise(idea, f, price)
+                elif idea.status == "pending" and price:
+                    n += await self._suggest_entry(idea, f, price)
                 self.store.save(idea)
         return n
 
@@ -411,6 +550,56 @@ class ExtSignalTracker:
         await self._emit(idea, ev, facts=f)
         return 1
 
+    async def _suggest_entry(self, idea: Idea, f: dict, price: float) -> int:
+        """Entry-change suggestions (the plan itself only changes when the source or the user says so)."""
+        atr = f.get("atr")
+        if not atr or idea.stop is None or not idea.targets:
+            return 0
+        t_last = idea.targets[-1]
+        sgn = 1 if idea.long else -1
+
+        def rr(e):
+            r = abs(e - idea.stop)
+            return ((t_last - e) * sgn / r) if r else None
+        cur = cm.planned_entry(idea)
+        ev = None
+        if idea.grade == "D" and idea.flags.get("approach") is None:
+            sup = [x for x in (f.get("supports") if idea.long else f.get("resistances")) or []
+                   if ((idea.stop + 0.5 * atr < x < idea.entry_low) if idea.long
+                       else (idea.entry_high < x < idea.stop - 0.5 * atr))]
+            if sup:
+                lvl = max(sup) if idea.long else min(sup)
+                lo, hi = (lvl, lvl + 0.5 * atr) if idea.long else (lvl - 0.5 * atr, lvl)
+                new_rr, old_rr = rr((lo + hi) / 2), rr(cur)
+                if new_rr and old_rr is not None and new_rr > old_rr + 0.2:
+                    ev = {"type": "entry_adjust", "price": price, "key": f"deeper:{lvl:.2f}",
+                          "headline": f"wait for {cm.fmt(lo)}–{cm.fmt(hi)}",
+                          "summary": (f"At the current grade (D) the source's zone is a weak entry. The next "
+                                      f"{'support' if idea.long else 'resistance'} at {cm.fmt(lvl)} would lift "
+                                      f"reward:risk from {old_rr:.2f}R to {new_rr:.2f}R with the same stop."),
+                          "reasons": [x[2:] for x in idea.grade_reasons if x.startswith("-")][:4]
+                          + [f"{'Support' if idea.long else 'Resistance'} {cm.fmt(lvl)} from recent pivots and swing levels"],
+                          "plan": [f"Suggested zone {cm.fmt(lo)}–{cm.fmt(hi)}, stop unchanged at {cm.fmt(idea.stop)}",
+                                   "Reply with a new buying zone (e.g. 'new buying zone 165-168') or edit the idea to apply it"]}
+        run = (price - idea.entry_high) * sgn if idea.long else (idea.entry_low - price)
+        if ev is None and idea.flags.get("approach") is None and run > 2 * atr and f.get("trend_aligned"):
+            m_rr = rr(price)
+            ok = m_rr is not None and m_rr >= 1.2
+            ev = {"type": "entry_adjust", "price": price, "key": "runaway",
+                  "headline": "price is running away from the zone",
+                  "summary": (f"Price is {run / atr:.1f} ATR past the zone in a {f['trend']} and hasn't pulled back. "
+                              + (f"A small starter at market would still have {m_rr:.2f}R to the target with the same stop."
+                                 if ok else f"At market the trade would only have {m_rr or 0:.2f}R to the target, so "
+                                 "chasing isn't worth it; the zone stays the plan.")),
+                  "reasons": f["aligned"][:3],
+                  "plan": ([f"Optional starter: ≤ 1/3 size near {cm.fmt(price)}, stop {cm.fmt(idea.stop)}"] if ok else [])
+                  + ["Keep the resting zone orders; the idea expires if the zone is never reached"]}
+        if ev is None or idea.flags.get("adjust_key") == ev["key"]:
+            return 0
+        idea.flags["adjust_key"] = ev["key"]
+        await self._emit(idea, ev, facts=f)
+        return 1
+
     # ================================================================== updates from the source / the user
     async def apply_update(self, p: ParsedSignal, text: str, *, channel_id: str | None = None,
                            author: str | None = None, reply_to: str | None = None) -> dict:
@@ -437,14 +626,24 @@ class ExtSignalTracker:
         async with self._lock:
             idea = self.store.get(idea.id) or idea
             applied = await self._apply(idea, p.action, price, note, new_stop=p.new_stop, fraction=p.fraction,
-                                        target_index=p.target_index)
+                                        target_index=p.target_index, new_entry=p.new_entry)
         return {"outcome": "updated", "message": applied, "idea": self.view(idea)}
 
     async def _apply(self, idea: Idea, action: str, price: float | None, note: str, *, new_stop: float | None = None,
-                     fraction: float | None = None, target_index: int | None = None) -> str:
+                     fraction: float | None = None, target_index: int | None = None,
+                     new_entry: list[float] | None = None) -> str:
         now = time.time()
         evs: list[dict] = []
         applied = "noted"
+        if action == "move_entry" and new_entry and idea.status == "pending":
+            ev = self._change_entry(idea, min(new_entry), max(new_entry), price, "moved by the source")
+            if ev:
+                evs.append(ev)
+                applied = f"entry moved to {idea.entry_low:g}–{idea.entry_high:g}"
+            else:
+                applied = "entry unchanged (the new zone would be on the wrong side of the stop)"
+        elif action == "move_entry":
+            applied = "noted (already in the trade, so the entry can't move)"
         if action in ("cancel", "stop_hit", "close") and idea.status == "pending":
             idea.status, idea.closed_at, idea.close_reason = "cancelled", now, f"{action.replace('_', ' ')} before entry ({note})"
             evs.append({"type": "cancelled", "price": price, "reason": idea.close_reason})
@@ -483,6 +682,20 @@ class ExtSignalTracker:
             ev.setdefault("note", note)
             await self._emit(idea, {**ev, "ts": now})
         return applied
+
+    def _change_entry(self, idea: Idea, lo: float, hi: float, price: float | None, reason: str) -> dict | None:
+        if idea.stop is not None and ((idea.stop >= lo) if idea.long else (idea.stop <= hi)):
+            return None
+        old = [idea.flags.get("zone_low", idea.entry_low), idea.entry_high]
+        idea.entry_low, idea.entry_high = lo, hi
+        idea.flags.pop("orig_type", None)
+        idea.flags.pop("zone_low", None)
+        if idea.entry_type in ("breakout_above", "breakdown_below") and idea.flags.get("approach"):
+            idea.entry_type = "zone"
+        for k in ("approach_alerted", "blocked_at", "adjust_key", "full_size_reason"):
+            idea.flags.pop(k, None)
+        self._replan_entry(idea, price)
+        return {"type": "entry_changed", "price": price, "old": old, "reason": reason}
 
     def _move_stop(self, idea: Idea, new: float | None, price: float | None, reason: str,
                    allow_loosen: bool = False) -> list[dict]:
@@ -541,9 +754,9 @@ class ExtSignalTracker:
             if idea.status == "pending" and (entry_low is not None or entry_high is not None):
                 lo = entry_low if entry_low is not None else idea.entry_low
                 hi = entry_high if entry_high is not None else max(idea.entry_high or lo, lo)
-                idea.entry_low, idea.entry_high = min(lo, hi), max(lo, hi)
-                self._resize(idea)
-                changes.append(f"entry {idea.entry_low:g}-{idea.entry_high:g}")
+                ev = self._change_entry(idea, min(lo, hi), max(lo, hi), idea.last_price, "edited by user")
+                if ev:
+                    evs.append(ev)
             if stop_basis in ("touch", "close"):
                 idea.stop_basis = stop_basis
                 changes.append(f"stop basis {stop_basis}")
@@ -632,6 +845,9 @@ class ExtSignalTracker:
         d["total_r"] = idea.total_r(px)
         d["rr"] = [idea.rr(t) for t in idea.targets]
         d["levels"] = cm.levels_line(idea)
+        d["planned_entry"] = cm.planned_entry(idea)
+        d["type"] = cm.cls_label(idea)
+        d["meta"] = {k: v for k, v in (idea.meta or {}).items() if k != "thesis"}
         return jsonable(d)
 
     def stats(self) -> dict:

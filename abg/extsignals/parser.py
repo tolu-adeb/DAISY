@@ -27,6 +27,8 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass, field
 
+from .structured import parse_structured, split_signals
+
 STOPWORDS = {
     "LONG", "SHORT", "BUY", "SELL", "SL", "TP", "PT", "ENTRY", "ENTRIES", "STOP", "TARGET", "TARGETS", "ZONE", "CALL",
     "PUT", "CALLS", "PUTS", "AND", "THE", "NEW", "ALERT", "SWING", "IDEA", "USD", "ATH", "EMA", "SMA", "RSI", "MACD",
@@ -87,6 +89,10 @@ class ParsedSignal:
     new_stop: float | None = None
     fraction: float | None = None
     target_index: int | None = None
+    new_entry: list[float] = field(default_factory=list)   # updates: move_entry
+    soft_stop: float | None = None          # inner edge of a stop range ("Stop Loss: 99.79 - 99")
+    meta: dict = field(default_factory=dict)  # setup, source scores, reason, catalyst, risks, earnings, thesis
+    format: str = "free"                    # free | structured
     confidence: float = 0.0
     warnings: list[str] = field(default_factory=list)
     raw: str = ""
@@ -143,6 +149,9 @@ UPDATE_PATTERNS = [
                   r"(?:up )?to (?:be|b/e|break\s*even|entry)\b"),
     ("move_stop", r"\b(?:mov\w*|rais\w*|lower\w*|trail\w*|adjust\w*|new|tighten\w*)\s*(?:the |our |my )?(?:stops?|sl)\s*"
                   r"(?:up |down )?(?:to|at|->|:)?\s*\$?(" + NUMRE + ")"),
+    ("move_entry", r"\b(?:new|updated?|adjust\w*|mov\w*|lower\w*|rais\w*|chang\w*|shift\w*)\s+(?:the |our |my )?"
+                   r"(?:entry|entries|buy(?:ing)? (?:zone|area|range)|entry (?:zone|area|range))\s*(?:is |to |at |->|:)?\s*\$?("
+                   + NUMRE + r")(?:\s*(?:-|to)\s*\$?(" + NUMRE + r"))?"),
     ("cancel", r"\b(cancel(?:led|ing)?|invalidated|scratch(?:ed)?|no longer valid|not taking|void(?:ed)?|delete (?:this|the))\b"),
     ("close", r"\b(clos(?:e|ed|ing)|exit(?:ed|ing)?|sold (?:all|everything|the rest)|out of|flat (?:on|here)|"
               r"taking (?:it )?off|done with|cut(?:ting)?(?: it)?)\b"),
@@ -160,6 +169,8 @@ def _update(t: str) -> ParsedSignal | None:
         p = ParsedSignal(kind="update", action=action, symbol=sym, instrument=inst, raw=t, confidence=0.75 if sym else 0.5)
         if action == "move_stop":
             p.new_stop = _f(m.group(1))
+        elif action == "move_entry":
+            p.new_entry = sorted(_f(g) for g in m.groups() if g)
         elif action == "target_hit":
             g = next((x for x in m.groups() if x), None)
             p.target_index = int(g) - 1 if g else None
@@ -176,8 +187,76 @@ def _update(t: str) -> ParsedSignal | None:
 
 
 # --------------------------------------------------------------------------- ideas
+def parse_many(text: str) -> list[ParsedSignal]:
+    """Parse a message that may hold several ideas (separated by ––– / --- lines or repeated Ticker: blocks)."""
+    blocks = split_signals(text)
+    return [parse(b) for b in blocks] if len(blocks) > 1 else [parse(text)]
+
+
+def _from_structured(st: dict, raw: str) -> ParsedSignal:
+    p = ParsedSignal(raw=raw, format="structured", meta=st["meta"])
+    if st["symbol"]:
+        p.symbol, p.instrument = _map_symbol(st["symbol"])
+    else:
+        p.symbol, p.instrument = find_symbol(clean(raw))
+    ev, sv, tv = st["entry"], st["stop"], st["targets"]
+    if ev:
+        p.entry_low, p.entry_high = min(ev), max(ev)
+        p.entry_type = "zone"
+        el = st["fields"]["entry"].lower()
+        if len(ev) == 1 and re.search(r"\b(above|over|break|through|reclaim)", el):
+            p.entry_type = "breakout_above"
+        elif len(ev) == 1 and re.search(r"\b(below|under|breakdown|loses)", el):
+            p.entry_type = "breakdown_below"
+        elif re.search(r"\b(market|now|here|current|cmp)\b", el) and len(ev) <= 1:
+            p.entry_type = "market"
+    p.direction = st["direction"]
+    if p.direction is None and ev and sv:
+        p.direction = "long" if max(sv) < min(ev) else "short" if min(sv) > max(ev) else None
+    if p.direction is None and ev and tv:
+        p.direction = "long" if tv[0] > max(ev) else "short"
+    if sv:
+        if len(sv) >= 2:
+            p.stop = min(sv) if p.direction != "short" else max(sv)
+            p.soft_stop = max(sv) if p.direction != "short" else min(sv)
+        else:
+            p.stop = sv[0]
+    if re.search(r"clos(?:e|ing)|daily close|eod|end of day", st["fields"].get("stop", ""), re.I):
+        p.stop_basis = "close"
+    if tv and p.entry_high is not None:
+        ref = p.entry_high if p.direction != "short" else p.entry_low
+        good = sorted({x for x in tv if (x > ref if p.direction != "short" else x < ref)}, reverse=p.direction == "short")
+        if len(good) < len(tv):
+            p.warnings.append("ignored target(s) on the wrong side of the entry")
+        p.targets = good[:5]
+    tf = (st["meta"].get("timeframe_text") or "").lower()
+    if re.search(r"scalp|intraday|day", tf):
+        p.timeframe = "day"
+    elif re.search(r"position|long[- ]term|months?", tf):
+        p.timeframe = "position"
+    hm = re.search(r"(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(d|days?|w|wks?|weeks?|mos?|months?)\b", tf)
+    if hm:
+        p.horizon_days = int(hm.group(2) or hm.group(1)) * {"d": 1, "w": 7, "m": 30}[hm.group(3)[0]]
+    if p.stop is not None and p.entry_low is not None and p.direction:
+        if (p.stop >= p.entry_low) if p.direction == "long" else (p.stop <= p.entry_high):
+            p.warnings.append("stop is on the wrong side of the entry; check the message")
+    if p.stop is None:
+        p.warnings.append("no stop given; a 2xATR stop will be assigned from live data")
+    if not p.targets:
+        p.warnings.append("no targets given; 2R and 3R targets will be assigned")
+    if not p.symbol:
+        p.warnings.append("no ticker found")
+    p.kind = "idea" if (p.symbol and p.direction and p.entry_type) else "none"
+    p.confidence = round(0.35 * bool(p.symbol) + 0.25 * bool(p.entry_type) + 0.2 * bool(p.stop)
+                         + 0.2 * bool(p.targets) - 0.15 * sum("wrong side" in w for w in p.warnings), 2)
+    return p
+
+
 def parse(text: str) -> ParsedSignal:
     raw = text or ""
+    st = parse_structured(raw)
+    if st is not None:
+        return _from_structured(st, raw)
     t = clean(raw)
     p = ParsedSignal(raw=raw)
     low = " " + t.lower() + " "

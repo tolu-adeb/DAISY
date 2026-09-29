@@ -20,7 +20,7 @@ abg serve                   # web dashboard at http://127.0.0.1:8000
 | Prediction | — | Monte Carlo ensemble (GBM-t + filtered historical simulation): 1W–1Y return ranges, scenarios, setup target/stop odds, walk-forward calibration, confidence rating, thesis and a guard-railed Strong Buy…Sell model view |
 | External signals | — | Parses swing ideas from pasted messages or Discord channels (entry zone / breakout, stop, targets, updates such as "TP1 hit, stop to BE"), validates them against live data, tracks them for weeks, grades each entry A–D, takes paper entries / partial profits / stops / exits, and relays every decision back to the channel with the reasoning |
 | Portfolio & alerts | — | Saved portfolio (average-cost P&L, stops/targets, watchlist), continuous live monitor, 17 edge-triggered signal types, dashboard + desktop + Discord + email alerts |
-| Tests | — | 139 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
+| Tests | — | 148 offline tests (math checked against reference values, recorded API payloads, failover and error scenarios) |
 
 ## Install
 
@@ -100,7 +100,7 @@ asyncio.run(main())
 ## Tests
 
 ```bash
-pytest -q          # 139 tests, fully offline (no network, no API keys)
+pytest -q          # 148 tests, fully offline (no network, no API keys)
 ```
 
 > Educational analysis tool, not investment advice.

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..extsignals.lifecycle import FINAL_STATES, OPEN_STATES
-from ..extsignals.parser import looks_like_signal, parse
+from ..extsignals.parser import looks_like_signal, parse_many
 from ..utils import jsonable
 
 router = APIRouter(prefix="/api/ext", tags=["external signals"])
@@ -36,8 +36,17 @@ class TextIn(BaseModel):
 @router.post("/parse")
 async def parse_text(body: TextIn):
     """Preview how a message is interpreted, without tracking it."""
-    p = parse(body.text)
-    return {"parsed": p.to_dict(), "trackable": p.trackable, "looks_like_signal": looks_like_signal(body.text)}
+    from ..extsignals.classify import classify
+    items = []
+    for p in parse_many(body.text):
+        d = p.to_dict()
+        d.pop("raw", None)
+        d["meta"].pop("thesis", None)
+        d["class"] = classify(p.raw, setup=p.meta.get("setup"), direction=p.direction, entry_type=p.entry_type,
+                              entry_low=p.entry_low, entry_high=p.entry_high, stop=p.stop, timeframe=p.timeframe)
+        items.append({"parsed": d, "trackable": p.trackable})
+    return {"parsed": items[0]["parsed"], "trackable": items[0]["trackable"], "items": items,
+            "looks_like_signal": looks_like_signal(body.text)}
 
 
 @router.post("/ingest")

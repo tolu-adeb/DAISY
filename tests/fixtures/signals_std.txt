@@ -1,0 +1,49 @@
+SMTC | Semtech
+The business is growing fast. In the quarter reported revenue was $341.9 million, up 32.7% from a year earlier, and beat Wall Street's estimates by 4%. Data center revenue hit a record $100 million, up 91%, and LoRa revenue reached a record $58 million, up 58%. Earnings per share were $0.71 against the $0.61 analysts expected, and the company reports a net margin of about 13% and a return on equity of about 22%. The outlook is even stronger. Management expects next quarter's revenue to be about $410 million, up roughly 54% from last year. The stock has surged from about $103 in August to around $180 as the market prices in this growth. The risks are that the stock is now expensive, since analysts expect about $2.64 in earnings per share for the year, which puts the price near 68 times this year's earnings by my math. Semiconductors are also cyclical, so a slowdown in AI spending could hurt the stock quickly.
+
+Buying zone: $168-$175
+Stop loss: $145
+Target: $205
+
+–––
+
+IT | Gartner Inc,
+Gartner has bled from about $250 down to a low near $128 in June and July, then a strong impulsive leg in early August broke the bearish structure and took price to $203. That move is the one the Fib is drawn on, and I like how the pullback has played out. Price dropped to about $166 in September, right on the 0.5 level, and bounced straight away, which is what you'd expect. The $170-$175 buying zone sits just above that reaction, so it's a sensible place to wait for a dip. The $145 stop is tucked at the 0.786, so if it breaks, the whole bullish leg has failed. My one worry is that price has now stalled near $203 twice, so it can still get rejected there. Q2 adjusted earnings per share came in at $4.37, up 23.8%, and the shares jumped 7.5% on the news. Free cash flow rose 8.9% to $378 million. Management expects adjusted EPS of at least $14 for the year, and repurchased $547 million of stock in Q2. By my math, that puts the stock at only about 13 times this year's adjusted earnings. The weak spot is growth. Reported revenue fell 0.6% in the quarter, and consulting revenue dropped 9%.
+
+Buying Zone: $170 - $175
+Take Profit: $220
+Stop Loss: $145
+
+–––
+
+The Walt Disney Company is a premier global entertainment and media enterprise operating worldwide theme parks and motion picture and television studios, streaming platforms (Disney+, Hulu, ESPN+), and sports broadcasting networks (ESPN).
+
+Ticker: DIS  
+Setup: Bull flag
+Entry: $104.50 – $105
+Stop Loss: $99.79 – $99
+Take Profit: $112
+Risk to Reward: 1.60R
+Fundamentally Ranking Company: 8.0/10
+Can Financials Alone Hit the Chart Target: 7.5/10
+Reason: Disney’s streaming segment has transitioned to sustained profitability, while robust cash flows from domestic theme parks and cruise line expansions provide solid fundamental valuation support to reach $112 without requiring a re-rating.
+Key Catalyst: Box office momentum, and hence forward guidance for parks, resorts and streaming services themselves.
+An issue you should know as an investor: People are cutting cable fast which used to make Disney a ton of money, so the new team has to make streaming way more profitable while keeping theme park prices from driving families away. An internal overhaul to integrate Disney+ and Hulu into a single unified platform to reduce each platforms individual expenses for things like marketing, software etc.
+Next Earnings: November 12
+Confidence Score: 8/10
+
+–––
+
+The Procter & Gamble Company is an essential consumer staples that manufactures and markets branded consumer goods worldwide across fabric & home care, baby & feminine care, beauty, health care, and grooming.
+
+Ticker: PG  
+Setup: Double bottom base retesting
+Entry: $145.50 – $148.35
+Stop Loss: $138.92 – $138.98
+Take Profit: $153
+Risk to Reward: 1.15R
+Fundamentally Ranking Company: 9.0/10
+Can Financials Alone Hit the Chart Target: 8.5/10
+Reason: 65+ consecutive years of dividend increases provide rock-solid fundamental valuation support for a modest mean reversion back to $153.
+Next Earnings: October 22, 2026
+Confidence Score: 7.5/10

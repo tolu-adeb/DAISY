@@ -252,7 +252,10 @@ See [Portfolio & live signals §9.6](09-portfolio-and-live-signals.md#96-interna
 
 See [External signals](11-external-signals.md). Key contracts:
 
-- `parser.parse(text) -> ParsedSignal` is deterministic and does no network calls. `kind` is `idea | update | none`, and
+- `structured.parse_structured(block)` reads labeled/report signals (levels only from labeled lines; prose kept as the thesis); `split_signals(text)` splits multi-signal messages; `parse_date` handles earnings dates.
+- `classify.classify(text, setup=, direction=, entry_type=, entry_low=, entry_high=, stop=, price=, timeframe=)` -> {pattern, basis, themes, horizon, entry_style, label, evidence}.
+- `lifecycle.plan_tranches(idea, split)` builds the scale-in plan; `step(..., near_pct=)` also emits `scale_in`, `soft_stop`, `stop_near`, `target_near`.
+- `parser.parse(text) -> ParsedSignal` (and `parse_many`) is deterministic and does no network calls. `kind` is `idea | update | none`, and
   `trackable` needs a symbol, direction and entry type. `looks_like_signal(text)` is the cheap chat pre-filter.
 - `lifecycle.step(idea, Obs, approach_pct, move_stop_to_be, allow_entry) -> [event]` is a pure state machine that
   mutates the idea. `trigger_fill(idea, obs)` gives the fill price or None. `manual_exit` handles source/user exits, and

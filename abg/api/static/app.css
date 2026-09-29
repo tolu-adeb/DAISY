@@ -273,3 +273,5 @@ td.num { white-space: nowrap; }
 .idea-head { font-size: 13px; margin-bottom: 10px; } .idea-head .raw { font: 12px var(--mono); color: var(--text-muted); margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
 .idea-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; } .idea-actions input { width: 90px; }
 .idea-head .plan { white-space: normal; }
+.parsed-block { border-top: 1px dashed var(--border); margin-top: 10px; padding-top: 8px; }
+.small-type { font-size: 11px; white-space: nowrap; }
