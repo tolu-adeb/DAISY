@@ -89,7 +89,8 @@ def backtest_cmd(csv: Optional[Path] = typer.Option(None, help="Intraday bars CS
     _groups(res.stats)
     full = {"backtest": res.to_dict()}
     if walk:
-        wf = walk_forward(bars, base, events_for=ev, commission_rt=s.alpha_commission_rt)
+        wf = walk_forward(bars, base, events_for=ev, commission_rt=s.alpha_commission_rt, min_win_rate=s.alpha_min_win_rate,
+                          min_trades=10)
         console.print(f"\n[bold]Walk-forward[/bold]: fit on {wf['train_days'][0]}…{wf['train_days'][1]} ({wf['train_days'][2]} days), "
                       f"test on {wf['test_days'][0]}…{wf['test_days'][1]} ({wf['test_days'][2]} days)")
         console.print(f"best settings on the fit window: {wf['best']}")

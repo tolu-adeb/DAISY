@@ -90,9 +90,25 @@ roughly two standard errors from zero. Treat it as promising, not proven.
   the last 3 sessions' numbers.
 - **Entry.** The first 5-min close outside the 09:30–09:45 range, before 10:30. Take it in the
   day's mode.
-- **Exits.** Stop at 0.8 × the average 5-min range of the opening 15 minutes. Target 1 at 1R banks
-  half and moves the stop to break-even. Final target at 2R.
+- **Exits.** Stop at 0.8 × the average 5-min range of the opening 15 minutes. Target 1 at **0.7R**
+  banks half and moves the stop to break-even. Final target at 2R.
 - **Frequency.** At most one trade a day.
+
+**Win rate vs profit.** Where Target 1 sits mostly decides the win rate. Once half is banked and the
+stop is at break-even, the trade can't lose, so an earlier Target 1 turns more trades into wins.
+Results on the same bars:
+
+| Target 1 | Trades | Win rate | Avg R | Net pts | PF | Win rate Sep 11 – Oct 1 | Net Sep 11 – Oct 1 |
+|---|---|---|---|---|---|---|---|
+| 1.0R | 31 | 68% | +0.36 | +664 | 2.25 | 58% | +103 |
+| **0.7R (default)** | 34 | **74%** | +0.33 | +677 | 2.35 | 62% | +31 |
+| 0.5R | 33 | 79% | +0.30 | +582 | 2.42 | 67% | n/a |
+
+- Across the whole sample, the higher win rate cost little.
+- In the September window it cost profit: +31 pts against +103.
+- To favour profit over win rate, set `"t1_r": 1.0` in `alpha_params.json`.
+- The Sunday re-fit only considers settings with at least `ABG_ALPHA_MIN_WIN_RATE` (default 65%)
+  wins on the fit window.
 
 The three original setups below are still in the code. They are off by default (`setups` in
 `alpha_params.json`) because they lost on real bars.
@@ -107,7 +123,7 @@ All times are ET. The base bars are 1-minute (5-minute works). Setup checks run 
 | **VWAP pullback** | One-sided session: ≥ 80% of bars on one side of VWAP, efficiency ≥ 0.3, VWAP rising or falling. First pullback to VWAP that closes back with the trend | That close | Below or above the pullback swing |
 
 **Targets and management**
-- Target 1 = 1R. Half is banked and the stop moves to break-even.
+- Target 1 = `t1_r` (0.7R by default). Half is banked and the stop moves to break-even.
 - The runner trails by 1.5×ATR5 once it is +1.5R.
 - The final target is the next liquidity level at least 1.8R away (PDH/PDL/ONH/ONL/OR/VWAP), capped at 4R. If there is none, it is 2.5R.
 - Stops are bounded to 12–90 pts.

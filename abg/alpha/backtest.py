@@ -140,15 +140,16 @@ def _group(trades, keyf) -> dict:
 
 # --------------------------------------------------------------------------- walk-forward
 DEFAULT_GRID = {
+    "t1_r": [0.5, 0.7, 1.0],
     "orx_k": [0.6, 0.8, 1.0],
     "orx_final_r": [1.5, 2.0, 3.0],
     "orx_lookback": [3, 5],
 }
 
 
-def _objective(st: dict, min_trades: int) -> float:
+def _objective(st: dict, min_trades: int, min_win_rate: float = 0.0) -> float:
     n = st.get("trades", 0)
-    if n < min_trades:
+    if n < min_trades or (st.get("win_rate") or 0) < min_win_rate:
         return -1e9
     return st["avg_r"] * math.sqrt(n) - 0.002 * st.get("max_dd_pts", 0)
 
@@ -167,7 +168,7 @@ def _subset(res: BTResult, days: list[date], commission_rt: float, point_value: 
 
 
 def walk_forward(bars: pd.DataFrame, base: AlphaParams | None = None, grid: dict | None = None,
-                 train_frac: float = 0.67, min_trades: int = 12, adaptive: bool = True,
+                 train_frac: float = 0.67, min_trades: int = 12, adaptive: bool = True, min_win_rate: float = 0.65,
                  commission_rt: float = 1.24, point_value: float = MNQ_POINT, **kw) -> dict:
     """Grid-search on the first ``train_frac`` of sessions, report the winner on the rest.  With
     ``adaptive`` each run gets a fresh learner that learns online (no peeking ahead)."""
@@ -184,7 +185,7 @@ def walk_forward(bars: pd.DataFrame, base: AlphaParams | None = None, grid: dict
         p = AlphaParams.from_dict({**base.to_dict(), **dict(zip(keys, combo))})
         st = run_backtest(bars, p, days=train, learner=AdaptiveBook() if adaptive else None,
                           commission_rt=commission_rt, point_value=point_value, **kw).stats
-        rows.append((_objective(st, min_trades), dict(zip(keys, combo)), st))
+        rows.append((_objective(st, min_trades, min_win_rate), dict(zip(keys, combo)), st))
     rows.sort(key=lambda r: r[0], reverse=True)
     best = AlphaParams.from_dict({**base.to_dict(), **rows[0][1]})
     full = run_backtest(bars, best, learner=AdaptiveBook() if adaptive else None, commission_rt=commission_rt,

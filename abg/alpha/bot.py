@@ -427,7 +427,7 @@ class AlphaBot:
     async def optimize(self, save: bool = True) -> dict:
         from .backtest import walk_forward
         bars = await self._bars(self.symbol, "5m", "60d")
-        res = await asyncio.to_thread(walk_forward, bars, self.params)
+        res = await asyncio.to_thread(walk_forward, bars, self.params, min_win_rate=self.s.alpha_min_win_rate)
         ts, tst = res["test_stats"], res["default_test_stats"]
         from .backtest import worth_adopting
         better = worth_adopting(ts, tst)

@@ -71,7 +71,7 @@ class AlphaParams:
     sweep_min_atr: float = 0.12
     sweep_max_atr: float = 1.2
     sweep_window_min: int = 25
-    t1_r: float = 1.0
+    t1_r: float = 0.7                   # Target 1 (half off, stop to break-even); 0.7R ~ 74% wins in the backtest, 1R ~ 68%
     final_r: float = 2.5
     min_final_r: float = 1.8
     max_final_r: float = 4.0

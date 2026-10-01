@@ -232,6 +232,7 @@ class Settings(BaseSettings):
     alpha_post_ideas: bool = True               # post the "get ready" trade ideas
     alpha_post_brief: bool = True               # 09:25 pre-market brief
     alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
+    alpha_min_win_rate: float = 0.65            # re-fits only consider settings with at least this win rate
 
     log_level: str = "WARNING"
 
