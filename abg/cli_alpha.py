@@ -254,3 +254,29 @@ def optimize_cmd(save: bool = typer.Option(True)):
     res = _run(fn)
     console.print(_stats_table("out of sample (fitted)", res["test_stats"]))
     console.print(f"best {res['best']} · adopted: {res['adopted']}")
+
+
+@alpha_app.command("bars")
+def bars_cmd(out: Path = typer.Option(Path("data/mnq_5m.csv"), help="Where to write the CSV."),
+             symbol: str = typer.Option("MNQ=F"), interval: str = typer.Option("5m", help="1m (7 days) or 5m (60 days)"),
+             period: str = typer.Option("60d")):
+    """Download intraday bars once and save them (ET timestamps) - for repeatable backtests and research."""
+    from .alpha.data import fetch_intraday
+    bars = _run(lambda eng: fetch_intraday(eng, symbol, interval, period))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df = bars.copy()
+    df.index = df.index.strftime("%Y-%m-%d %H:%M:%S")
+    df.index.name = "datetime"
+    if out.exists():                        # append to an earlier download instead of losing older bars
+        old = pd_read(out)
+        df = old.combine_first(df) if old is not None else df
+    df.to_csv(out)
+    console.print(f"[green]{len(df):,} bars → {out}[/green] ({df.index[0]} → {df.index[-1]} ET)")
+
+
+def pd_read(path: Path):
+    import pandas as pd
+    try:
+        return pd.read_csv(path, index_col=0)
+    except Exception:
+        return None
