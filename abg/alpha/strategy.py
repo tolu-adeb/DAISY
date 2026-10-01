@@ -57,14 +57,17 @@ class AlphaParams:
     max_trades: int = 2
     stop_after_loss: bool = True
     max_daily_loss_r: float = 1.5
-    setups: tuple = ("orb", "sweep", "vwap")
+    setups: tuple = ("orx",)            # orb / sweep / vwap are available but lost money in the backtest (docs/14)
+    orx_k: float = 0.8                  # adaptive opening-range trade: stop = k x opening ATR
+    orx_lookback: int = 3               # sessions replayed to pick follow / fade
+    orx_final_r: float = 2.0
     atr_len: int = 14
     disp_body_atr: float = 0.6
     zone_atr: float = 0.25
     stop_buffer_atr: float = 0.15
     stop_atr: float = 0.9
     min_risk_pts: float = 12.0
-    max_risk_pts: float = 90.0
+    max_risk_pts: float = 120.0
     sweep_min_atr: float = 0.12
     sweep_max_atr: float = 1.2
     sweep_window_min: int = 25
@@ -205,6 +208,7 @@ class AlphaStrategy:
         self.path_len = 0.0
         self.vwap_hist: list[tuple[datetime, float]] = []
         self.flat_done = False
+        self.orx_done = False
         self.size_mult = 1.0
         if ctx.fomc and p.fomc_mode == "half":
             self.size_mult = 0.5
@@ -390,6 +394,27 @@ class AlphaStrategy:
         p, a = self.p, self.atr5
         out = []
         body = abs(f.close - f.open)
+        # ---- adaptive opening-range trade: follow or fade the first close outside the range
+        mode = self.ctx.orx_mode if self.ctx else "off"
+        if "orx" in p.setups and self.or_done and not self.orx_done and mode in ("follow", "fade") and self.or_hi is not None:
+            s = 1 if f.close > self.or_hi else -1 if f.close < self.or_lo else 0
+            if s:
+                self.orx_done = True
+                side = s if mode == "follow" else -s
+                day = f.ts.date()
+                orb = [x for x in self.fives if x.ts.date() == day and x.ts.time() >= time(9, 30) and
+                       x.ts < datetime.combine(day, time(9, 30), f.ts.tzinfo) + timedelta(minutes=p.or_minutes)]
+                oatr = sum(x.high - x.low for x in orb) / len(orb) if orb else a
+                sc = self.ctx.orx_scores or {}
+                edge = self.or_hi if s > 0 else self.or_lo
+                why = [f"first 5-min close {'above' if s > 0 else 'below'} the opening range ({edge:,.2f})",
+                       (f"last {sc.get('sessions', p.orx_lookback)} sessions: fading the first breakout made "
+                        f"{sc.get('fade', 0):+.1f}R vs following {sc.get('follow', 0):+.1f}R - so today we "
+                        + ("FADE it (expecting the break to fail)" if mode == "fade" else "FOLLOW it (breaks have been running)"))]
+                i = self._new_idea("orx", side, "ORH" if s > 0 else "ORL", edge, (f.close, f.close), f.close,
+                                   f.close - side * p.orx_k * oatr, f.end, why)
+                if i:
+                    out += self._try_enter(i, bar, f.close, i.stop, f.end, direct=True)
         # ---- opening-range breakout -> retest idea
         if "orb" in p.setups and self.or_done and self.or_hi is not None:
             rng = f.high - f.low or 1e-9
@@ -515,6 +540,16 @@ class AlphaStrategy:
     # ------------------------------------------------------------------ scoring and entry
     def _score(self, i: Idea, risk: float, final_r: float, now: datetime, regime: str) -> tuple[float, list[str]]:
         s, why = 50.0, []
+        if i.setup == "orx":           # its edge is the regime read itself; the daily lean tested as noise
+            s += 10
+            if _mins(now.time()) < 600:
+                s += 5
+            if self.learner:
+                adj, note = self.learner.adjust(i.setup, regime)
+                s += adj
+                if note:
+                    why.append(note)
+            return s, why
         if i.setup in ("sweep", "orb") and i.level_name in ("PDH", "PDL", "ONH", "ONL"):
             s += 10
             why.append(f"key level ({i.level_name})")
@@ -589,7 +624,12 @@ class AlphaStrategy:
         edge = i.zone_hi if side > 0 else i.zone_lo
         if why_not is None and i.setup == "orb" and (px - edge) * side > p.chase_r * max(risk, 1e-9):
             why_not = f"price is already {(px - edge) * side:.0f} pts past the entry zone - not chasing"
-        final, final_name = self._final_target(side, entry, risk) if why_not is None else (None, "")
+        if why_not is not None:
+            final, final_name = None, ""
+        elif i.setup == "orx":
+            final, final_name = self._round(entry + side * p.orx_final_r * risk), f"{p.orx_final_r:g}R"
+        else:
+            final, final_name = self._final_target(side, entry, risk)
         regime = self.regime(now, px)
         score, swhy = self._score(i, risk, (final - entry) * side / risk if final else 0, now, regime) if why_not is None else (0, [])
         if why_not is None and self.learner and not self.learner.allowed(i.setup, regime):

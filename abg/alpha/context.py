@@ -36,6 +36,9 @@ class DayContext:
     events: list[dict] = field(default_factory=list)      # [{"time": "10:00", "name": ..., "impact": "high"}]
     fomc: bool = False
     notes: list[str] = field(default_factory=list)
+    orx_mode: str = "off"                                  # follow | fade | off  (see regime.py)
+    orx_scores: dict = field(default_factory=dict)
+    orx_history: list[dict] = field(default_factory=list)
 
     def levels(self) -> dict[str, float]:
         out = {"PDH": self.pdh, "PDL": self.pdl, "PDC": self.pdc, "ONH": self.onh, "ONL": self.onl}
@@ -99,13 +102,14 @@ def _bias(ctx: DayContext) -> None:
 
 
 def contexts_from_intraday(bars: pd.DataFrame, daily: pd.DataFrame | None = None,
-                           events_for=None) -> dict[date, tuple[DayContext, pd.DataFrame]]:
+                           events_for=None, params=None) -> dict[date, tuple[DayContext, pd.DataFrame]]:
     """For each session in ``bars``: (context, that session's RTH bars).  Daily levels come from
     ``daily`` when given (e.g. a long daily CSV), else from the intraday bars' own RTH sessions."""
     from .data import rth_daily
     sessions = split_sessions(bars)
     own_daily = rth_daily(bars)
     out = {}
+    history: list[dict] = []
     for d, g in sorted(sessions.items()):
         src = daily if daily is not None and len(daily) else own_daily
         prior = src[src.index < pd.Timestamp(d)]
@@ -114,8 +118,30 @@ def contexts_from_intraday(bars: pd.DataFrame, daily: pd.DataFrame | None = None
         if rth.empty:
             continue
         ev = events_for(d) if events_for else []
-        out[d] = (build_context(d, prior, pre if len(pre) else None, ev), rth)
+        ctx = build_context(d, prior, pre if len(pre) else None, ev)
+        apply_orx(ctx, history, params)
+        out[d] = (ctx, rth)
+        if len(rth) >= 30:
+            history.append({"date": str(d), **orx_shadow(rth, params)})
     return out
+
+
+def orx_shadow(rth: pd.DataFrame, params=None) -> dict:
+    from .regime import shadow
+    p = params
+    return shadow(rth, k=getattr(p, "orx_k", 0.8), t1_r=getattr(p, "t1_r", 1.0), final_r=getattr(p, "orx_final_r", 2.0),
+                  or_minutes=getattr(p, "or_minutes", 15), last=_hm(getattr(p, "entry_end", "10:30")))
+
+
+def apply_orx(ctx: DayContext, history: list[dict], params=None) -> None:
+    from .regime import choose_mode
+    ctx.orx_history = history[-6:]
+    ctx.orx_mode, ctx.orx_scores = choose_mode(history, getattr(params, "orx_lookback", 3))
+
+
+def _hm(s: str) -> time:
+    h, m = s.split(":")
+    return time(int(h), int(m))
 
 
 def calendar_events(day: date, settings=None) -> list[dict]:

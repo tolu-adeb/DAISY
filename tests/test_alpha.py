@@ -16,6 +16,7 @@ from abg.alpha.messages import Renderer
 from abg.alpha.strategy import AlphaParams, AlphaStrategy
 
 D, P = date(2026, 9, 15), date(2026, 9, 14)
+LEGACY = ("orb", "sweep", "vwap")    # the original setups; the default is now the adaptive "orx"
 
 
 def _warm(px=20000.0):
@@ -133,7 +134,7 @@ def test_context_bias():
 
 # ---------------------------------------------------------------- strategy
 def test_orb_retest_full_lifecycle():
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     assert s.start_day(_ctx(), _warm())[0]["type"] == "brief"
     ev = _run(s, _orb_day("up").bars)
     kinds = [e["type"] for e in ev]
@@ -150,7 +151,7 @@ def test_orb_retest_full_lifecycle():
 
 
 def test_stop_after_first_loss_and_one_trade_per_zone():
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     s.start_day(_ctx(), _warm())
     ev = _run(s, _orb_day("down").bars)
     kinds = [e["type"] for e in ev]
@@ -161,26 +162,26 @@ def test_stop_after_first_loss_and_one_trade_per_zone():
 
 
 def test_window_news_and_fomc_rules():
-    late = AlphaParams(entry_end="09:40")
+    late = AlphaParams(entry_end="09:40", setups=LEGACY)
     s = AlphaStrategy(late)
     s.start_day(_ctx(), _warm())
     ev = _run(s, _orb_day("up").bars)
     assert "signal" not in [e["type"] for e in ev] and any(e["type"] == "done" and "window" in e["why"] for e in ev)
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     s.start_day(_ctx(events=[{"time": "09:55", "name": "ISM", "impact": "high"}]), _warm())
     ev = _run(s, _orb_day("up").bars)
     assert "signal" not in [e["type"] for e in ev]                          # 09:53 is inside the 5-min pre-news blackout
-    s = AlphaStrategy(AlphaParams(fomc_mode="skip"))
+    s = AlphaStrategy(AlphaParams(fomc_mode="skip", setups=LEGACY))
     s.start_day(_ctx(fomc=True), _warm())
     assert "signal" not in [e["type"] for e in _run(s, _orb_day("up").bars)]
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     s.start_day(_ctx(fomc=True), _warm())
     sig = next(e for e in _run(s, _orb_day("up").bars) if e["type"] == "signal")
     assert sig["trade"]["size"] == 0.5
 
 
 def test_sweep_reclaim_short():
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     s.start_day(_ctx(onh=20030), _warm())
     d = Day().opening_range()
     d.add(20012, 20020, 20010, 20018, 3)            # 09:45-09:47 drift up under ONH 20030
@@ -266,10 +267,10 @@ def test_journal_and_signal_parsing(tmp_path):
 
 # ---------------------------------------------------------------- messages
 def test_every_event_renders():
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(AlphaParams(setups=LEGACY))
     ev = s.start_day(_ctx(events=[{"time": "10:00", "name": "ISM", "impact": "high"}]), _warm())
     ev += _run(s, _orb_day("up").bars)
-    s2 = AlphaStrategy(AlphaParams())
+    s2 = AlphaStrategy(AlphaParams(setups=LEGACY))
     s2.start_day(_ctx(), _warm())
     ev += _run(s2, _orb_day("down").bars)
     r = Renderer("TEST", "123")
@@ -320,7 +321,7 @@ async def test_bot_threads_replies_and_stores(settings):
         bot = AlphaBot(eng, settings)
         bot.poster = FakePoster()
         bot.day = D
-        bot.strat = AlphaStrategy(AlphaParams(), bot.learner)
+        bot.strat = AlphaStrategy(AlphaParams(setups=LEGACY), bot.learner)
         bot.brief = bot.strat.start_day(_ctx(), _warm())[0]
         await bot.emit(bot.brief)
         for b in _orb_day("up").bars:
@@ -371,3 +372,54 @@ def test_adoption_rule():
     assert not worth_adopting({**good, "net_usd_per_micro": -5}, {"avg_r": 0.1})
     assert not worth_adopting({**good, "trades": 10}, {"avg_r": 0.1})
     assert not worth_adopting(good, {"avg_r": 0.3})
+
+
+
+# ---------------------------------------------------------------- adaptive opening-range mode
+def _rth_frame(day, path):
+    """5-min RTH bars: 15-min range 20000-20020, a close above it at 09:45, then ``path`` closes."""
+    t = pd.date_range(f"{day} 09:30", periods=78, freq="5min", tz=NY)
+    o = [20010, 20010, 20010] + [20025] + list(path)
+    o += [o[-1]] * (78 - len(o))
+    rows = []
+    for i, c in enumerate(o):
+        prev = o[i - 1] if i else c
+        rows.append({"open": prev, "high": max(prev, c) + (10 if i < 3 else 2), "low": min(prev, c) - (10 if i < 3 else 2), "close": c})
+    return pd.DataFrame(rows, index=t)
+
+
+def test_shadow_and_mode_choice():
+    from abg.alpha.regime import choose_mode, shadow
+    up = shadow(_rth_frame("2026-09-14", [20060, 20100, 20150]))       # breakout runs
+    down = shadow(_rth_frame("2026-09-15", [20000, 19960, 19900]))     # breakout fails
+    assert up["dir"] == "up" and up["follow"] > 0 > up["fade"]
+    assert down["fade"] > 0 > down["follow"]
+    assert choose_mode([down, down, up])[0] == "fade"
+    assert choose_mode([up, up, down])[0] == "follow"
+    assert choose_mode([up, down])[0] == "off"                          # not enough history
+    loss = {"follow": -1.0, "fade": -1.0}
+    assert choose_mode([loss, loss, loss])[0] == "off"                  # neither paid -> stand aside
+
+
+def test_orx_fades_first_breakout_in_fade_mode():
+    s = AlphaStrategy(AlphaParams())
+    ctx = _ctx()
+    ctx.orx_mode, ctx.orx_scores = "fade", {"fade": 2.1, "follow": -1.5, "sessions": 3}
+    s.start_day(ctx, _warm())
+    ev = _run(s, _orb_day("down").bars)
+    sig = next(e for e in ev if e["type"] == "signal")["trade"]
+    assert sig["setup"] == "orx" and sig["side"] == -1 and "FADE" in " ".join(sig["reasons"])
+    assert sig["final"] == pytest.approx(sig["entry"] - 2.0 * sig["risk"], abs=0.25)
+    assert any(e["type"] in ("t1", "final") for e in ev)
+    s = AlphaStrategy(AlphaParams())
+    s.start_day(_ctx(), _warm())                                         # mode off -> no trade
+    assert "signal" not in [e["type"] for e in _run(s, _orb_day("down").bars)]
+
+
+def test_backtest_builds_orx_history_without_lookahead():
+    from abg.alpha.context import contexts_from_intraday
+    bars = random_walk_bars(8, seed=4, minutes=5)
+    ctxs = contexts_from_intraday(bars)
+    days = sorted(ctxs)
+    assert ctxs[days[0]][0].orx_mode == "off" and ctxs[days[0]][0].orx_history == []
+    assert len(ctxs[days[4]][0].orx_history) == 4                        # only the 4 prior sessions

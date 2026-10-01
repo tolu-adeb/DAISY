@@ -62,7 +62,7 @@ def run_backtest(bars: pd.DataFrame, params: AlphaParams | None = None, daily: p
     strat = AlphaStrategy(params, learner)
     minutes = bar_minutes(bars)
     sessions = split_sessions(bars)
-    ctxs = contexts_from_intraday(bars, daily, events_for)
+    ctxs = contexts_from_intraday(bars, daily, events_for, params)
     trades, day_rows, events = [], [], []
     for d, (ctx, rth) in sorted(ctxs.items()):
         if days is not None and d not in days:
@@ -140,10 +140,9 @@ def _group(trades, keyf) -> dict:
 
 # --------------------------------------------------------------------------- walk-forward
 DEFAULT_GRID = {
-    "entry_end": ["10:00", "10:30", "11:00"],
-    "be_mode": ["t1", "t1_close", "lock"],
-    "final_r": [2.0, 2.5, 3.0],
-    "stop_after_loss": [True, False],
+    "orx_k": [0.6, 0.8, 1.0],
+    "orx_final_r": [1.5, 2.0, 3.0],
+    "orx_lookback": [3, 5],
 }
 
 

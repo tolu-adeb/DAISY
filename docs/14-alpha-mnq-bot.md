@@ -5,10 +5,10 @@ the trade lifecycle to its own Discord channel, in the same style as the signal 
 pre-market brief → trade idea → signal validated → Target 1 → runner → final, stop or break-even →
 day closed. Every message says why. The backtester runs the exact code the live bot runs.
 
-> **Status: TEST.** Every message is tagged `TEST · paper signals`. It has not yet been backtested on
-> real intraday MNQ data: the sandbox it was built in can't download market data, and a daily CSV
-> can't test an intraday strategy. Run the backtest in §14.4 on your PC first. Don't point a
-> copy-trader (Alerio) at this channel until both the backtest and a few weeks of paper results hold up.
+> **Status: TEST.** Every message is tagged `TEST · paper signals`. The one setup the data supports
+> was found and checked on only ~42 sessions of 5-minute bars (Aug 3 – Oct 1, 2026) - about 30
+> trades. That is a hypothesis worth paper-trading, not proof. Don't point a copy-trader (Alerio) at
+> this channel until weeks of paper results hold up.
 
 ## 14.1 What the evidence says (and why the rules look like this)
 
@@ -51,7 +51,52 @@ Same profit, less than a third of the drawdown. These rules are built into the b
 You can also replay any service's DiscordKit export through `abg alpha journal` to check this on
 its own record.
 
+## 14.1b What the intraday data says (MNQ 5-min, Aug 3 – Oct 1, 2026)
+
+The first version ran the three setups in the table further down. On real bars it lost: 25 trades, 52% win,
+−76 pts, profit factor 0.91. The sweep setup did most of the damage (22 trades, −138 pts).
+
+Looking at the fit window only (Aug 3 – Sep 10):
+
+- **The opening move mostly reversed.** The 09:30–09:45 drive carried on to 10:30 only 39% of the time.
+- **Breakouts failed on average.** Taking the first 5-min close outside the 15-min opening range lost
+  28 pts an hour later.
+- **But it came in streaks.** Some weeks breakouts ran, other weeks they reversed. Always fading the
+  first breakout made +0.18R a trade, and always following it lost −0.16R.
+
+**Adaptive rule:** each morning, replay the last 3 sessions both ways, then trade today in the mode
+that earned more, or stand aside if neither did.
+
+| Version (stop 0.8 × opening ATR, half at 1R, final 2R) | Trades | Avg R | Net pts | PF | Max DD |
+|---|---|---|---|---|---|
+| Whole sample, engine with costs | 31 | **+0.36** | **+664** | 2.25 | 184 pts |
+| Sep 11 – Oct 1 only | 12 | +0.23 | +103 | 1.44 | 84 pts |
+| Walk-forward: settings fitted on Aug 3 – Sep 10, tested Sep 11 – Oct 1 | 9 | +0.28 | +101 | 1.53 | 102 pts |
+
+**Robustness.**
+- The result stayed positive across most nearby variants: opening range 5 or 15 min, cut-off
+  10:00–11:00, final target 1.5–3R.
+- It faded with a 30-minute range.
+- On random-walk data the same rule shows −0.06R over 294 trades, so the mode choice isn't
+  manufacturing an edge.
+
+**The caveat.** The rule was chosen after looking at these 42 days. With about 30 trades, +0.36R is
+roughly two standard errors from zero. Treat it as promising, not proven.
+
 ## 14.2 The strategy
+
+**Default setup - `orx`, the adaptive opening-range trade.**
+- **Mode.** Chosen before the open, as above: follow, fade or off. It is shown in the 09:25 brief with
+  the last 3 sessions' numbers.
+- **Entry.** The first 5-min close outside the 09:30–09:45 range, before 10:30. Take it in the
+  day's mode.
+- **Exits.** Stop at 0.8 × the average 5-min range of the opening 15 minutes. Target 1 at 1R banks
+  half and moves the stop to break-even. Final target at 2R.
+- **Frequency.** At most one trade a day.
+
+The three original setups below are still in the code. They are off by default (`setups` in
+`alpha_params.json`) because they lost on real bars.
+
 
 All times are ET. The base bars are 1-minute (5-minute works). Setup checks run on 5-minute closes.
 
@@ -81,10 +126,18 @@ All times are ET. The base bars are 1-minute (5-minute works). Setup checks run 
 
 ## 14.3 How it keeps up with the market
 
-1. **Every bar.** Opening range, VWAP, ATR5, session efficiency and VWAP crosses are recomputed. Each trade is labelled `trend`, `range` or `news` at entry.
-2. **Every day.** The levels, daily ATR, bias and the day's macro events are rebuilt before 9:30. The brief at 9:25 says what changed.
-3. **Every trade.** The adaptive book (`alpha_learner.json`) updates a recency-weighted, shrunk expectancy per (setup, regime). The scoring adjustment comes from it. A setup is paused in a regime after ≥ 6 trades below −0.15R, and it switches back on by itself when results recover.
-4. **Every Sunday 19:00.** A walk-forward re-fit runs on the last ~60 days of 5-min bars, over the entry cut-off, break-even style, final R and stop-after-loss. New settings are adopted only if they beat the current ones **out of sample**. Discord gets a short report either way.
+1. **Every day.** Before the open it replays the last 3 sessions, following and fading the first
+   breakout, and picks today's mode: follow, fade or stand aside. This is the main adaptive piece. It
+   also rebuilds the levels, daily ATR, lean and the day's macro events. The brief at 09:25 says which
+   mode and why.
+2. **Every bar.** Opening range, VWAP, ATR5, session efficiency and VWAP crosses are recomputed. Each
+   trade is labelled `trend`, `range` or `news` at entry.
+3. **Every trade.** The adaptive book (`alpha_learner.json`) keeps a recency-weighted, shrunk
+   expectancy per setup and condition, and adjusts the score. A setup is paused in a condition after
+   at least 6 trades below −0.15R, and switches back on by itself when results recover.
+4. **Every Sunday 19:00.** A walk-forward re-fit runs on the last ~60 days of 5-min bars. It covers
+   the stop multiple, the final R and the replay window. New settings are adopted only if they are
+   profitable out of sample after costs, on 15 or more trades, and beat the current ones.
 
 ## 14.4 Backtest it (run these on your PC — it can reach Yahoo)
 

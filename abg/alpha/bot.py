@@ -282,7 +282,7 @@ class AlphaBot:
         self.learner = AdaptiveBook.load(self.learner_path)
         bars = pd.DataFrame()
         try:
-            bars = await self._bars(self.symbol, "5m", "5d")
+            bars = await self._bars(self.symbol, "5m", "15d")
         except Exception as e:
             self.errors.append({"ts": _time.time(), "error": f"levels: {e}"[:300]})
         sessions = split_sessions(bars) if len(bars) else {}
@@ -291,6 +291,14 @@ class AlphaBot:
         daily = rth_daily(pd.concat(prior.values())) if prior else pd.DataFrame()
         pre = today[[x.time() < time(9, 30) or x.time() >= time(18, 0) for x in today.index]] if len(today) else None
         ctx = build_context(d, daily, pre if pre is not None and len(pre) else None, calendar_events(d, self.s))
+        from .context import apply_orx, orx_shadow
+        history = []
+        for k in sorted(prior):
+            g = prior[k]
+            r = g[[is_rth(x) for x in g.index]]
+            if len(r) >= 30:
+                history.append({"date": str(k), **orx_shadow(r, self.params)})
+        apply_orx(ctx, history, self.params)
         warm = []
         if prior:
             g = prior[max(prior)]

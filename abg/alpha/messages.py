@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 GREEN, RED, BLUE, GREY, YELLOW, ORANGE, TEAL = 0x2ECC71, 0xE74C3C, 0x3498DB, 0x95A5A6, 0xF1C40F, 0xF57C00, 0x13FE9E
-SETUP_NAMES = {"orb": "Opening-range breakout + retest", "sweep": "Liquidity sweep + reclaim", "vwap": "VWAP trend pullback"}
+SETUP_NAMES = {"orx": "Adaptive opening-range trade", "orb": "Opening-range breakout + retest", "sweep": "Liquidity sweep + reclaim", "vwap": "VWAP trend pullback"}
 LEVEL_NAMES = {"PDH": "yesterday's high", "PDL": "yesterday's low", "PDC": "yesterday's close", "ONH": "overnight high",
                "ONL": "overnight low", "ORH": "opening-range high", "ORL": "opening-range low", "VWAP": "VWAP"}
 
@@ -70,13 +70,26 @@ class Renderer:
         er = c.get("er5")
         regime = (f"Daily ATR ≈ {f(atr, 0)} pts. " if atr else "") + (
             "Last 5 days moved efficiently (trend-friendly)." if er and er >= 0.45 else
-            "Last 5 days were choppy - expect fakeouts; the sweep setup suits this best." if er is not None and er < 0.25 else
+            "Last 5 days were choppy - expect fakeouts." if er is not None and er < 0.25 else
             "Last 5 days were mixed.")
-        plan = [f"• **Opening range** 09:30-{_add_min('09:30', p['or_minutes'])}: a strong 5-min close outside it arms a "
-                "breakout-retest idea.",
-                "• **Sweeps**: a quick run through " + ", ".join(k for k, v in lv.items() if v and k != "PDC")
-                + " that snaps back = reversal setup."]
-        if "vwap" in p.get("setups", []):
+        setups = p.get("setups", [])
+        plan = []
+        if "orx" in setups:
+            mode, sc = c.get("orx_mode", "off"), c.get("orx_scores") or {}
+            hist = " · ".join(f"{h['date'][5:]} {h.get('dir', '-')}: follow {h['follow']:+.1f}R / fade {h['fade']:+.1f}R"
+                              for h in (c.get("orx_history") or [])[-p.get("orx_lookback", 3):] if h.get("follow") is not None)
+            plan.append(f"• **Opening range** 09:30-{_add_min('09:30', p['or_minutes'])} ET. Today's mode: **"
+                        + {"fade": "FADE the first close outside it** - recent breakouts have been failing",
+                           "follow": "FOLLOW the first close outside it** - recent breakouts have been running",
+                           "off": "STAND ASIDE** - neither following nor fading has paid lately"}[mode]
+                        + (f" (last {sc.get('sessions')} sessions: fade {sc.get('fade', 0):+.1f}R, follow {sc.get('follow', 0):+.1f}R)." if sc else ".")
+                        + (f"\n  _{hist}_" if hist else ""))
+        if "orb" in setups:
+            plan.append("• **Breakout retest**: a strong 5-min close outside the opening range arms a retest idea.")
+        if "sweep" in setups:
+            plan.append("• **Sweeps**: a quick run through " + ", ".join(k for k, v in lv.items() if v and k != "PDC")
+                        + " that snaps back = reversal setup.")
+        if "vwap" in setups:
             plan.append("• **VWAP pullback** only if the open is clearly one-sided.")
         rules = (f"New entries {p['entry_start']}-{p['entry_end']} ET · max {p['max_trades']} trades"
                  + (" · stop after the first loss" if p.get("stop_after_loss") else "")
@@ -137,7 +150,7 @@ class Renderer:
             lines.append("⚡ **Direct signal** — the setup confirmed without a heads-up.")
         if t.get("size", 1) < 1:
             lines.append("🏦 **Half size today** (FOMC).")
-        lines += ["", f"**Entry:** {f(t['entry'])}  (zone {f(z0)} – {f(z1)})",
+        lines += ["", f"**Entry:** {f(t['entry'])}" + (f"  (zone {f(z0)} – {f(z1)})" if z1 - z0 >= 0.5 else ""),
                   f"**Stop loss:** {f(t['stop'])}  (~{f(risk, 0)} pts · ≈ {usd(risk, self.pv)} per micro)", "",
                   f"**Target 1:** {f(t['t1'])}  · _bank half, stop to break-even_",
                   f"**Final target:** {f(t['final'])}  (" + (f"{LEVEL_NAMES[t['final_name']]}, " if t['final_name'] in LEVEL_NAMES else "")
