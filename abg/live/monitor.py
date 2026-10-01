@@ -161,6 +161,18 @@ class Monitor:
             except Exception as e:   # pragma: no cover - never block the portfolio monitor
                 log.exception("external signals disabled")
                 self.errors.append({"ts": time.time(), "where": "ext init", "error": str(e)[:300]})
+        # MNQ alpha bot (docs/14)
+        self.alpha = None
+        if self.s.alpha_enabled:
+            try:
+                from ..alpha.bot import AlphaBot
+                self.alpha = AlphaBot(engine, self.s, hub)
+                if self.stream is None and self.s.finnhub_api_key and self.alpha.stream_symbols():
+                    from .stream import PriceStream
+                    self.stream = PriceStream(self.s.finnhub_api_key, self._on_ticks, self.s.ext_stream_flush_seconds)
+            except Exception as e:   # pragma: no cover
+                log.exception("alpha bot disabled")
+                self.errors.append({"ts": time.time(), "where": "alpha init", "error": str(e)[:300]})
 
     # ------------------------------------------------------------------ control
     def poke(self, analysis: bool = False) -> None:
@@ -200,6 +212,8 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.gateway.run()))
             if self.scheduler is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.scheduler.run()))
+            if self.alpha is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self.alpha.run()))
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -237,7 +251,7 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler):
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha):
                 if comp is not None:
                     comp.stop()
             for t in self._aux_tasks:
@@ -268,6 +282,8 @@ class Monitor:
     def _refresh_stream(self) -> None:
         """Stream every tracked symbol the websocket can serve; the rest go to the fast poll."""
         syms = set(self._ext_symbols()) | set(self.store.symbols(self.pf))
+        if self.alpha is not None:
+            syms |= set(self.alpha.stream_symbols())
         if self.stream is not None:
             self.fast_symbols = self.stream.set_symbols(syms)
         else:
@@ -275,8 +291,10 @@ class Monitor:
 
     async def _on_ticks(self, batch: dict[str, dict]) -> None:
         await self._guard("price alerts", self._check_price_rules(batch))
+        if self.alpha is not None:
+            await self._guard("alpha ticks", self.alpha.on_ticks(batch))
         if self.ext is not None:
-            await self.ext.on_quotes(batch)
+            await self.ext.on_quotes({k: v for k, v in batch.items() if k in set(self._ext_symbols())} if self.alpha else batch)
 
     def _price_rule_symbols(self) -> set[str]:
         return {r.symbol for r in self.store.rules(self.pf) if r.enabled and r.kind.startswith("price_")}
@@ -451,5 +469,6 @@ class Monitor:
                           "commands": self.gateway.status() if self.gateway else {"enabled": False},
                           "scheduler": self.scheduler.status() if self.scheduler else None}
                          if self.ext is not None else None),
+            "alpha": self.alpha.status() if self.alpha is not None else {"enabled": False},
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

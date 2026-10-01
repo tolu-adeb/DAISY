@@ -218,6 +218,21 @@ class Settings(BaseSettings):
     alpaca_secret_key: str | None = None
     alpaca_live: bool = False                   # never on unless you explicitly set it
 
+    # ---------------------------------------------------------------- MNQ alpha bot (docs/14)
+    alpha_enabled: bool = False                 # run the MNQ signal bot inside the monitor
+    alpha_symbol: str = "MNQ=F"                 # futures bars for levels / direct feed
+    alpha_feed: str = "proxy"                   # proxy (real-time QQQ x ratio) | direct (poll futures bars)
+    alpha_proxy_symbol: str = "QQQ"
+    alpha_webhook_url: str | None = None        # where signals go (or bot token + alpha_channel_id)
+    alpha_channel_id: str | None = None
+    alpha_mention_role_id: str | None = None    # role pinged on signals / targets / stops
+    alpha_tag: str = "TEST"                     # shown on every message; set "" when you trust it
+    alpha_contracts: float = 1.0                # micros, for the $ figures
+    alpha_commission_rt: float = 1.24           # $ per micro round turn (backtests)
+    alpha_post_ideas: bool = True               # post the "get ready" trade ideas
+    alpha_post_brief: bool = True               # 09:25 pre-market brief
+    alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
+
     log_level: str = "WARNING"
 
     # ---------------------------------------------------------------- helpers

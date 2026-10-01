@@ -2,6 +2,7 @@
 "use strict";
 
 async function loadMarkets() {
+  loadAlpha();
   if (!$("#mk-groups").children.length) $("#mk-groups").innerHTML = '<p class="muted">Loading markets… (the first load quotes ~30 instruments and can take a few seconds)</p>';
   // calendar and models don't depend on market data: render them straight away
   api("/api/calendar?days=21").then(renderCalendar).catch((e) => { $("#mk-calendar").innerHTML = `<p class="muted">${esc(e.message)}</p>`; });
@@ -35,6 +36,37 @@ function renderCalendar(cal) {
     : '<p class="muted">No scheduled releases in the next 3 weeks.</p>';
 }
 window.loadMarkets = loadMarkets;
+
+// ------------------------------------------------------------------ MNQ signal bot (docs/14)
+const alphaPts = (x) => (x == null ? "—" : (x > 0 ? "+" : "") + Number(x).toFixed(1));
+async function loadAlpha() {
+  let r;
+  try { r = await api("/api/alpha"); } catch (e) { $("#mk-alpha").innerHTML = `<h2>MNQ signal bot</h2><p class="muted">${esc(e.message)}</p>`; return; }
+  const st = r.status || {}, bt = r.backtest, tr = r.trades || [];
+  const head = `<div class="card-head"><h2>MNQ signal bot</h2><span class="muted">${st.enabled
+    ? `feed ${esc(st.feed)}${st.ratio ? ` · ratio ${Number(st.ratio).toFixed(3)}` : ""} · Discord ${esc((st.discord || {}).mode || "off")}`
+    : "off — set ABG_ALPHA_ENABLED=true (docs/14)"}</span></div>`;
+  const b = (st.brief || {}).ctx;
+  const brief = b ? `<p><b>${esc(b.bias_label)}</b> lean · PDH ${fmt(b.pdh)} · PDL ${fmt(b.pdl)} · ONH ${fmt(b.onh)} · ONL ${fmt(b.onl)}
+      ${(b.events || []).length ? ` · <span class="neg">news: ${b.events.map((e) => esc(e.time + " " + e.name)).join(", ")}</span>` : ""}</p>` : "";
+  const ot = st.open_trade;
+  const open = ot ? `<p><b>Open: #${ot.id} ${esc(ot.side_label)} ${esc(ot.setup)}</b> @ ${fmt(ot.entry)} · stop ${fmt(ot.stop)} · T1 ${fmt(ot.t1)} · final ${fmt(ot.final)}</p>`
+    : st.done_reason ? `<p class="muted">Done for today: ${esc(st.done_reason)}</p>` : "";
+  const net = tr.reduce((a, t) => a + t.pts, 0);
+  const trades = tr.length ? `<table><thead><tr><th>Date</th><th>Time</th><th>Side</th><th>Setup</th><th class="n">Entry</th><th>Exit</th><th class="n">Pts</th><th class="n">R</th></tr></thead><tbody>
+      ${tr.slice(0, 12).map((t) => `<tr><td>${esc(t.date)}</td><td>${esc((t.opened || "").slice(11, 16))}</td><td>${esc(t.side_label)}</td><td>${esc(t.setup)}</td>
+      <td class="n">${fmt(t.entry)}</td><td>${esc(t.exit_reason)}</td><td class="n ${t.pts > 0 ? "pos" : t.pts < 0 ? "neg" : ""}">${alphaPts(t.pts)}</td><td class="n">${Number(t.r).toFixed(2)}</td></tr>`).join("")}
+      </tbody></table><p class="muted">${tr.length} live/paper trades · net ${alphaPts(net)} pts</p>` : '<p class="muted">No live trades recorded yet.</p>';
+  const s = bt && bt.stats;
+  const btHtml = s && s.trades ? `<p><b>Backtest</b> (${esc((bt.bars || {}).source || "")}, ${s.days} days): ${s.trades} trades · win ${(s.win_rate * 100).toFixed(0)}% ·
+      avg ${Number(s.avg_r).toFixed(2)}R · net ${alphaPts(s.net_pts)} pts · max DD ${fmt(s.max_dd_pts)} pts · ${s.net_usd_per_micro >= 0 ? "+" : "-"}$${Math.abs(s.net_usd_per_micro).toFixed(0)}/micro after costs
+      ${bt.walk_forward && bt.walk_forward.test_stats && bt.walk_forward.test_stats.trades ? `<br><span class="muted">Out of sample: ${bt.walk_forward.test_stats.trades} trades, avg ${Number(bt.walk_forward.test_stats.avg_r).toFixed(2)}R</span>` : ""}</p>`
+    : '<p class="muted">No backtest yet — run <code>abg alpha backtest --walk-forward</code>.</p>';
+  const ln = st.learner || r.learner || [];
+  const learn = ln.length ? `<p class="muted">Adaptive: ${ln.map((x) => `${esc(x.setup)}/${esc(x.regime)} ${Number(x.expectancy).toFixed(2)}R${x.active ? "" : " (paused)"}`).join(" · ")}</p>` : "";
+  $("#mk-alpha").innerHTML = head + brief + open + btHtml + trades + learn;
+}
+window.loadAlpha = loadAlpha;
 
 function curveHtml(m) {
   const pts = [["3m", m.curve["3m"]], ["5y", m.curve["5y"]], ["10y", m.curve["10y"]], ["30y", m.curve["30y"]]].filter((p) => p[1] != null);

@@ -88,3 +88,31 @@ async def backtests(request: Request):
         out.append({"name": p.stem, "overall": rep.get("overall"), "by": rep.get("by"), "grade_note": rep.get("grade_note"),
                     "equity_curve": rep.get("equity_curve")})
     return {"backtests": out}
+
+
+# --------------------------------------------------------------------------- MNQ alpha bot (docs/14)
+@router.get("/alpha")
+async def alpha_status(request: Request):
+    s = request.app.state.engine.settings
+    bot = getattr(request.app.state.monitor, "alpha", None)
+    dd = Path(s.data_dir).expanduser()
+    out = {"status": bot.status() if bot else {"enabled": False, "hint": "set ABG_ALPHA_ENABLED=true and restart"}}
+    try:
+        from ..alpha.bot import AlphaStore
+        out["trades"] = AlphaStore(dd / "alpha.sqlite3").trades(100)
+    except Exception:
+        out["trades"] = []
+    p = dd / "alpha_backtest.json"
+    if p.exists():
+        try:
+            bt = json.loads(p.read_text())
+            out["backtest"] = {"stats": bt["backtest"]["stats"], "bars": bt.get("bars"), "at": p.stat().st_mtime,
+                               "walk_forward": {k: bt["walk_forward"].get(k) for k in ("best", "test_stats", "default_test_stats",
+                                                                                         "train_days", "test_days")}
+                               if bt.get("walk_forward") else None}
+        except Exception:
+            out["backtest"] = None
+    if bot is None:
+        from ..alpha.learn import AdaptiveBook
+        out["learner"] = AdaptiveBook.load(dd / "alpha_learner.json").summary()
+    return jsonable(out)

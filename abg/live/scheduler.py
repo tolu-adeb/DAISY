@@ -77,8 +77,20 @@ class Scheduler:
         yield ("healthcheck", bool(s.healthcheck_url) and time.time() - self.last.get("healthcheck", 0) >= 290,
                self.healthcheck)
         yield ("watchdog", time.time() - self.last.get("watchdog", 0) >= 60, self.watchdog)
+        al = getattr(self.m, "alpha", None)
+        yield ("alpha_optimize", al is not None and s.alpha_auto_optimize and now.weekday() == 6 and now.hour >= 19
+               and self._once(f"alpha_opt:{wk}"), self.alpha_optimize)
 
     # ------------------------------------------------------------------ jobs
+    async def alpha_optimize(self) -> None:
+        res = await self.m.alpha.optimize()
+        ts = res["test_stats"]
+        await self.tr.post_portfolio("🧪 MNQ bot weekly re-fit", [
+            f"Walk-forward on the last ~60 days of 5-min bars: best {res['best']}",
+            f"Out-of-sample: {ts.get('trades', 0)} trades, avg {ts.get('avg_r') or 0:+.2f}R, net {ts.get('net_pts') or 0:+.1f} pts",
+            "Adopted for next week." if res["adopted"] else "Not adopted - it didn't beat the current settings out of sample."],
+            "info", key="alpha_opt")
+
     async def weekly_recap(self) -> None:
         tr = self.tr
         since = time.time() - 7 * 86400

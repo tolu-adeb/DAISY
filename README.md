@@ -65,6 +65,7 @@ abg portfolio set AAPL --stop 300 --target 380
 abg portfolio show                       # live P&L, weights, portfolio VaR
 abg alert add NVDA price_above 150
 abg alert cross NVDA 150                 # alert when price crosses 150 (--up / --down / --repeat)
+abg alpha backtest --walk-forward              # MNQ signal bot backtest (docs/14)
 abg monitor                              # run the live signal monitor in this window
 abg notify-test                          # check Discord / email / desktop alerts
 
@@ -112,6 +113,7 @@ asyncio.run(main())
 11. [External signals](docs/11-external-signals.md): signal parser, trade-idea lifecycle, entry grading, Discord polling and relays
 12. [Markets, real-time, risk & learning](docs/12-markets-risk-learning.md): futures & bonds, streaming prices, calendar, portfolio and prop-firm risk, confirmation, AI, charts, slash commands, backtests, model training, broker bridge
 13. [Deployment](docs/13-deployment.md): always-on server, Tailscale, tokens, backups, health checks, updates
+14. [MNQ signal bot](docs/14-alpha-mnq-bot.md): opening-session MNQ strategy, backtests, adaptive filter, Discord lifecycle messages (test mode)
 
 ## Tests
 
