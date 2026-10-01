@@ -269,8 +269,8 @@ class AlphaBot:
 
     # ------------------------------------------------------------------ day setup
     async def _bars(self, symbol: str, interval: str, period: str) -> pd.DataFrame:
-        ph = await self.engine.history(symbol, period=period, interval=interval, use_cache=False)
-        return utc_naive_to_et(ph.df)
+        res = await self.engine.history(symbol, period=period, interval=interval, use_cache=False)
+        return utc_naive_to_et(getattr(res, "value", res).df)   # engine returns Fetched(value=PriceHistory)
 
     async def prepare_day(self, d: date) -> None:
         self.day, self.brief_posted, self.ended = d, False, False
@@ -421,7 +421,8 @@ class AlphaBot:
         bars = await self._bars(self.symbol, "5m", "60d")
         res = await asyncio.to_thread(walk_forward, bars, self.params)
         ts, tst = res["test_stats"], res["default_test_stats"]
-        better = ts.get("trades", 0) >= 8 and (ts.get("avg_r") or -9) > max(0.0, tst.get("avg_r") or -9)
+        from .backtest import worth_adopting
+        better = worth_adopting(ts, tst)
         res["adopted"] = bool(save and better)
         if res["adopted"]:
             self.params_path.write_text(json.dumps({"params": res["params"], "fitted": str(datetime.now(NY)),

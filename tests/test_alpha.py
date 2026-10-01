@@ -347,3 +347,27 @@ def test_api_alpha_endpoint(monkeypatch, tmp_path):
     with TestClient(app) as c:
         r = c.get("/api/alpha").json()
         assert r["status"]["enabled"] is True and r["status"]["feed"] == "proxy" and r["trades"] == []
+
+
+async def test_fetch_intraday_unwraps_engine_result():
+    from abg.alpha.data import fetch_intraday
+    from abg.models import Fetched, PriceHistory, Provenance
+
+    idx = pd.date_range("2026-09-15 13:30", periods=3, freq="5min")          # naive UTC, like the engine
+    ph = PriceHistory.from_frame("MNQ=F", pd.DataFrame({"open": [1.0, 2, 3], "high": [1.5, 2.5, 3.5], "low": [0.5, 1.5, 2.5],
+                                                         "close": [1.2, 2.2, 3.2], "volume": [1, 1, 1]}, index=idx), "test", "5m")
+
+    class Eng:
+        async def history(self, *a, **k):
+            return Fetched(ph, Provenance("history", "MNQ=F", "test", 1.0))
+    df = await fetch_intraday(Eng())
+    assert df.index[0].hour == 9 and df.index[0].minute == 30 and str(df.index.tz) == "America/New_York"
+
+
+def test_adoption_rule():
+    from abg.alpha.backtest import worth_adopting
+    good = {"trades": 20, "avg_r": 0.2, "net_usd_per_micro": 300}
+    assert worth_adopting(good, {"avg_r": 0.1})
+    assert not worth_adopting({**good, "net_usd_per_micro": -5}, {"avg_r": 0.1})
+    assert not worth_adopting({**good, "trades": 10}, {"avg_r": 0.1})
+    assert not worth_adopting(good, {"avg_r": 0.3})

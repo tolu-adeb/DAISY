@@ -98,13 +98,15 @@ def backtest_cmd(csv: Optional[Path] = typer.Option(None, help="Intraday bars CS
         full["walk_forward"] = wf
         ts, ds = wf["test_stats"], wf["default_test_stats"]
         if save:
-            if ts.get("trades", 0) >= 8 and (ts.get("avg_r") or -9) > max(0.0, ds.get("avg_r") or -9):
+            from .alpha.backtest import worth_adopting
+            if worth_adopting(ts, ds):
                 params_path.parent.mkdir(parents=True, exist_ok=True)
                 params_path.write_text(json.dumps({"params": wf["params"], "fitted": str(date.today()),
                                                    "test_stats": {k: ts.get(k) for k in ("trades", "avg_r", "net_pts")}}, indent=1))
                 console.print(f"[green]saved → {params_path}[/green]")
             else:
-                console.print("[yellow]not saved: the fitted settings didn't beat the defaults out of sample[/yellow]")
+                console.print("[yellow]not saved: out of sample the fitted settings need 15+ trades, a positive result after "
+                              "costs, and to beat the defaults[/yellow]")
     if seed_learner:
         path = Path(s.data_dir).expanduser() / "alpha_learner.json"
         book.save(path)

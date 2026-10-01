@@ -154,6 +154,13 @@ def _objective(st: dict, min_trades: int) -> float:
     return st["avg_r"] * math.sqrt(n) - 0.002 * st.get("max_dd_pts", 0)
 
 
+def worth_adopting(test: dict, default_test: dict) -> bool:
+    """Only replace settings when the fitted ones are profitable out of sample (after costs) on a
+    meaningful number of trades AND beat the defaults there."""
+    return (test.get("trades", 0) >= 15 and (test.get("avg_r") or 0) > 0.05 and (test.get("net_usd_per_micro") or 0) > 0
+            and (test.get("avg_r") or 0) > (default_test.get("avg_r") or -9))
+
+
 def _subset(res: BTResult, days: list[date], commission_rt: float, point_value: float) -> dict:
     keep = {str(d) for d in days}
     return summarize([t for t in res.trades if t["date"] in keep], [d for d in res.days if d["date"] in keep],

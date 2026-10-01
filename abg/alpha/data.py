@@ -190,8 +190,8 @@ def utc_naive_to_et(df: pd.DataFrame) -> pd.DataFrame:
 
 
 async def fetch_intraday(engine, symbol: str = "MNQ=F", interval: str = "5m", period: str = "60d") -> pd.DataFrame:
-    ph = await engine.history(symbol, period=period, interval=interval, use_cache=False)
-    return utc_naive_to_et(ph.df)
+    res = await engine.history(symbol, period=period, interval=interval, use_cache=False)
+    return utc_naive_to_et(getattr(res, "value", res).df)
 
 
 def session_date(ts: pd.Timestamp) -> date:
