@@ -43,7 +43,7 @@ def test_day_rules_stale_chase_and_blackout():
     a = parse_alert(TM, ts=T - timedelta(minutes=5))
     assert "old" in eng.on_alert(a, now=T)[0].reasons[0]                       # late alert
     a = parse_alert(TM, ts=T)
-    assert "past the entry" in eng.on_alert(a, now=T, price=30680)[0].reasons[0]  # price ran 29 pts
+    assert "past the entry" in eng.on_alert(a, now=T, price=30670)[0].reasons[0]  # price ran 39 pts
     t2 = T.replace(hour=10, minute=45)
     assert "blackout" in eng.on_alert(parse_alert(TM, ts=t2), now=t2)[0].reasons[0]
     eng.accounts["lucid"].roll(T.date())
@@ -75,7 +75,7 @@ def _bars(prices):
 
 
 def test_replay_fills_brackets_on_bars():
-    flat = [(30710, 30715, 30700, 30710)] * 4
+    flat = [(30710, 30715, 30700, 30710)] * 5                 # 09:30-09:54; the entry comes at 09:50:05
     up = [(30710, 30800, 30705, 30795)]                       # runs through the stop
     msgs = [{"ts": T + timedelta(seconds=5), "id": "m1", "ref": None, "text": TM}]
     bars = _bars(flat + up + flat)

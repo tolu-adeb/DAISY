@@ -232,6 +232,14 @@ class Settings(BaseSettings):
     alpha_post_ideas: bool = True               # post the "get ready" trade ideas
     alpha_post_brief: bool = True               # 09:25 pre-market brief
     alpha_stale_sec: int = 120                  # never post a trade message whose bar is older than this (restarts replay the morning); 0 = off
+    # ---- Alerio copy-trading integration (docs/15): read-only sync + live shadow of the TradingMind route
+    alerio_cookie: str | None = None            # Cookie header from app.alerio.dev (keep it in .env only)
+    alerio_watch: bool = False                  # poll Alerio during the session and shadow every signal
+    alerio_poll_sec: int = 20
+    alerio_webhook_url: str | None = None       # Discord webhook for shadow decisions / account alerts
+    alerio_budget_usd: float = 400.0            # terminal route: $ risk per trade
+    alerio_max_contracts: int = 8
+    alerio_dd_limit_usd: float = 2000.0         # your prop account's trailing drawdown, for the breach odds
     alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
     alpha_min_win_rate: float = 0.65            # re-fits only consider settings with at least this win rate
 

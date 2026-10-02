@@ -82,7 +82,56 @@ API: `GET /api/routes`, `GET /api/routes/log`, `POST /api/routes/test {"route", 
 
 Every decision lists each check with ✓/✗ and the reason. The activity log is `ABG_DATA_DIR/routes_log.jsonl`.
 
-## 15.5 Next steps
+## 15.5 Alerio integration (`abg alerio`, Oct 2026)
+
+**What the Alerio account showed** (route "Trading Mind", 31 signals from Aug 25 to Oct 1, 18 live fills, +$2,059 in total):
+
+| Problem | How often | Effect |
+|---|---|---|
+| Follow-up messages ignored: `allow_exits`, `allow_trims` and `allow_sl_adjustments` are all off | 22 messages | "Move stop to BE", "move NQ stop to X" and "TRADE CLOSED" were all logged as *Unactionable*. Only the bracket managed the trade. |
+| Market entries | 11 of 18 fills ≥ 10 pts worse than the optimal | Fills averaged **14.4 pts** worse than the optimal. On Oct 1 #1 the fill was 67 pts worse, right at Target 1. |
+| Full size when the signal said to size down | 8 | Alerio's parser read "size smaller" (`half_size` in its raw output) but the order went out at full size. |
+| Risk far above the `risk_per_trade` setting | 8 | eval#2 is set to $350 but risked $1,108–1,420 on fixed 8 micros. FFF is set to $200 but risked $2,000 on Oct 1. |
+| Orders kept going to locked accounts | 4 rejections | After 9/30's −$1,172 (eval#2), the broker set eval#2 to liquidation-only ("drawdown breached at end of day"). FFF later went liquidation-only too ("low net liquidating value"). Alerio kept routing, then opened a simulated position. |
+
+**Same signals replayed on 5-minute bars** (`abg alerio compare`, $2,000 trailing-drawdown breach odds from 2,000 resampled months):
+
+| Rule set | Trades | Net | Worst trade | Max DD | Median month | P(breach) |
+|---|---|---|---|---|---|---|
+| Alerio as configured (8 micros) | 29 | −$1,304 | −$1,702 | $4,357 | −$1,088 | 92% |
+| Terminal, $300 a trade | 17 | +$864 | −$283 | $385 | +$841 | 0.3% |
+| Terminal, $400 a trade (default) | 17 | +$989 | −$377 | $614 | +$974 | 3.4% |
+| Terminal, $600 a trade | 17 | +$1,418 | −$599 | $997 | +$1,410 | 21% |
+
+The terminal's route (`guarded_route`):
+
+- Sizes each trade from a $ budget.
+- Enters at market, but skips if price is more than 30 pts / 0.6R past the optimal.
+- Drops targets the fill has already passed.
+- Follows the service's own break-even, stop-move and close messages.
+- Has a first-loss stop and the 10:30–11:30 blackout.
+- Is flat by 15:00.
+
+What didn't work: limit orders at the optimal price. They missed the runners and filled the losers (−$279 at $400).
+
+How far to trust the replay: replaying Alerio's own 18 live trades gave +$2,973 against the real +$2,059. Treat the replay as mildly optimistic, and treat 30 signals as a small sample.
+
+**Wiring:**
+
+- `abg alerio sync` reads Alerio's dashboard API with your session cookie (`ABG_ALERIO_COOKIE`). It is read-only.
+  - It writes `ABG_DATA_DIR/alerio/snapshot.json`, which holds the route settings, the accounts and their status, and every signal with its follow-ups and Alerio's executions.
+  - `abg alerio import FILE` loads a snapshot saved another way.
+- `abg alerio status | audit | compare | route` cover account status, the audit, the replay comparison, and saving the terminal's TradingMind route.
+- `ABG_ALERIO_WATCH=true` runs a live shadow inside the monitor.
+  - Every 20 s it reads the feed. For each new signal it posts "terminal says TAKE n MNQ / SKIP (why)" next to what Alerio is about to send, to `ABG_ALERIO_WEBHOOK_URL` and the dashboard.
+  - It flags fills and rejected (locked) accounts as they happen.
+  - It refreshes the snapshot every 30 min.
+- The dashboard has a **Markets → Copy trading** card: accounts, the replay table, the per-signal audit and the live shadow.
+- `/api/alerio` serves the same data.
+
+The cookie is a login credential. It belongs only in `.env`, and it expires when you log out. Nothing in the terminal can place, change or cancel orders in Alerio or at the broker.
+
+## 15.6 Next steps
 
 - A live listener: feed messages from the external-signals Discord gateway (docs/11) into a route.
 - A broker adapter (Tradovate) behind the same `Decision.orders`.

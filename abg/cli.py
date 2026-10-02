@@ -370,6 +370,7 @@ from . import cli_ext  # noqa: E402,F401  (registers `abg ext ...` external-sign
 from . import cli_more  # noqa: E402,F401  (markets, calendar, backtest, train, backup)
 from . import cli_alpha  # noqa: E402,F401  (MNQ signal bot: `abg alpha ...`)
 from . import cli_routes  # noqa: E402,F401  (alert routing: `abg route ...`)
+from . import cli_alerio  # noqa: E402,F401  (Alerio copy-trading: `abg alerio ...`)
 
 if __name__ == "__main__":  # pragma: no cover
     app()

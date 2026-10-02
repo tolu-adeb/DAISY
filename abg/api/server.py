@@ -260,9 +260,11 @@ from .markets_routes import router as markets_router  # noqa: E402
 app.include_router(ext_router)
 app.include_router(markets_router)
 
+from .routes_api import alerio_router  # noqa: E402
 from .routes_api import router as routes_router  # noqa: E402
 
 app.include_router(routes_router)
+app.include_router(alerio_router)
 
 # --------------------------------------------------------------------------- dashboard
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

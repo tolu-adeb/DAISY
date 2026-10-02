@@ -46,3 +46,28 @@ async def route_test(request: Request, body: _Test):
     a = parse_alert(body.text, ts=now)
     ds = RouteEngine(routes[body.route]).on_alert(a, now=now, price=body.price)
     return {"alert": a.to_dict(), "decisions": [d.to_dict() for d in ds]}
+
+
+# --------------------------------------------------------------------------- Alerio (docs/15)
+alerio_router = APIRouter(prefix="/api/alerio", tags=["alerio"])
+
+
+@alerio_router.get("")
+async def alerio_overview(request: Request):
+    """Accounts, the latest audit and the cached comparison, plus the live shadow when the watcher runs."""
+    import json as _json
+    from ..routes.alerio import audit, load_snapshot
+    dd = _dd(request)
+    w = getattr(getattr(request.app.state, "monitor", None), "alerio", None)
+    out = {"watch": w.status() if w is not None else {"enabled": False}}
+    try:
+        snap = load_snapshot(dd)
+    except FileNotFoundError:
+        out["snapshot"] = None
+        return out
+    a = audit(snap)
+    out["snapshot"] = {"exported_at": snap.get("exported_at"), "route": snap.get("route"), "accounts": snap.get("accounts")}
+    out["audit"] = {k: v for k, v in a.items() if k != "rows"} | {"rows": a["rows"][-12:]}
+    p = dd / "alerio" / "compare.json"
+    out["compare"] = _json.loads(p.read_text()) if p.exists() else None
+    return out

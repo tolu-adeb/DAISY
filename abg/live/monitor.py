@@ -174,6 +174,16 @@ class Monitor:
                 log.exception("alpha bot disabled")
                 self.errors.append({"ts": time.time(), "where": "alpha init", "error": str(e)[:300]})
 
+        # Alerio copy-trading shadow (docs/15)
+        self.alerio = None
+        if self.s.alerio_watch and self.s.alerio_cookie:
+            try:
+                from ..routes.watch import AlerioWatcher
+                self.alerio = AlerioWatcher(self.s, hub)
+            except Exception as e:   # pragma: no cover
+                log.exception("alerio watcher disabled")
+                self.errors.append({"ts": time.time(), "where": "alerio init", "error": str(e)[:300]})
+
     # ------------------------------------------------------------------ control
     def poke(self, analysis: bool = False) -> None:
         """Portfolio changed (or user asked for a refresh): sweep now.  Pokes that arrive while
@@ -214,6 +224,8 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.scheduler.run()))
             if self.alpha is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.alpha.run()))
+            if self.alerio is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self.alerio.run()))
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -251,7 +263,7 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler, self.alpha):
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio):
                 if comp is not None:
                     comp.stop()
             for t in self._aux_tasks:
@@ -470,5 +482,6 @@ class Monitor:
                           "scheduler": self.scheduler.status() if self.scheduler else None}
                          if self.ext is not None else None),
             "alpha": self.alpha.status() if self.alpha is not None else {"enabled": False},
+            "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

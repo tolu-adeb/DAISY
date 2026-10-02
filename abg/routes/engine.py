@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from .alerts import Alert
@@ -64,6 +64,9 @@ class AccountState:
     trades_today: int = 0
     lost_today: bool = False
     commission_rt: float = 1.24          # per contract round turn
+    status: str = "ok"                   # ok | liquidation_only | disabled  (from the broker / Alerio metrics)
+    status_reason: str = ""
+    floor: float | None = None           # equity level the prop firm liquidates at (None = unknown)
     positions: dict[str, Position] = field(default_factory=dict)
     pending: dict[str, dict] = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
@@ -154,6 +157,9 @@ class RouteEngine:
         d.symbol = sym
         pv = POINT_VALUE.get(sym, 2.0)
         t = now.time()
+        if not self._check(d, "account", acct.status == "ok",
+                           f"account is {acct.status.replace('_', '-')}" + (f" ({acct.status_reason})" if acct.status_reason else "")):
+            return
         ok = self._check(d, "symbol", a.symbol in r.allowed_symbols or sym in r.allowed_symbols,
                          f"{a.symbol} is not on this route's list")
         ok = ok and self._check(d, "parsed", a.side != 0 and a.entry is not None,
@@ -184,13 +190,21 @@ class RouteEngine:
                                 f"daily loss limit hit ({acct.day_pnl:+,.0f})")
         ok = ok and self._check(d, "profit lock", not (r.daily_profit_target_usd and acct.day_pnl >= r.daily_profit_target_usd),
                                 f"day is up {acct.day_pnl:+,.0f} - profit target reached, done")
-        ok = ok and self._check(d, "one at a time", not any(p.symbol == sym for p in acct.positions.values()),
-                                f"already in a {sym} position")
+        ok = ok and self._check(d, "one at a time", not any(p.symbol == sym for p in acct.positions.values())
+                                and not any(o["symbol"] == sym for o in acct.pending.values()),
+                                f"already in (or waiting to enter) a {sym} position")
         if not ok:
             return
         # ---- prices
         px = price if price is not None else (a.price if a.price is not None else a.entry)
-        fill = _rt(a.entry - a.side * r.limit_offset_ticks * 0.25) if r.entry_type == "limit" else _rt(px)
+        in_zone = (a.entry_lo is not None and a.entry_hi is not None and a.entry_lo <= px <= a.entry_hi) or abs(px - a.entry) <= 1.0
+        mode = r.entry_type
+        if mode == "smart":
+            mode = "market" if in_zone else "limit"
+        fill = _rt(a.entry - a.side * r.limit_offset_ticks * 0.25) if mode == "limit" else _rt(px)
+        if mode == "limit" and (px - fill) * a.side < 0:
+            mode, fill = "market", _rt(px)          # price is already better than the limit: just take it
+        d.checks.append(["entry", True, f"{mode} @ {fill:,.2f}" + ("" if mode == "market" else f" (price {px:,.2f}, good for {r.limit_expiry_min} min)")])
         stop = a.stop
         if stop is None:
             if r.require_stop and not r.default_stop_pts:
@@ -204,8 +218,8 @@ class RouteEngine:
         alert_risk = a.risk_pts or risk
         past = (px - a.entry) * a.side
         lim = min(r.max_chase_pts, r.max_chase_r * alert_risk)
-        if r.entry_type == "market" and not self._check(d, "chase", past <= lim,
-                                                         f"price is {past:.1f} pts past the entry (max {lim:.1f}) - not chasing"):
+        if mode == "market" and not self._check(d, "chase", past <= lim,
+                                                 f"price is {past:.1f} pts past the entry (max {lim:.1f}) - not chasing"):
             return
         if risk > r.max_stop_pts:
             if r.stop_cap_mode == "tighten":
@@ -221,6 +235,8 @@ class RouteEngine:
         budgets = [("per-trade risk", r.risk_per_trade_usd if r.sizing == "risk" else math.inf)]
         if r.daily_loss_limit_usd:
             budgets.append(("today's loss room", r.daily_loss_limit_usd + min(0.0, acct.day_pnl)))
+        if acct.floor is not None:
+            budgets.append(("account floor room", 0.9 * (acct.equity - acct.floor)))
         if r.trailing_drawdown_usd:
             floor = (acct.hwm or acct.equity) - r.trailing_drawdown_usd
             budgets.append(("trailing drawdown room", 0.9 * (acct.equity - floor)))
@@ -232,16 +248,22 @@ class RouteEngine:
             return
         if n < want:
             d.reasons.append(f"{n} contract{'s' if n > 1 else ''} - capped by {name} (${budget:,.0f})")
+        if mode == "market" and r.half_on_chase_pts and past > r.half_on_chase_pts and n > 1:
+            n = max(1, n // 2)
+            d.reasons.append(f"half size - entering {past:.0f} pts past the optimal")
         # ---- brackets
         trims, final = self._brackets(a, fill, risk, n)
         key = a.id or f"{sym}:{now:%H%M%S}"
         pos = Position(key, sym, a.side, n, n, fill, _rt(stop), trims, final, now, pv)
-        acct.positions[key] = pos
         acct.trades_today += 1
+        if mode == "market":
+            acct.positions[key] = pos
+        else:
+            acct.pending[key] = {"symbol": sym, "pos": pos, "expires": now + timedelta(minutes=r.limit_expiry_min)}
         d.verdict, d.contracts, d.risk_usd = "placed", n, round(n * per_c, 2)
         side = "BUY" if a.side > 0 else "SELL"
         exit_side = "SELL" if a.side > 0 else "BUY"
-        d.orders = [{"type": r.entry_type.upper(), "side": side, "qty": n, "price": fill},
+        d.orders = [{"type": mode.upper(), "side": side, "qty": n, "price": fill},
                     {"type": "STOP", "side": exit_side, "qty": n, "price": pos.stop}]
         d.orders += [{"type": "LIMIT", "side": exit_side, "qty": x["qty"], "price": x["price"], "then_stop": x["sl_after"]}
                      for x in trims if x["qty"]]
@@ -254,6 +276,8 @@ class RouteEngine:
         r = self.route.rules
         rows = [(fill + a.side * (x.at_r * risk if x.at_r is not None else (x.at_pts or 0)), x.pct, x.sl_after) for x in r.trims]
         tg = list(a.targets)
+        if r.skip_reached_targets:
+            tg = [x for x in tg if (x - fill) * a.side >= 1.0]     # a target at/through the fill isn't a target
         final = fill + a.side * r.runner_target_r * risk
         if r.alert_override == "override" and tg:
             final = tg[-1]
@@ -281,13 +305,24 @@ class RouteEngine:
 
     # ------------------------------------------------------------------ management
     def _find(self, a: Alert, acct: AccountState) -> Position | None:
-        if a.ref and a.ref in acct.positions:
-            return acct.positions[a.ref]
+        if a.ref:                                   # a reply belongs to one signal: never touch a different trade
+            return acct.positions.get(a.ref)
         sym = self.route.rules.contract_map.get(a.symbol, a.symbol)
         cands = [p for p in acct.positions.values() if p.symbol in (sym, a.symbol)] or list(acct.positions.values())
         return cands[-1] if len(cands) >= 1 else None
 
     def _manage(self, a: Alert, acct: AccountState, now: datetime, price: float | None, d: Decision) -> None:
+        pend = acct.pending.get(a.ref) if a.ref else None
+        if pend is None and not a.ref and len(acct.pending) == 1:
+            pend = next(iter(acct.pending.values()))
+        if pend is not None and a.action in ("cancel", "close", "trim", "breakeven"):
+            acct.pending = {k: v for k, v in acct.pending.items() if v is not pend}
+            d.verdict, d.symbol = "cancelled", pend["symbol"]
+            d.reasons.append("limit entry never filled - cancelled on the service's update")
+            return
+        if not self.route.rules.follow_management:
+            d.verdict, d.reasons = "noop", ["this route ignores management messages (brackets only)"]
+            return
         p = self._find(a, acct)
         if p is None:
             d.verdict, d.reasons = "noop", ["no open position on this route for that update"]
@@ -346,13 +381,31 @@ class RouteEngine:
                                  "events": list(p.events)})
 
     # ------------------------------------------------------------------ simulation (replay / paper)
-    def on_bar(self, ts: datetime, high: float, low: float, close: float) -> list[str]:
+    def on_bar(self, ts: datetime, high: float, low: float, close: float, start: datetime | None = None) -> list[str]:
         """Work every open bracket against one bar (stop first when a bar touches both, like the backtester)."""
         r, out = self.route.rules, []
         for acct in self.accounts.values():
-            for p in list(acct.positions.values()):
-                if p.opened and ts <= p.opened:
+            for k, o in list(acct.pending.items()):
+                p = o["pos"]
+                if start is not None and p.opened and start < p.opened:      # bar began before the order existed
                     continue
+                if ts - timedelta(minutes=1) > o["expires"]:
+                    acct.pending.pop(k)
+                    acct.trades_today = max(0, acct.trades_today - 1)
+                    out.append(f"{acct.name}: {k} limit expired unfilled")
+                    continue
+                if (low if p.side > 0 else high) * p.side <= p.entry * p.side:     # touched the limit
+                    acct.pending.pop(k)
+                    p.opened = ts                      # targets start on the next bar (stop was checked above)
+                    acct.positions[k] = p
+                    p.events.append(f"limit filled @ {p.entry:,.2f}")
+                    if ((low if p.side > 0 else high) - p.stop) * p.side <= 0:   # same bar ran through the stop: assume the worst
+                        p.fill(p.contracts, p.stop - p.side * 0.25, "stop (same bar)", acct.commission_rt)
+                        self._settle(acct, p)
+                        out.append(f"{acct.name}: {k} filled and stopped in one bar {p.realized:+,.0f}")
+            for p in list(acct.positions.values()):
+                if p.opened and (ts <= p.opened or (start is not None and start < p.opened)):
+                    continue                                                 # never fill on prices from before the entry
                 fav, adv = (high, low) if p.side > 0 else (low, high)
                 p.mfe = max(p.mfe, (fav - p.entry) * p.side)
                 if (adv - p.stop) * p.side <= 0:

@@ -42,11 +42,17 @@ class RouteRules:
     trims: list[TrimRow] = field(default_factory=lambda: [TrimRow(at_r=0.7, pct=0.5, sl_after=0.0)])
     runner_target_r: float = 2.0        # used when the alert has no final target
     # ---- entry
-    entry_type: str = "market"          # market | limit
+    entry_type: str = "market"          # market | limit | smart (market inside the zone, else a limit at the optimal
+                                        # price good for limit_expiry_min).  On TradingMind's Aug-Oct signals limits
+                                        # missed the runners and filled the losers, so market + chase guard is the default
     limit_offset_ticks: int = 0
+    limit_expiry_min: int = 10
+    half_on_chase_pts: float = 0.0      # NEW: market entry this far past the optimal -> half size (0 = off)
+    skip_reached_targets: bool = True   # NEW: drop alert targets the fill is already at/through (Oct 1: TP1 = fill)
+    follow_management: bool = True      # act on "stop to BE", "move stop", "close" replies (Alerio allow_* were all off)
     stale_sec: int = 60                 # NEW: ignore entries older than this when they reach us
-    max_chase_pts: float = 15.0         # NEW: skip when price already ran this far past the entry
-    max_chase_r: float = 0.35           # NEW: ... or this share of the risk, whichever is smaller
+    max_chase_pts: float = 30.0         # NEW: skip a MARKET entry when price already ran this far past the entry
+    max_chase_r: float = 0.6            # NEW: ... or this share of the risk, whichever is smaller
     # ---- session
     entry_windows: list[list[str]] = field(default_factory=lambda: [["09:30", "16:00"]])   # ET, new entries only
     blackout_windows: list[list[str]] = field(default_factory=lambda: [["10:30", "11:30"]])  # NEW (TradingMind's hole)

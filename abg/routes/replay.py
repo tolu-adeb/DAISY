@@ -57,17 +57,19 @@ def replay(messages: list[dict], bars: pd.DataFrame, route: Route, start_equity:
     for m, a in zip(messages, alerts):
         while i < len(idx) and idx[i] + step <= m["ts"]:
             row = bars.iloc[i]
-            eng.on_bar((idx[i] + step).to_pydatetime(), float(row.high), float(row.low), float(row.close))
+            eng.on_bar((idx[i] + step).to_pydatetime(), float(row.high), float(row.low), float(row.close), idx[i].to_pydatetime())
             last_close = float(row.close)
             i += 1
         if a.action in ("info", "unknown"):
             continue
-        price = last_close if last_close is not None else a.price
+        # entries: the price quoted in the alert is the market at that moment; updates: the last closed bar
+        # (a reply that names its price - Target 1, the stop, the final - fills there)
+        price = a.price if a.price is not None else last_close
         for d in eng.on_alert(a, now=m["ts"], price=price):
             log.append({"ts": m["ts"].isoformat(), "text": m["text"][:160], **d.to_dict()})
     while i < len(idx):
         row = bars.iloc[i]
-        eng.on_bar((idx[i] + step).to_pydatetime(), float(row.high), float(row.low), float(row.close))
+        eng.on_bar((idx[i] + step).to_pydatetime(), float(row.high), float(row.low), float(row.close), idx[i].to_pydatetime())
         i += 1
     trades = [h | {"account": n} for n, acct in eng.accounts.items() for h in acct.history]
     return {"route": route.name, "log": log, "trades": trades, "summary": summarize(trades)}
