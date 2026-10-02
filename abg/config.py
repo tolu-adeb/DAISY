@@ -231,6 +231,7 @@ class Settings(BaseSettings):
     alpha_commission_rt: float = 1.24           # $ per micro round turn (backtests)
     alpha_post_ideas: bool = True               # post the "get ready" trade ideas
     alpha_post_brief: bool = True               # 09:25 pre-market brief
+    alpha_stale_sec: int = 120                  # never post a trade message whose bar is older than this (restarts replay the morning); 0 = off
     alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
     alpha_min_win_rate: float = 0.65            # re-fits only consider settings with at least this win rate
 

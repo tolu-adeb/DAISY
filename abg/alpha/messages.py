@@ -233,6 +233,10 @@ class Renderer:
     def _stopped(self, ev):
         return self._exit_msg(ev, "❌ STOPPED OUT", RED, "Your stop closed the trade.", "STOPPED OUT — the trade is closed")
 
+    def _failed(self, ev):
+        return self._exit_msg(ev, "✂️ CUT EARLY", RED, f"{ev.get('why', 'No follow-through')} — **close it now** if you're still in.",
+                              "CUT EARLY — close your position now")
+
     def _breakeven(self, ev):
         return self._exit_msg(ev, "⚪ BREAK-EVEN", GREY, "The runner came back to entry and closed.",
                               "BREAK-EVEN — the runner closed at entry")

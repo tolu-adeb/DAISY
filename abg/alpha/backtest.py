@@ -264,3 +264,49 @@ def daily_layer(daily: pd.DataFrame) -> dict:
             "base_rate_up": round(up, 3) if up is not None else None,
             "avg_range_pts": round(float(df["range"].mean()), 1) if len(df) else None,
             "avg_atr_pts": round(float(df["atr"].dropna().mean()), 1) if len(df) else None, "rows": rows}
+
+
+# --------------------------------------------------------------------------- bootstrap (repeated sampling)
+def day_pnl(res: BTResult, commission_rt: float = 1.24, point_value: float = MNQ_POINT) -> tuple[np.ndarray, np.ndarray]:
+    """Per-session net $ (per micro) and that session's worst single trade, in session order (0 on no-trade days)."""
+    days = [d["date"] for d in res.days]
+    net = {d: 0.0 for d in days}
+    worst = {d: 0.0 for d in days}
+    for t in res.trades:
+        u = t["pts"] * point_value - commission_rt
+        net[t["date"]] = net.get(t["date"], 0.0) + u
+        worst[t["date"]] = min(worst.get(t["date"], 0.0), u)
+    return np.array([net[d] for d in days]), np.array([worst[d] for d in days])
+
+
+def bootstrap(res: BTResult, samples: int = 2000, length: int = 21, block: int = 5, seed: int = 42,
+              big_loss_usd: float = 150.0, dd_limit_usd: float = 300.0, commission_rt: float = 1.24,
+              point_value: float = MNQ_POINT) -> dict:
+    """Repeated sampling of whole sessions (with replacement) into ``samples`` synthetic ~months of ``length``
+    sessions.  ``iid`` draws sessions independently; ``block`` draws runs of ``block`` consecutive sessions so
+    streaks (the follow/fade regimes) survive.  Reports the distribution, not just the one path we lived."""
+    x, w = day_pnl(res, commission_rt, point_value)
+    if len(x) == 0:
+        return {"note": "no sessions"}
+    out = {"sessions": int(len(x)), "samples": samples, "length": length}
+    for mode in ("iid", "block"):
+        rng = np.random.default_rng(seed)
+        nets, dds, worst = np.empty(samples), np.empty(samples), np.empty(samples)
+        for k in range(samples):
+            if mode == "iid":
+                idx = rng.integers(0, len(x), length)
+            else:
+                starts = rng.integers(0, len(x), -(-length // block))
+                idx = np.concatenate([(s + np.arange(block)) % len(x) for s in starts])[:length]
+            cum = np.cumsum(x[idx])
+            peak = np.maximum.accumulate(np.concatenate([[0.0], cum]))[1:]
+            nets[k], dds[k], worst[k] = cum[-1], float(np.max(peak - cum)), float(w[idx].min())
+        pct = lambda a, q: round(float(np.percentile(a, q)), 2)  # noqa: E731
+        out[mode] = {"mean_net": round(float(nets.mean()), 2), "median_net": pct(nets, 50), "p05_net": pct(nets, 5),
+                     "p95_net": pct(nets, 95), "prob_losing": round(float((nets < 0).mean()), 4),
+                     "median_max_dd": pct(dds, 50), "p95_max_dd": pct(dds, 95),
+                     "prob_dd_over_limit": round(float((dds > dd_limit_usd).mean()), 4),
+                     "median_worst_trade": pct(worst, 50), "p05_worst_trade": pct(worst, 5),
+                     "prob_trade_loss_over": round(float((worst < -big_loss_usd).mean()), 4),
+                     "big_loss_usd": big_loss_usd, "dd_limit_usd": dd_limit_usd}
+    return out

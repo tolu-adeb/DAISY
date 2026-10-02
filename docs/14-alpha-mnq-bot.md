@@ -224,3 +224,59 @@ yourself; the field names are the `AlphaParams` fields in `abg/alpha/strategy.py
 - The proxy feed can differ from MNQ by a couple of points.
 - 60 days of 5-minute bars is about 100 trades: enough to reject a bad idea, not enough to prove a good one.
 - Educational only, not financial advice.
+
+## 14.8 Capping the big loser (Oct 2026)
+
+**What went wrong on Oct 1, 2026.** The bot followed the first breakdown of the opening range and went short at
+30,709 (09:50). The stop was 0.8 × the opening-range ATR, which came to **83 pts**: $166 per micro and about 17% of
+a $1,000 account. The short was 29 pts above yesterday's low (30,680) and the overnight low (30,685), so the
+nearest support was closer than Target 1 (0.7R = 58 pts). Price bounced off that support and stopped the
+trade out 6 minutes later, at −1R. The best it got was +5 pts. Two live-plumbing problems made it worse:
+
+- The bot only came up at about 12:18 ET. At that point the lookback read "off".
+- A restart at 13:04 recomputed the follow/fade mode as "follow". It then replayed the morning and **posted the
+  09:50 signal and the stop three hours late**. A copier pointed at the channel would have opened that short
+  at 13:04.
+
+**The fixes (all on by default):**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `max_risk_pts` + `risk_cap_mode` | 55, `tighten` | A wider structural stop is pulled in to 55 pts ($110/micro). One trade can't lose more than that. |
+| `room_min_r` | 0.7 | Skip the trade when PDH/PDL/ONH/ONL/PDC sits in the way closer than 0.7R (Target 1). |
+| `fail_min` / `fail_mfe_r` | 20 / 0.35 | Cut a trade that is under water after 20 min and never reached +0.35R ("✂️ CUT EARLY"). |
+| `max_loss_usd` | 0 (off) | Optional per-contract $ cap. It works like `max_risk_pts`. |
+| `orx_min_edge`, `orx_respect_bias` | off | Tested, no help (see below). |
+| `ABG_ALPHA_STALE_SEC` | 120 | Never post a trade message whose bar is older than this. Replays after a restart stay off Discord. |
+| restart lock | — | A restart keeps the follow/fade call made earlier that day. |
+
+A saved or re-fitted `alpha_params.json` can't loosen these. The loss-control keys are ignored unless the file
+says `"safety_override": true`.
+
+**Results on `data/mnq_5m.csv`** (Aug 3 – Oct 1, 2026, 43 sessions, $ per micro after $1.24 costs):
+
+| | trades | win rate | net | PF | worst trade | max DD |
+|---|---|---|---|---|---|---|
+| before | 34 | 74% | +$1,312 | 2.35 | −$168 | $373 |
+| after | 26 | 77% | +$987 | 2.72 | −$112 | $223 |
+
+Profit falls in both halves: August goes from +$850 to +$585 and September from +$462 to +$402. The drawdown
+and the worst trade fall more.
+
+**Bootstrap** (`abg alpha bootstrap`): 2,000 resampled 21-session months, drawn in 5-session blocks:
+
+| | median month | 5th pct month | P(losing month) | median / 95th pct DD | P(DD > $300) | P(a trade < −$150) |
+|---|---|---|---|---|---|---|
+| before | +$616 | −$237 | 12.2% | $233 / $551 | 29.9% | 38.7% |
+| after | +$472 | −$53 | 7.1% | $112 / $321 | 6.5% | 0% |
+
+**What else was tried:**
+
+- A tighter cap without the room filter: 50 pts gives +$984, 40 pts gives +$572.
+- A minimum follow/fade edge of 0.5–1R: September went to +$149–215.
+- Never trading against the daily bias: +$828 and fewer September trades.
+- Skipping wide stops instead of tightening them: 60 pts gives 18 trades and +$430.
+
+**Caveat.** The rules were picked on the same 43 sessions, and resampling only reshuffles those sessions. Treat
+the new numbers as a better-shaped hypothesis and confirm them with longer 1-minute history:
+`abg alpha backtest --csv FILE --walk-forward`.

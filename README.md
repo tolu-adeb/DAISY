@@ -114,6 +114,7 @@ asyncio.run(main())
 12. [Markets, real-time, risk & learning](docs/12-markets-risk-learning.md): futures & bonds, streaming prices, calendar, portfolio and prop-firm risk, confirmation, AI, charts, slash commands, backtests, model training, broker bridge
 13. [Deployment](docs/13-deployment.md): always-on server, Tailscale, tokens, backups, health checks, updates
 14. [MNQ signal bot](docs/14-alpha-mnq-bot.md): opening-session MNQ strategy, backtests, adaptive filter, Discord lifecycle messages (test mode)
+15. [Alert routing](docs/15-alert-routing.md): Alerio-style routes with risk-based sizing, pre-trade loss room, stale/chase guards and replay (dry run)
 
 ## Tests
 

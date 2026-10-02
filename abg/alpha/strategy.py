@@ -67,7 +67,7 @@ class AlphaParams:
     stop_buffer_atr: float = 0.15
     stop_atr: float = 0.9
     min_risk_pts: float = 12.0
-    max_risk_pts: float = 120.0
+    max_risk_pts: float = 55.0                # MNQ points; with risk_cap_mode="tighten" no single trade can lose more ($110/micro)
     sweep_min_atr: float = 0.12
     sweep_max_atr: float = 1.2
     sweep_window_min: int = 25
@@ -86,6 +86,15 @@ class AlphaParams:
     chase_r: float = 0.35
     slippage_ticks: int = 1
     tick: float = 0.25
+    # ---- single-trade loss controls (docs/14 "Capping the big loser"); 0 / "" = off
+    risk_cap_mode: str = "tighten"      # skip | tighten : what to do when the stop is wider than max_risk_pts
+    room_min_r: float = 0.7             # skip when a key level (PDH/PDL/ONH/ONL/PDC) sits in the way closer than this x risk
+    orx_min_edge: float = 0.0           # the winning follow/fade score must be at least this many R
+    orx_respect_bias: bool = False      # no orx trade against the day's bias
+    fail_min: int = 20                  # "no follow-through" exit: after this many minutes ...
+    fail_mfe_r: float = 0.35            # ... if the best move is still under this x risk and price is under water, get out
+    max_loss_usd: float = 0.0           # per-contract dollar cap on one trade's planned loss (tightens or skips like max_risk_pts)
+    point_value: float = 2.0
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "AlphaParams":
@@ -99,6 +108,21 @@ class AlphaParams:
         d = asdict(self)
         d["setups"] = list(self.setups)
         return d
+
+
+# Loss controls a saved/re-fitted settings file may not loosen (an old alpha_params.json written before they
+# existed would otherwise put the 120-pt stop back).  Set "safety_override": true in the file to force them.
+SAFETY_KEYS = ("max_risk_pts", "risk_cap_mode", "room_min_r", "fail_min", "fail_mfe_r", "max_loss_usd",
+               "stop_after_loss", "max_daily_loss_r")
+
+
+def load_saved_params(d: dict | None) -> "AlphaParams":
+    d = dict(d or {})
+    raw = dict(d.get("params", d))
+    if not d.get("safety_override"):
+        for k in SAFETY_KEYS:
+            raw.pop(k, None)
+    return AlphaParams.from_dict(raw)
 
 
 @dataclass
@@ -608,6 +632,27 @@ class AlphaStrategy:
             return f"news blackout ({e['name']} at {e['time']} ET)"
         return None
 
+    def _orx_filters(self, side: int, entry: float, risk: float) -> str | None:
+        """Entry filters aimed at the full-size loser (all off by default in older settings)."""
+        p, ctx = self.p, self.ctx
+        if ctx is None:
+            return None
+        sc = ctx.orx_scores or {}
+        if p.orx_min_edge > 0 and max(sc.get("follow", 0) or 0, sc.get("fade", 0) or 0) < p.orx_min_edge:
+            return (f"follow/fade edge too thin ({max(sc.get('follow', 0) or 0, sc.get('fade', 0) or 0):+.2f}R "
+                    f"< {p.orx_min_edge:g}R over the last sessions)")
+        if p.orx_respect_bias and ctx.bias and ctx.bias != side:
+            return f"against the day's {ctx.bias_label.lower()} lean"
+        if p.room_min_r > 0:
+            for name, lv in self._levels(include_or=False).items():
+                if lv is None:
+                    continue
+                d = (lv - entry) * side
+                if 0 < d < p.room_min_r * risk:
+                    return (f"{name} {lv:,.2f} is only {d:.0f} pts away - less than {p.room_min_r:g}R of room "
+                            f"before support/resistance")
+        return None
+
     def _try_enter(self, i: Idea, bar: Bar, px: float, stop: float, now: datetime, extra=None, direct=False) -> list[dict]:
         p, out = self.p, []
         why_not = self._gate(now)
@@ -619,8 +664,19 @@ class AlphaStrategy:
         if why_not is None and risk < p.min_risk_pts:
             stop = self._round(entry - side * p.min_risk_pts)
             risk = p.min_risk_pts
-        if why_not is None and risk > p.max_risk_pts:
-            why_not = f"stop would be {risk:.0f} pts away (max {p.max_risk_pts:g})"
+        cap = p.max_risk_pts
+        if p.max_loss_usd > 0:
+            cap = min(cap, p.max_loss_usd / max(p.point_value, 1e-9))
+        if why_not is None and risk > cap:
+            if p.risk_cap_mode == "tighten":
+                stop = self._round(entry - side * cap)
+                risk = (entry - stop) * side
+                extra = list(extra or [])
+                extra.append(f"stop tightened to {risk:.0f} pts (loss cap ${risk * p.point_value:,.0f} per contract)")
+            else:
+                why_not = f"stop would be {risk:.0f} pts away (max {cap:g})"
+        if why_not is None and i.setup == "orx":
+            why_not = self._orx_filters(side, entry, risk)
         edge = i.zone_hi if side > 0 else i.zone_lo
         if why_not is None and i.setup == "orb" and (px - edge) * side > p.chase_r * max(risk, 1e-9):
             why_not = f"price is already {(px - edge) * side:.0f} pts past the entry zone - not chasing"
@@ -665,6 +721,10 @@ class AlphaStrategy:
         if not t.t1_hit:
             if hit_stop:
                 return self._exit(t, t.stop - s * p.slippage_ticks * p.tick, bar.end, "stopped", "stop hit")
+            if (p.fail_min > 0 and bar.end - t.opened >= timedelta(minutes=p.fail_min)
+                    and t.mfe < p.fail_mfe_r * t.risk and t.open_pts(bar.close) < 0):
+                return self._exit(t, bar.close - s * p.slippage_ticks * p.tick, bar.end, "failed",
+                                  f"no follow-through after {p.fail_min} min (best +{t.mfe:.0f} pts) - out before the full stop")
             if not t.heads_up and t.mfe >= 0.7 * t.risk and (fav - t.t1) * s < 0:
                 t.heads_up = True
                 rng = sum(f.high - f.low for f in self.fives[-6:]) / max(1, len(self.fives[-6:]))

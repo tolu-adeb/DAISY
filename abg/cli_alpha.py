@@ -281,3 +281,44 @@ def pd_read(path: Path):
         return pd.read_csv(path, index_col=0)
     except Exception:
         return None
+
+
+@alpha_app.command("bootstrap")
+def bootstrap_cmd(csv: Path = typer.Option(Path("data/mnq_5m.csv"), help="Intraday bars CSV."),
+                  samples: int = typer.Option(2000, help="How many resampled ~months to draw."),
+                  length: int = typer.Option(21, help="Sessions per sample."),
+                  compare: bool = typer.Option(True, help="Also run the pre-Oct-2026 settings (no loss caps) side by side."),
+                  out: Optional[Path] = typer.Option(None, "--json")):
+    """Repeated-sampling test: resample whole sessions into thousands of synthetic months and report the spread
+    of results, drawdowns and the worst single trade (per micro, after costs)."""
+    from .alpha.backtest import bootstrap, run_backtest
+    from .alpha.data import load_intraday_csv
+    from .alpha.learn import AdaptiveBook
+    from .alpha.strategy import AlphaParams
+
+    s = _settings()
+    bars = load_intraday_csv(csv)
+    legacy = {"max_risk_pts": 120.0, "risk_cap_mode": "skip", "room_min_r": 0.0, "fail_min": 0}
+    runs = {"current": AlphaParams()}
+    if compare:
+        runs["no loss caps"] = AlphaParams.from_dict({**AlphaParams().to_dict(), **legacy})
+    t = Table(title=f"Bootstrap · {samples:,} samples × {length} sessions (block of 5) · $ per micro", box=box.SIMPLE)
+    for c in ("settings", "trades", "net", "worst trade", "max DD", "median month", "5th pct month", "P(losing month)",
+              "P(DD>$300)", "P(trade < -$150)"):
+        t.add_column(c)
+    full = {}
+    for name, p in runs.items():
+        res = run_backtest(bars, p, learner=AdaptiveBook(), commission_rt=s.alpha_commission_rt)
+        b = bootstrap(res, samples, length, commission_rt=s.alpha_commission_rt)
+        st, bb = res.stats, b.get("block", {})
+        worst = min((x["pts"] * 2.0 - s.alpha_commission_rt for x in res.trades), default=0.0)
+        t.add_row(name, str(st.get("trades", 0)), f"{st.get('net_usd_per_micro', 0):+,.0f}", f"{worst:+,.0f}",
+                  f"{float(st.get('max_dd_usd_per_micro', 0)):,.0f}", f"{bb.get('median_net', 0):+,.0f}",
+                  f"{bb.get('p05_net', 0):+,.0f}", f"{bb.get('prob_losing', 0):.1%}", f"{bb.get('prob_dd_over_limit', 0):.1%}",
+                  f"{bb.get('prob_trade_loss_over', 0):.1%}")
+        full[name] = {"stats": st, "bootstrap": b}
+    console.print(t)
+    console.print("[dim]Resampling reshuffles the sessions we have; it can't invent market conditions we haven't seen. "
+                  "Read it as 'how lumpy is this edge', not as a forecast.[/dim]")
+    if out:
+        out.write_text(json.dumps(full, indent=1, default=str))

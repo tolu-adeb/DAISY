@@ -213,8 +213,8 @@ class AlphaBot:
     # ------------------------------------------------------------------ config
     def load_params(self) -> AlphaParams:
         try:
-            d = json.loads(self.params_path.read_text())
-            return AlphaParams.from_dict(d.get("params", d))
+            from .strategy import load_saved_params
+            return load_saved_params(json.loads(self.params_path.read_text()))
         except Exception:
             return AlphaParams()
 
@@ -299,6 +299,12 @@ class AlphaBot:
             if len(r) >= 30:
                 history.append({"date": str(k), **orx_shadow(r, self.params)})
         apply_orx(ctx, history, self.params)
+        prev = self.store.get("today") if hasattr(self.store, "get") else None
+        if isinstance(prev, dict) and prev.get("day") == str(d) and (prev.get("ctx") or {}).get("orx_mode"):
+            pc = prev["ctx"]                    # a restart must not flip today's follow/fade call (Oct 1: off -> follow)
+            if pc.get("orx_mode") != ctx.orx_mode:
+                self.notes.append(f"orx mode kept at '{pc['orx_mode']}' from this morning (recomputed '{ctx.orx_mode}')")
+            ctx.orx_mode, ctx.orx_scores, ctx.orx_history = pc["orx_mode"], pc.get("orx_scores") or {}, pc.get("orx_history") or []
         warm = []
         if prior:
             g = prior[max(prior)]
@@ -368,6 +374,23 @@ class AlphaBot:
         self.learner.save(self.learner_path)
 
     # ------------------------------------------------------------------ output
+    def _stale(self, ev: dict, now: datetime | None = None) -> bool:
+        if ev["type"] in ("brief", "day_summary", "session_closed"):
+            return False
+        ts = ev.get("ts")
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except ValueError:
+                return False
+        if not isinstance(ts, datetime):
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=NY)
+        now = now or datetime.now(NY)
+        lim = getattr(self.s, "alpha_stale_sec", 120)
+        return bool(lim) and (now - ts).total_seconds() > lim
+
     async def emit(self, ev: dict) -> None:
         day = str(self.day)
         kind = ev["type"]
@@ -376,6 +399,8 @@ class AlphaBot:
             return
         r = self.renderer.render(ev)
         msg, delivered = None, "dashboard"
+        if r is not None and self._stale(ev):
+            r, delivered = None, "late - not posted"     # a replayed signal/stop from hours ago must never reach Discord
         if r is not None and self.poster.enabled:
             content, emb = r
             if kind == "idea_cancel" and self.msg_ids.get(f"idea:{ev['id']}"):
@@ -396,7 +421,7 @@ class AlphaBot:
                     self.msg_ids[f"trade:{tid}"] = msg
         if kind == "signal":
             self.open_trade = ev["trade"]
-        if kind in ("final", "stopped", "breakeven", "closed"):
+        if kind in ("final", "stopped", "failed", "breakeven", "closed"):
             self.open_trade = None
             self.store.save_trade(day, ev["trade"])
         self.store.add_event(day, ev, msg, delivered)

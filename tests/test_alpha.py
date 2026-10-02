@@ -319,6 +319,7 @@ async def test_bot_threads_replies_and_stores(settings):
     from abg.engine import AnalysisEngine
     async with AnalysisEngine(settings) as eng:
         bot = AlphaBot(eng, settings)
+        bot.s.alpha_stale_sec = 0                             # replaying a past day on purpose
         bot.poster = FakePoster()
         bot.day = D
         bot.strat = AlphaStrategy(AlphaParams(setups=LEGACY), bot.learner)
@@ -423,3 +424,51 @@ def test_backtest_builds_orx_history_without_lookahead():
     days = sorted(ctxs)
     assert ctxs[days[0]][0].orx_mode == "off" and ctxs[days[0]][0].orx_history == []
     assert len(ctxs[days[4]][0].orx_history) == 4                        # only the 4 prior sessions
+
+
+async def test_bot_never_posts_stale_replayed_events(settings):
+    """Oct 1 2026: a restart at 13:04 replayed the morning and posted the 09:50 signal and its stop."""
+    from abg.engine import AnalysisEngine
+    async with AnalysisEngine(settings) as eng:
+        bot = AlphaBot(eng, settings)
+        bot.poster = FakePoster()
+        bot.day = D
+        bot.strat = AlphaStrategy(AlphaParams(setups=LEGACY), bot.learner)
+        bot.brief = bot.strat.start_day(_ctx(), _warm())[0]
+        for b in _orb_day("up").bars:                         # bars from a past day = hours old
+            await bot.process(b, scaled=True)
+        titles = [t for t, _ in bot.poster.posts]
+        assert not any("SIGNAL" in t or "TARGET" in t for t in titles)
+        assert any(e["delivered"] == "late - not posted" for e in bot.today_events)
+        assert bot._stale({"type": "signal", "ts": datetime.now(NY) - timedelta(seconds=30)}) is False
+
+
+def test_loss_controls_tighten_and_room_filter():
+    p = AlphaParams(max_risk_pts=55, risk_cap_mode="tighten", room_min_r=0.0)
+    s = AlphaStrategy(p)
+    ctx = DayContext(day=D, pdh=1100, pdl=900, pdc=1000)
+    ctx.orx_mode, ctx.orx_scores = "follow", {"follow": 1.0, "fade": -1.0, "sessions": 3}
+    s.start_day(ctx, _warm(1000))
+    s.atr5 = 100.0
+    from abg.alpha.strategy import Idea
+    i = Idea(1, "orx", -1, "ORL", 995, 990, 990, 990, 1090, datetime(2026, 9, 15, 9, 50, tzinfo=NY),
+             datetime(2026, 9, 15, 10, 30, tzinfo=NY), "orx:ORL:-1")
+    ev = s._try_enter(i, None, 990, 1090, datetime(2026, 9, 15, 9, 50, tzinfo=NY))
+    assert ev and ev[0]["type"] == "signal" and ev[0]["trade"]["risk"] == 55      # 100-pt stop tightened to 55
+    s2 = AlphaStrategy(AlphaParams(room_min_r=0.7))
+    s2.start_day(DayContext(day=D, pdh=1100, pdl=975, pdc=1000), _warm(1000))
+    assert "PDL" in (s2._orx_filters(-1, 990, 50) or "")                          # PDL 15 pts away < 0.7 x 50
+    assert s2._orx_filters(-1, 990, 10) is None                                    # 15 pts > 0.7 x 10
+
+
+def test_saved_settings_cannot_loosen_loss_controls():
+    from abg.alpha.strategy import load_saved_params
+    p = load_saved_params({"params": {"max_risk_pts": 120, "risk_cap_mode": "skip", "orx_k": 0.6}})
+    assert p.max_risk_pts == AlphaParams().max_risk_pts and p.risk_cap_mode == "tighten" and p.orx_k == 0.6
+    assert load_saved_params({"params": {"max_risk_pts": 120}, "safety_override": True}).max_risk_pts == 120
+
+
+def test_failed_exit_message_renders():
+    tr = {"id": 1, "entry": 100.0, "exit": 95.0, "t1_hit": False, "mfe": 2.0}
+    r = Renderer().render({"type": "failed", "trade": tr, "pts": -5.0, "r": -0.2, "why": "no follow-through after 20 min"})
+    assert r and "CUT EARLY" in r[1]["title"]
