@@ -367,3 +367,47 @@ that beat the current settings over Jul 2024 - Apr 2026 did worse over the last 
 settings (`min_trend_atr`, `max_atr_ratio`, `orx_min_drive`, `orx_max_ext`, `orx_or_max_atr`, `orx_or_min_atr`,
 `orx_vwap_confirm`, `orx_gap_mode`, `orx_last_entry`, `orx_grade_min`, `orx_leg`) are all off by default, so
 the live bot trades exactly as before.
+
+## 14.11 Early Target 1: 76% win rate with a lower drawdown (Oct 22, 2026)
+
+Owner objective: a win rate of at least 75% and a lower max drawdown, reached through the strategy (not a
+hard cap). New defaults: **Target 1 at 0.35R (was 0.7R), bank 25% there (was half), stop to break-even, the
+rest runs to the liquidity target.** Nothing else changed. 577 sessions, adaptive book on (as live), $ per
+micro after costs:
+
+| | Old (0.7R, half) | **New (0.35R, 25%)** |
+|---|---|---|
+| Trades | 566 | 600 |
+| Win rate | 65.5% | **76.3%** |
+| Net $ | 5,478 | 5,553 |
+| Max drawdown $ | 584 | **512** |
+| Net / max DD | 9.38 | 10.84 |
+| Profit factor | 1.32 | 1.45 |
+| Worst month $ / months positive | −353 / 21 of 28 | −146 / 19 of 28 |
+| Avg win / avg loss $ | 61.5 / −89.7 | 39.1 / −87.6 |
+| Full stop-outs | 185 | 133 |
+
+- **By window:**
+  - Jul 2024 – Apr 2026: 77.5% vs 67.2% wins, max DD $512 vs $584.
+  - Last 6 months: 72.1% vs 59.7% wins, net $933 vs $744, max DD $507 vs $568.
+  - Every half-year: 73.6–79.4% wins, all profitable.
+- **Walk-forward:** pick Target 1 and the partial from earlier half-years only (needing ≥75% wins there),
+  then test the next half-year. Out of sample: 462 trades, **73.8% wins**, $4,141 vs $4,503, max DD $512 vs
+  $584. Expect roughly 74% going forward, not 76%.
+- **Where the win rate comes from:** mostly geometry. On random-walk data the same change lifts the win rate
+  from 52% to 66% with no edge. 69% of the new wins are small (under $15 per micro): Target 1 banked, then
+  the runner scratched at break-even.
+- **What actually improved:** fewer full losses (133 vs 185 stop-outs), while three quarters of the position
+  still rides to the target. That is why profit held and the drawdown fell.
+- **Needs at least 2 micros.**
+  - With 4+, bank 1 of every 4.
+  - With 2–3, bank 1 contract (a 50% / 33% partial). The win rate is the same; profit is lower: $4,212 / $5,120
+    with max DD $504 / $506.
+  - With 1 micro there is no partial, and these results don't apply.
+- **Supporting changes:**
+  - The Sunday re-fit now searches Target 1 in 0.3–0.4R.
+  - `ABG_ALPHA_MIN_WIN_RATE` defaults to 0.75, so a re-fit can't drift back below the objective.
+  - Messages say how much to bank.
+- **This bypassed the holdout:** the Strategy Lab's holdout was already used up (14.10), so this change was
+  adopted on the owner's explicit objective, not a counted holdout look. The last 6 months were seen
+  repeatedly while it was chosen. Lab trials #58–60.

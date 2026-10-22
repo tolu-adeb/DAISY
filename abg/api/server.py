@@ -266,6 +266,10 @@ from .routes_api import router as routes_router  # noqa: E402
 app.include_router(routes_router)
 app.include_router(alerio_router)
 
+from .rd_routes import router as rd_router  # noqa: E402
+
+app.include_router(rd_router)
+
 # --------------------------------------------------------------------------- dashboard
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

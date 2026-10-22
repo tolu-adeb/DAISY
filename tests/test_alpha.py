@@ -146,7 +146,8 @@ def test_orb_retest_full_lifecycle():
     t1 = next(e for e in ev if e["type"] == "t1")
     assert t1["new_stop"] == sig["entry"]                                   # break-even at Target 1
     fin = next(e for e in ev if e["type"] == "final")
-    assert fin["pts"] == pytest.approx(0.5 * (sig["t1"] - sig["entry"]) + 0.5 * (sig["final"] - sig["entry"]))
+    f = AlphaParams().scale_frac                                           # banked share at Target 1, rest at the final
+    assert fin["pts"] == pytest.approx(f * (sig["t1"] - sig["entry"]) + (1 - f) * (sig["final"] - sig["entry"]))
     summ = ev[-1]
     assert summ["type"] == "day_summary" and summ["n"] == 1 and summ["wins"] == 1
 

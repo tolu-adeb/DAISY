@@ -241,7 +241,7 @@ class Settings(BaseSettings):
     alerio_max_contracts: int = 8
     alerio_dd_limit_usd: float = 2000.0         # your prop account's trailing drawdown, for the breach odds
     alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
-    alpha_min_win_rate: float = 0.65            # re-fits only consider settings with at least this win rate
+    alpha_min_win_rate: float = 0.75            # re-fits only consider settings with at least this win rate
 
     # Strategy Lab (docs/17) - research agents; nothing here changes the live bot without `abg lab approve`
     lab_model: str | None = None                # Claude model for the research agents (default: anthropic_model)
@@ -250,6 +250,16 @@ class Settings(BaseSettings):
     lab_per_round: int = 5                      # hypotheses per round
     lab_max_model_calls: int = 60               # hard cap on model calls per run (cost guard)
     lab_holdout_months: int = 6                 # the locked holdout: the most recent N months of the dataset
+    lab_auto_run: str = "weekly"                # off | weekly: Saturday research run by the agents (only with an API key)
+    lab_refresh_data: bool = True               # Saturday: append finished sessions to the lab dataset (QQQ proxy)
+    # R&D desk digests (docs/17): daily / weekly / monthly findings -> Discord + the dashboard's R&D tab
+    rd_enabled: bool = True                     # run the R&D desk inside the monitor
+    rd_webhook_url: str | None = None           # Discord webhook for the R&D channel (keep it in .env only)
+    rd_daily: bool = True                       # weekdays after the bot is flat (rd_daily_time ET)
+    rd_daily_time: str = "12:20"
+    rd_weekly: bool = True                      # Fridays 16:30 ET
+    rd_monthly: bool = True                     # first weekday of the month, 08:00 ET (for the month just ended)
+    rd_analyst_note: bool = True                # add a short Claude note when ABG_ANTHROPIC_API_KEY is set
 
     log_level: str = "WARNING"
 

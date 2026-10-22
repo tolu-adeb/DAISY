@@ -85,7 +85,8 @@ class FakeRunner:
 @pytest.fixture
 def lab(tmp_path):
     ds = make_ds()
-    return Lab(ds, FakeRunner(ds), Ledger(tmp_path / "lab.sqlite3"), tmp_path, base=AlphaParams(), gate=Gate(min_trades=100))
+    return Lab(ds, FakeRunner(ds), Ledger(tmp_path / "lab.sqlite3"), tmp_path, base=AlphaParams(t1_r=0.7, scale_frac=0.5),
+               gate=Gate(min_trades=100))
 
 
 # --------------------------------------------------------------------------- search space
@@ -146,7 +147,8 @@ def test_only_candidates_may_see_the_holdout_and_looks_are_counted(lab):
 
 def test_holdout_disagreement_blocks_the_proposal(tmp_path):
     ds = make_ds()
-    lab = Lab(ds, FakeRunner(ds, holdout_wr_shift=-1.2), Ledger(tmp_path / "l.sqlite3"), tmp_path, gate=Gate(min_trades=100))
+    lab = Lab(ds, FakeRunner(ds, holdout_wr_shift=-1.2), Ledger(tmp_path / "l.sqlite3"), tmp_path,
+              base=AlphaParams(t1_r=0.7, scale_frac=0.5), gate=Gate(min_trades=100))
     good = lab.test(Hypothesis(name="lower T1", rationale="earlier T1 turns more trades into wins", changes={"t1_r": 0.5}))
     assert good["verdict"] == "candidate"
     out = lab.confirm(good["trial_id"])

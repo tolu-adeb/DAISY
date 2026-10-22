@@ -174,6 +174,16 @@ class Monitor:
                 log.exception("alpha bot disabled")
                 self.errors.append({"ts": time.time(), "where": "alpha init", "error": str(e)[:300]})
 
+        # R&D desk: digests to Discord + the weekly research run (docs/17)
+        self.rd = None
+        if self.s.rd_enabled:
+            try:
+                from ..agents.desk import RDDesk
+                self.rd = RDDesk(self)
+            except Exception as e:   # pragma: no cover
+                log.exception("R&D desk disabled")
+                self.errors.append({"ts": time.time(), "where": "rd init", "error": str(e)[:300]})
+
         # Alerio copy-trading shadow (docs/15)
         self.alerio = None
         if self.s.alerio_watch and self.s.alerio_cookie:
@@ -226,6 +236,8 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.alpha.run()))
             if self.alerio is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.alerio.run()))
+            if self.rd is not None:
+                self._aux_tasks.append(asyncio.ensure_future(self.rd.run()))
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -263,7 +275,7 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio):
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd):
                 if comp is not None:
                     comp.stop()
             for t in self._aux_tasks:
@@ -483,5 +495,6 @@ class Monitor:
                          if self.ext is not None else None),
             "alpha": self.alpha.status() if self.alpha is not None else {"enabled": False},
             "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
+            "rd": self.rd.status() if self.rd is not None else {"enabled": False},
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

@@ -1,7 +1,7 @@
 """Discord messages for the MNQ bot - the lifecycle a member follows, each with its reason.
 
 🌅 brief → 🟡 trade idea (get ready) → 🟢/🔴 signal validated (enter) → ⚡ heads-up → 🔵 Target 1
-(bank half, stop to break-even) → 🏃 runner updates → ✅ final / ❌ stopped / ⚪ break-even → 🔒 done for
+(bank the Target 1 share, stop to break-even) → 🏃 runner updates → ✅ final / ❌ stopped / ⚪ break-even → 🔒 done for
 the day → 🏁 day closed.  Every message says *why*, and every number is in MNQ points with the dollar
 value per micro contract.
 """
@@ -37,10 +37,25 @@ def _hhmm(ts) -> str:
     return ts.strftime("%H:%M") if isinstance(ts, datetime) else ""
 
 
+def bank_text(frac: float) -> str:
+    """How much to take off at Target 1, in words a trader can act on."""
+    if abs(frac - 0.5) < 1e-6:
+        return "bank half"
+    if abs(frac - 0.25) < 1e-6:
+        return "bank 25% (1 of every 4 micros)"
+    if abs(frac - 1 / 3) < 0.01:
+        return "bank a third (1 of every 3 micros)"
+    return f"bank {frac:.0%}"
+
+
 class Renderer:
     def __init__(self, tag: str = "TEST", mention_role: str | None = None, point_value: float = 2.0,
-                 contracts: float = 1.0, symbol: str = "MNQ"):
+                 contracts: float = 1.0, symbol: str = "MNQ", scale_frac: float | None = None):
         self.tag, self.role, self.pv, self.contracts, self.symbol = tag, mention_role, point_value, contracts, symbol
+        if scale_frac is None:
+            from .strategy import AlphaParams
+            scale_frac = AlphaParams().scale_frac
+        self.scale_frac = scale_frac
 
     @property
     def footer(self) -> dict:
@@ -106,7 +121,8 @@ class Renderer:
             plan.append("• **VWAP pullback** only if the open is clearly one-sided.")
         rules = (f"New entries {p['entry_start']}-{p['entry_end']} ET · max {p['max_trades']} trades"
                  + (" · stop after the first loss" if p.get("stop_after_loss") else "")
-                 + f" · Target 1 = {f(p['t1_r'])}R banks half · flat by {p.get('flat_time', '15:55')} ET")
+                 + f" · Target 1 = {f(p['t1_r'])}R: {bank_text(p.get('scale_frac', self.scale_frac))}, stop to break-even"
+                 + f" · flat by {p.get('flat_time', '15:55')} ET")
         fields = [{"name": "🎯 Levels", "value": levels or "n/a", "inline": False},
                   {"name": "🧭 Bias", "value": bias + (": " + "; ".join(c.get("bias_reasons") or []) if c.get("bias_reasons") else "")
                    + "\n_A lean only - setups in either direction can trigger._", "inline": False},
@@ -165,7 +181,7 @@ class Renderer:
             lines.append("🏦 **Half size today** (FOMC).")
         lines += ["", f"**Entry:** {f(t['entry'])}" + (f"  (zone {f(z0)} – {f(z1)})" if z1 - z0 >= 0.5 else ""),
                   f"**Stop loss:** {f(t['stop'])}  (~{f(risk, 0)} pts · ≈ {usd(risk, self.pv)} per micro)", "",
-                  f"**Target 1:** {f(t['t1'])}  · _bank half, stop to break-even_",
+                  f"**Target 1:** {f(t['t1'])}  · _{bank_text(self.scale_frac)}, stop to break-even_",
                   f"**Final target:** {f(t['final'])}  (" + (f"{LEVEL_NAMES[t['final_name']]}, " if t['final_name'] in LEVEL_NAMES else "")
                   + f"{abs(t['final'] - t['entry']) / risk:.1f}R)",
                   f"**Price now:** {f(ev.get('price'))}"]
@@ -203,7 +219,7 @@ class Renderer:
                "t1_close": f"Keep the stop at {f(ev['old_stop'])} until a candle **closes** beyond Target 1 — then break-even "
                            "(avoids getting shaken out right before the move).",
                "lock": f"Move your stop to {f(ev['new_stop'])} (risk cut to a quarter; it ratchets up as the trade runs)."}[mode]
-        return self._ping("TARGET 1 — bank half, move your stop"), {
+        return self._ping(f"TARGET 1 — {bank_text(self.scale_frac)}, move your stop"), {
             "title": self._t(f"🔵 TARGET 1 HIT #{t['id']}"), "color": BLUE,
             "description": f"Target 1 hit — **+{f(ev['pts'], 1)} pts**. {act}", "footer": self.footer}
 
@@ -212,7 +228,7 @@ class Renderer:
         return None, {"title": self._t(f"⚡ Scale-out #{t['id']}"), "color": BLUE,
                       "description": f"**Banked {int(ev['frac'] * 100)}% at +{f(ev['pts'], 1)} pts.** The rest is riding to the final "
                                      f"target {f(t['final'])}" + (f" ({LEVEL_NAMES[t['final_name']]})" if t['final_name'] in LEVEL_NAMES else "") + ".\n"
-                                     "_Following: secure half, hold the rest._", "footer": self.footer}
+                                     f"_Following: {bank_text(ev['frac'])}, hold the rest._", "footer": self.footer}
 
     def _stop_moved(self, ev):
         t = ev["trade"]

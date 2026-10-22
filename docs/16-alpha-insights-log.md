@@ -78,7 +78,7 @@ Status: paper / TEST mode only. Nothing here has been confirmed with live fills.
 - **Only taken in the daily-trend direction** (`trend_filter=True`).
 
 ### 2.5 Management (all setups)
-- **Target 1 at 0.7R:** bank half and move the stop to break-even.
+- **Target 1 at 0.35R:** bank 25% and move the stop to break-even (since Oct 22, 2026; was 0.7R and half - see section 13).
 - **Runner:** trails 1.5 × ATR5 once it is +1.5R.
 - **Final target (liquidity mode):** the nearest prior-day or overnight level in the trade's direction that sits 1.8–4R away. If there is none, 2R for `orx` (2.5R for other setups). Members see a named target, e.g. "PDH 20,412".
 - **No-follow-through cut:** after 20 minutes, if the best move is still under 0.35R and price is under water, exit.
@@ -384,7 +384,7 @@ python -m pytest -q tests/                                  # 219 tests
 - [ ] Use a trend input with at least 50 prior closes, filtered strictly before the trading day. Unit-test the filter with a `date` index and a tz-aware index.
 - [ ] Choose the side from the trend, not from recent follow/fade results.
 - [ ] Use stop = 0.8 × opening ATR, bounded 12–55 points, and tighten rather than skip.
-- [ ] Use Target 1 at 0.7R (or 1R if optimizing profit) with half off and break-even after, a liquidity final at 1.8–4R else 2R, a 1.5 × ATR5 trail after +1.5R, and the 20-minute no-follow-through cut.
+- [ ] Use Target 1 at 0.35R with 25% off and break-even after (0.7R / half before Oct 22, 2026; 1R if optimizing profit over win rate), a liquidity final at 1.8–4R else 2R, a 1.5 × ATR5 trail after +1.5R, and the 20-minute no-follow-through cut.
 - [ ] Apply the day rules: entries 9:35–11:30, flat 12:00, at most 2 trades, stop after the first loss, 1.5R daily cap, news blackout, FOMC half size.
 - [ ] Any self-disabling filter must keep scoring the trades it blocks (paper).
 - [ ] Any automatic re-fit must be walk-forward, require minimum trades and out-of-sample profit, beat the current settings, and never loosen loss controls.
@@ -433,3 +433,20 @@ python -m pytest -q tests/                                  # 219 tests
      select the T1 trade-off every time.
   3. Record losers, not just winners.
   4. Once the look budget is spent, stop and wait for new data. Don't re-slice the same months.
+
+## 13. Early Target 1 for a 75%+ win rate (Oct 22, 2026; docs/14.11)
+
+- **Change:** Target 1 0.7R → 0.35R, banked share 50% → 25%, stop to break-even, runner unchanged.
+- **Win rate:** 65.5% → 76.3% over 577 sessions. Walk-forward out of sample: 73.8%. Last 6 months: 72.1%
+  (was 59.7%).
+- **Risk and profit:** max DD $584 → $512, net $5,478 → $5,553, profit factor 1.32 → 1.45. Worst month
+  −$353 → −$146; months positive 21 → 19 of 28.
+- **Lesson:** win rate is cheap and drawdown is not. A close Target 1 lifts the win rate even on random data
+  (52% → 66%). Judge a win-rate change by profit/drawdown, by its walk-forward result, and by the size of the
+  wins (69% are under $15 per micro).
+- **Lesson:** the profit is kept by banking less at the close target (25%, not 50%), not by the target itself.
+  With a 50% partial the same Target 1 earns 23% less than the old settings.
+- **Lesson:** sizing constrains the strategy. Partial exits need at least 2 contracts, so results for a
+  1-contract trader differ.
+- **Regime watch:** over the last month of data the new settings show 71% wins and slightly negative R. Keep
+  paper-trading.

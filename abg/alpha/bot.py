@@ -187,7 +187,8 @@ class AlphaBot:
         self.learner_path = self.data_dir / "alpha_learner.json"
         self.params = self.load_params()
         self.learner = AdaptiveBook.load(self.learner_path)
-        self.renderer = Renderer(settings.alpha_tag, settings.alpha_mention_role_id, 2.0, settings.alpha_contracts)
+        self.renderer = Renderer(settings.alpha_tag, settings.alpha_mention_role_id, 2.0, settings.alpha_contracts,
+                                 scale_frac=self.params.scale_frac)
         self.poster = AlphaPoster(settings, engine.http)
         self.feed = (settings.alpha_feed or "proxy").lower()
         self.proxy = settings.alpha_proxy_symbol
@@ -302,6 +303,7 @@ class AlphaBot:
         self.builder = MinuteBuilder()
         self.last_bar = None
         self.params = self.load_params()
+        self.renderer.scale_frac = self.params.scale_frac
         self.learner = AdaptiveBook.load(self.learner_path)
         bars = pd.DataFrame()
         try:
@@ -515,6 +517,7 @@ class AlphaBot:
                                                     "test_stats": {k: ts.get(k) for k in ("trades", "avg_r", "net_pts", "win_rate")}},
                                                    indent=1))
             self.params = AlphaParams.from_dict(res["params"])
+            self.renderer.scale_frac = self.params.scale_frac
         self.store.set("last_optimize", {"at": str(datetime.now(NY)), "adopted": res["adopted"], "best": res["best"],
                                          "test": {k: ts.get(k) for k in ("trades", "avg_r", "net_pts", "win_rate")}})
         return res

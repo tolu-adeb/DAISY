@@ -60,6 +60,7 @@ function showView(v) {
   document.querySelectorAll("main.view").forEach((m) => { m.hidden = m.id !== "view-" + v; });
   if (v === "status") loadStatus();
   if (v === "markets" && window.loadMarkets) window.loadMarkets();
+  if (v === "rd" && window.loadRD) window.loadRD();
   if (v === "signals" && window.loadExt) window.loadExt();
   if (v === "portfolio" && window.loadPortfolio) {
     window.loadPortfolio();

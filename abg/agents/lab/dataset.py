@@ -86,3 +86,57 @@ def default_paths(data_dir: Path) -> tuple[Path, Path]:
         if b.exists():
             return b, root / "qqq_daily.csv"
     return Path("data") / "mnq_proxy_5m.csv", Path("data") / "qqq_daily.csv"
+
+
+# --------------------------------------------------------------------------- keeping the dataset current
+PROXY_RATIO = 41.2456          # QQQ -> MNQ points used to build data/mnq_proxy_5m.csv (docs/14.9)
+
+
+async def refresh_proxy_csv(engine, bars_csv: str | Path, trend_csv: str | Path | None = None, proxy: str = "QQQ",
+                            now=None) -> dict:
+    """Append finished sessions to the lab's proxy dataset (QQQ 5-min x the dataset's own ratio) and the daily trend
+    file.  Only complete regular sessions after the file's last one are added, so it is safe to run repeatedly.
+    The ratio is re-measured on overlapping bars when there are any, so the series stays continuous."""
+    from datetime import datetime, time as dtime
+
+    from ...alpha.data import NY, fetch_daily, fetch_intraday
+    now = now or datetime.now(NY)
+    bars_csv = Path(bars_csv)
+    old = pd.read_csv(bars_csv, parse_dates=["datetime"])
+    last = old["datetime"].max()
+    q = await fetch_intraday(engine, proxy, "5m", "60d")
+    if q.empty:
+        return {"added_sessions": 0, "note": "no proxy bars returned"}
+    q = q[[is_rth(t) for t in q.index]].copy()
+    q.index = q.index.tz_convert(NY).tz_localize(None)
+    ov = old.set_index("datetime")["close"].reindex(q.index).dropna()
+    ratio = float((ov / q.loc[ov.index, "close"]).median()) if len(ov) >= 10 else PROXY_RATIO
+    cutoff = now.date() if now.time() < dtime(16, 5) else None          # today's session only once it has closed
+    new = q[q.index > last]
+    if cutoff is not None:
+        new = new[[t.date() < cutoff for t in new.index]]
+    days = sorted({t.date() for t in new.index})
+    full = [d for d in days if (new.index.date == d).sum() >= 70]       # a full session is 78 five-minute bars
+    new = new[[t.date() in set(full) for t in new.index]]
+    added = 0
+    if len(new):
+        out = pd.DataFrame({"datetime": new.index.strftime("%Y-%m-%d %H:%M:%S")})
+        for c in ("open", "high", "low", "close"):
+            out[c] = ((new[c].values * ratio) / 0.25).round() * 0.25
+        out["volume"] = new["volume"].fillna(0).astype(int).values if "volume" in new else 0
+        out.to_csv(bars_csv, mode="a", header=False, index=False)
+        added = len(full)
+    res = {"added_sessions": added, "ratio": round(ratio, 4), "last_session": str(full[-1]) if full else str(last.date())}
+    if trend_csv and Path(trend_csv).exists():
+        td = pd.read_csv(trend_csv, parse_dates=["datetime"])
+        dd = await fetch_daily(engine, proxy, "3mo")
+        if not dd.empty:
+            lastd = td["datetime"].max()
+            dd = dd[[pd.Timestamp(i) > lastd and (cutoff is None or pd.Timestamp(i).date() < cutoff) for i in dd.index]]
+            if len(dd):
+                o = pd.DataFrame({"datetime": [pd.Timestamp(i).strftime("%Y-%m-%d") for i in dd.index]})
+                for c in ("open", "high", "low", "close", "volume"):
+                    o[c] = dd[c].values if c in dd else 0
+                o.to_csv(trend_csv, mode="a", header=False, index=False)
+                res["added_daily"] = len(o)
+    return res

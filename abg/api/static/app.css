@@ -291,3 +291,14 @@ td.num { white-space: nowrap; }
 .risk-bar .fill { height: 100%; background: var(--up); } .risk-bar .fill.warn { background: var(--warning); } .risk-bar .fill.bad { background: var(--down); }
 .role-badge { font: 600 11px var(--mono); padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); }
 body.readonly form button.primary, body.readonly .idea-actions, body.readonly #tx-form, body.readonly #rule-form, body.readonly #watch-form { display: none; }
+
+/* R&D tab (docs/17) */
+.rd-findings { margin: 6px 0 8px 18px; padding: 0; font-size: 13px; line-height: 1.5; }
+.rd-findings li { margin: 3px 0; }
+.rd-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.rd-report { white-space: pre-wrap; font: 12px/1.45 var(--mono); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; margin-top: 8px; }
+#rd-trials table code, #rd-proposals code { font-size: 11px; word-break: break-all; }
+.rd-scroll { overflow-x: auto; }
+.rd-scroll table { min-width: 720px; }
+@media (max-width: 720px) { #rd-kpis { grid-template-columns: repeat(2, 1fr); } }

@@ -142,7 +142,7 @@ def _group(trades, keyf) -> dict:
 
 # --------------------------------------------------------------------------- walk-forward
 DEFAULT_GRID = {
-    "t1_r": [0.5, 0.7, 1.0],
+    "t1_r": [0.3, 0.35, 0.4],          # early Target 1 keeps the >=75% win-rate objective (docs/14.11)
     "orx_k": [0.6, 0.8, 1.0],
     "orx_final_r": [1.5, 2.0, 3.0],
     "orx_trend_len": [20, 50, 100],

@@ -158,3 +158,39 @@ can keep testing on the search window, but nothing can be confirmed.
   first.
 - **Model behavior:** the agents use whichever Claude model you configure. Re-run `abg lab eval` when you
   change it.
+
+## 17.6 R&D desk: the dashboard tab and Discord digests
+
+**The R&D tab** (`abg serve`, then the R&D tab) shows:
+- **Header numbers:** the bot's last digest, lab trials, holdout looks and when a fresh holdout opens,
+  proposals waiting, and the current Target 1 settings.
+- **Desk status:** whether Discord is connected, the schedule, and whether the agents can run.
+- **Findings:** daily, weekly or monthly, with a **post to Discord** button. With an admin token set, the
+  button needs it.
+- **Research reports, the trial ledger and proposals.**
+
+**The monitor's schedule** (`abg monitor` / `abg serve`). Each job runs once per period and survives
+restarts. Digests go to `ABG_RD_WEBHOOK_URL` and are saved in `data/rd/`.
+
+| When (ET) | What |
+|---|---|
+| weekdays at `ABG_RD_DAILY_TIME` (12:20, after the bot is flat) | **daily digest**: paper trades vs the backtest's expectation with its noise band, whether the bot was up at 9:30, stale signals, lab activity |
+| Fridays 16:30 | **weekly digest**: the same for the week, plus a 1-month regime watch |
+| first weekday of the month, 08:00 | **monthly digest** for the month just ended, with a 3-month regime watch |
+| Saturdays 09:00 | append last week's finished sessions to the lab dataset (`ABG_LAB_REFRESH_DATA`); then, with `ABG_LAB_AUTO_RUN=weekly` and an API key, one research run by the agents; a summary is posted |
+
+- **Findings are rule-based.** With `ABG_ANTHROPIC_API_KEY` set, a 3–4 sentence analyst note from Claude is
+  added (`ABG_RD_ANALYST_NOTE`).
+- **The regime watch** re-runs the current settings on the most recent months of the dataset next to their
+  full-sample numbers. It is the early warning that the edge is fading.
+- **The holdout renews itself:** the weekly dataset refresh means a fresh 6-month holdout opens once enough
+  new sessions arrive (about late January 2027).
+
+| Setting | Default | |
+|---|---|---|
+| `ABG_RD_WEBHOOK_URL` | — | the R&D channel's webhook (keep it in `.env` only) |
+| `ABG_RD_ENABLED` | true | run the desk inside the monitor |
+| `ABG_RD_DAILY` / `ABG_RD_WEEKLY` / `ABG_RD_MONTHLY` | true | which digests post |
+| `ABG_RD_DAILY_TIME` | 12:20 | |
+| `ABG_LAB_AUTO_RUN` | weekly | `off` to never spend API calls on research |
+| `ABG_LAB_REFRESH_DATA` | true | weekly dataset append (QQQ proxy × the dataset's ratio) |

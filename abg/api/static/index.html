@@ -27,6 +27,7 @@
     <button class="tab" data-view="portfolio" role="tab">Portfolio <span id="sig-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="signals" role="tab">Signals <span id="ext-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="markets" role="tab">Markets</button>
+    <button class="tab" data-view="rd" role="tab">R&amp;D</button>
     <button class="tab" data-view="compare" role="tab">Compare</button>
     <button class="tab" data-view="status" role="tab">Providers</button>
     <button id="auth-btn" class="icon" title="Sign in" aria-label="Sign in" hidden>🔒</button>
@@ -193,6 +194,17 @@
   </section>
 </main>
 
+<main id="view-rd" class="view" hidden>
+  <section class="row kpis5" id="rd-kpis"></section>
+  <section class="card monitor-bar" id="rd-desk"></section>
+  <section class="row two">
+    <div class="card"><div class="card-head"><h2>Findings</h2><span class="rd-actions" id="rd-actions"></span></div><div id="rd-digest"></div></div>
+    <div class="card"><div class="card-head"><h2>Research reports</h2></div><div id="rd-reports"></div></div>
+  </section>
+  <section class="card"><div class="card-head"><h2>Strategy Lab ledger</h2><span class="muted" id="rd-ledger-note"></span></div><div id="rd-trials"></div></section>
+  <section class="card"><div class="card-head"><h2>Proposals</h2><span class="muted">approve or reject with <code>abg lab approve / reject</code></span></div><div id="rd-proposals"></div></section>
+</main>
+
 <main id="view-status" class="view" hidden>
   <div class="card" id="status-out"></div>
 </main>
@@ -202,5 +214,6 @@
 <script src="/static/portfolio.js"></script>
 <script src="/static/ext.js"></script>
 <script src="/static/markets.js"></script>
+<script src="/static/rd.js"></script>
 </body>
 </html>
