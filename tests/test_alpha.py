@@ -538,3 +538,10 @@ def test_brief_explains_the_trend_plan():
     content, emb = Renderer().render(ev[0])
     txt = json.dumps(emb)
     assert "Daily trend **DOWN**" in txt and "SHORT only" in txt and "Grade **A**" in txt and "flat by 12:00" in txt
+
+
+def test_store_claim_dedupes_posts_across_processes(tmp_path):
+    from abg.alpha.bot import AlphaStore
+    a, b = AlphaStore(tmp_path / "alpha.sqlite3"), AlphaStore(tmp_path / "alpha.sqlite3")   # two processes, one DB
+    assert a.claim("2026-10-22:brief") and not b.claim("2026-10-22:brief")
+    assert b.claim("2026-10-22:signal:1:2026-10-22 10:00:00-04:00")

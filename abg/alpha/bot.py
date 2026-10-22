@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL
 CREATE INDEX IF NOT EXISTS ev_day ON events(day);
 CREATE TABLE IF NOT EXISTS trades (day TEXT, num INTEGER, data TEXT, PRIMARY KEY(day, num));
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS sent (k TEXT PRIMARY KEY, ts REAL);
 """)
 
     def add_event(self, day: str, ev: dict, msg: str | None, delivered: str) -> None:
@@ -75,6 +76,13 @@ CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
         q = "SELECT ts, type, data, delivered FROM events " + ("WHERE day=? " if day else "") + "ORDER BY id DESC LIMIT ?"
         rows = self.db.execute(q, (day, limit) if day else (limit,)).fetchall()
         return [{"at": ts, "type": ty, "data": json.loads(d), "delivered": dl} for ts, ty, d, dl in rows]
+
+    def claim(self, k: str) -> bool:
+        """Atomically claim a Discord post (True once per key, across processes sharing this database)."""
+        with self._lock:
+            cur = self.db.execute("INSERT OR IGNORE INTO sent (k, ts) VALUES (?, ?)", (k, _time.time()))
+            self.db.commit()
+            return cur.rowcount == 1
 
     def get(self, k: str):
         r = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
@@ -454,6 +462,11 @@ class AlphaBot:
         msg, delivered = None, "dashboard"
         if r is not None and self._stale(ev):
             r, delivered = None, "late - not posted"     # a replayed signal/stop from hours ago must never reach Discord
+        if r is not None and self.poster.enabled:
+            tid = ev.get("id") or (ev.get("trade") or {}).get("id")
+            key = f"{day}:{kind}" + (f":{tid}:{ev.get('ts')}" if kind not in ("brief", "day_summary", "session_closed", "done") else "")
+            if not self.store.claim(key):
+                r, delivered = None, "duplicate - not posted"   # a second bot process already posted this exact event
         if r is not None and self.poster.enabled:
             content, emb = r
             if kind == "idea_cancel" and self.msg_ids.get(f"idea:{ev['id']}"):

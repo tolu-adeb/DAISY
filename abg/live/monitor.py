@@ -260,7 +260,9 @@ class Monitor:
                     self.lock.beat()
                 except OSError as e:
                     self.errors.append({"ts": time.time(), "where": "lock", "error": str(e)})
-                wait = max(1.0, min(self.next_quote_at, self.next_analysis_at) - time.monotonic())
+                # wake at least every 60 s so the lock heartbeat stays fresh: off-hours sweeps are 30 min apart, and a
+                # heartbeat older than the lock's 180 s let a second monitor (e.g. the 9:00 autostart) start alongside
+                wait = max(1.0, min(self.next_quote_at, self.next_analysis_at, time.monotonic() + 60) - time.monotonic())
                 self._wake.clear()
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=wait)
