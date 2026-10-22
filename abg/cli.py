@@ -371,6 +371,7 @@ from . import cli_more  # noqa: E402,F401  (markets, calendar, backtest, train, 
 from . import cli_alpha  # noqa: E402,F401  (MNQ signal bot: `abg alpha ...`)
 from . import cli_routes  # noqa: E402,F401  (alert routing: `abg route ...`)
 from . import cli_alerio  # noqa: E402,F401  (Alerio copy-trading: `abg alerio ...`)
+from . import cli_lab  # noqa: E402,F401  (Strategy Lab + research agents: `abg lab ...`, `abg mcp`)
 
 if __name__ == "__main__":  # pragma: no cover
     app()

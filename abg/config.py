@@ -243,6 +243,14 @@ class Settings(BaseSettings):
     alpha_auto_optimize: bool = True            # Sunday walk-forward re-fit (adopted only if it beats current)
     alpha_min_win_rate: float = 0.65            # re-fits only consider settings with at least this win rate
 
+    # Strategy Lab (docs/17) - research agents; nothing here changes the live bot without `abg lab approve`
+    lab_model: str | None = None                # Claude model for the research agents (default: anthropic_model)
+    lab_max_tokens: int = 4000                  # per model call
+    lab_rounds: int = 3                         # research rounds per `abg lab run`
+    lab_per_round: int = 5                      # hypotheses per round
+    lab_max_model_calls: int = 60               # hard cap on model calls per run (cost guard)
+    lab_holdout_months: int = 6                 # the locked holdout: the most recent N months of the dataset
+
     log_level: str = "WARNING"
 
     # ---------------------------------------------------------------- helpers

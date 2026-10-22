@@ -356,3 +356,14 @@ When the price stream goes quiet the bot now polls real-time proxy quotes before
 
 Re-run on your PC: `abg alpha backtest --csv data/mnq_proxy_5m.csv --walk-forward` (the trend history is
 downloaded automatically; `--trend-daily FILE` to use your own).
+
+## 14.10 Strategy Lab (Oct 22, 2026)
+
+Changes to these settings now go through the Strategy Lab (docs/17): a whitelisted search space, a
+search-window gate (better win rate AND better net/max-drawdown without losing most trades or profit), a
+locked 6-month holdout with a counted look budget, a trial ledger, and research agents (Strands + Claude) that
+propose but never decide.  First result: 57 trials, 6 holdout looks, **no change adopted** - every candidate
+that beat the current settings over Jul 2024 - Apr 2026 did worse over the last six months.  The new filter
+settings (`min_trend_atr`, `max_atr_ratio`, `orx_min_drive`, `orx_max_ext`, `orx_or_max_atr`, `orx_or_min_atr`,
+`orx_vwap_confirm`, `orx_gap_mode`, `orx_last_entry`, `orx_grade_min`, `orx_leg`) are all off by default, so
+the live bot trades exactly as before.

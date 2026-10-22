@@ -101,6 +101,19 @@ class AlphaParams:
     fail_min: int = 20                  # "no follow-through" exit: after this many minutes ...
     fail_mfe_r: float = 0.35            # ... if the best move is still under this x risk and price is under water, get out
     max_loss_usd: float = 0.0           # per-contract dollar cap on one trade's planned loss (tightens or skips like max_risk_pts)
+    # ---- opening-range-trade filters tested by the Strategy Lab (docs/17); 0 / "" / False = off (the defaults)
+    min_trend_atr: float = 0.0          # day filter (all setups): skip when |last close - N-day average| < this x daily ATR
+    max_atr_ratio: float = 0.0          # day filter (all setups): skip when daily ATR(10) / ATR(100) > this (volatility shock)
+    orx_min_drive: float = -1.0         # skip when the 9:30-9:45 drive, in opening-range heights toward the trade, is below
+                                        # this (-1 = off; e.g. -0.6 skips days whose open drove hard against the trade)
+    orx_max_ext: float = 0.0            # skip when the break candle closed more than this x the range height past the edge
+    orx_or_max_atr: float = 0.0         # skip when the opening range is taller than this x daily ATR
+    orx_or_min_atr: float = 0.0         # skip when the opening range is shorter than this x daily ATR
+    orx_vwap_confirm: bool = False      # only enter when the signal close is on the trade's side of VWAP
+    orx_gap_mode: str = ""              # with | against: only when the 9:30 open vs yesterday's close agrees / disagrees
+    orx_last_entry: str = ""            # "HH:MM": the opening-range trade must trigger before this time
+    orx_grade_min: str = ""             # "A": grade A only (10-, 20- and 50-day trends agree)
+    orx_leg: str = ""                   # follow | fade: trade only that leg of the trend rule
     point_value: float = 2.0
 
     @classmethod
@@ -226,6 +239,7 @@ class AlphaStrategy:
         self.done_reason: str | None = None
         self.window_closed = False
         self.or_hi = self.or_lo = None
+        self.or_last_close: float | None = None
         self.or_done = False
         self.open_px = None
         self.prev_bar: Bar | None = None
@@ -244,7 +258,8 @@ class AlphaStrategy:
         self.vwap_hist: list[tuple[datetime, float]] = []
         self.flat_done = False
         self.orx_done = False
-        self.paper: Trade | None = None           # a trade the adaptive filter blocked, followed silently (see _paper)
+        self.orx_meta: dict = {}
+        self.paper: Trade | None = None          # a trade the adaptive filter blocked, followed silently (see _paper)
         self.paper_log: list[dict] = []
         self.size_mult = 1.0
         if ctx.fomc and p.fomc_mode == "half":
@@ -297,6 +312,7 @@ class AlphaStrategy:
         # opening range
         or_end = (datetime.combine(bar.ts.date(), time(9, 30), bar.ts.tzinfo) + timedelta(minutes=p.or_minutes)).time()
         if t < or_end:
+            self.or_last_close = bar.close
             self.or_hi = bar.high if self.or_hi is None else max(self.or_hi, bar.high)
             self.or_lo = bar.low if self.or_lo is None else min(self.or_lo, bar.low)
         elif not self.or_done and self.or_hi is not None:
@@ -470,6 +486,8 @@ class AlphaStrategy:
                     why.append(f"last {sc.get('sessions', p.orx_lookback)} sessions: fading the first breakout made "
                                f"{sc.get('fade', 0):+.1f}R vs following {sc.get('follow', 0):+.1f}R - so today we "
                                + ("FADE it (expecting the break to fail)" if mode == "fade" else "FOLLOW it (breaks have been running)"))
+                self.orx_meta = {"mode": mode, "grade": grade, "trigger": f.end, "close": f.close, "edge": edge,
+                                 "or_h": (self.or_hi - self.or_lo) if self.or_hi is not None else None}
                 i = self._new_idea("orx", side, "ORH" if s > 0 else "ORL", edge, (f.close, f.close), f.close,
                                    f.close - side * p.orx_k * oatr, f.end, why)
                 if i:
@@ -679,6 +697,9 @@ class AlphaStrategy:
                     f"< {p.orx_min_edge:g}R over the last sessions)")
         if p.orx_respect_bias and ctx.bias and ctx.bias != side:
             return f"against the day's {ctx.bias_label.lower()} lean"
+        why = self._lab_filters(side)
+        if why:
+            return why
         if p.room_min_r > 0:
             for name, lv in self._levels(include_or=False).items():
                 if lv is None:
@@ -687,6 +708,50 @@ class AlphaStrategy:
                 if 0 < d < p.room_min_r * risk:
                     return (f"{name} {lv:,.2f} is only {d:.0f} pts away - less than {p.room_min_r:g}R of room "
                             f"before support/resistance")
+        return None
+
+    def _day_filters(self) -> str | None:
+        """Day-level filters for every setup (off by default)."""
+        p, ctx = self.p, self.ctx
+        if ctx is None:
+            return None
+        if p.min_trend_atr > 0 and ctx.trend_dist_atr is not None and abs(ctx.trend_dist_atr) < p.min_trend_atr:
+            return (f"trend too faint: price is only {abs(ctx.trend_dist_atr):.2f} daily ATRs from its "
+                    f"{p.orx_trend_len}-day average (need {p.min_trend_atr:g})")
+        if p.max_atr_ratio > 0 and ctx.atr_ratio is not None and ctx.atr_ratio > p.max_atr_ratio:
+            return f"volatility shock: daily range is {ctx.atr_ratio:.2f}x its 100-day norm (max {p.max_atr_ratio:g})"
+        return None
+
+    def _lab_filters(self, side: int) -> str | None:
+        """Optional opening-range-trade filters (all off by default).  Each returns the plain-English reason."""
+        p, ctx, m = self.p, self.ctx, getattr(self, "orx_meta", None) or {}
+        if p.orx_leg and m.get("mode") and m["mode"] != p.orx_leg:
+            return f"only the {p.orx_leg} leg is traded (this break is a {m['mode']})"
+        if p.orx_grade_min == "A" and m.get("grade") == "B":
+            return "grade B (shorter trends disagree) - grade A only"
+        if p.orx_last_entry and m.get("trigger") is not None and _mins(m["trigger"].time()) > _mins(_t(p.orx_last_entry)):
+            return f"opening-range break came after {p.orx_last_entry} ET"
+        or_h, atr_d = m.get("or_h"), ctx.atr_d
+        if p.orx_min_drive > -1.0 and or_h and self.open_px is not None and self.or_last_close is not None:
+            drive = (self.or_last_close - self.open_px) / or_h * side
+            if drive < p.orx_min_drive:
+                return (f"the opening 15 minutes drove {abs(drive):.2f} range-heights against a {'long' if side > 0 else 'short'} "
+                        f"(limit {p.orx_min_drive:g})")
+        if p.orx_max_ext > 0 and or_h and m.get("edge") is not None:
+            ext = abs(m["close"] - m["edge"]) / or_h
+            if ext > p.orx_max_ext:
+                return f"the break candle closed {ext:.2f} range-heights past the edge - too extended to take"
+        if or_h and atr_d:
+            if p.orx_or_max_atr > 0 and or_h > p.orx_or_max_atr * atr_d:
+                return f"opening range {or_h:.0f} pts is over {p.orx_or_max_atr:g}x the daily ATR - the move is spent"
+            if p.orx_or_min_atr > 0 and or_h < p.orx_or_min_atr * atr_d:
+                return f"opening range {or_h:.0f} pts is under {p.orx_or_min_atr:g}x the daily ATR - too quiet"
+        if p.orx_vwap_confirm and self.vwap is not None and m.get("close") is not None and (m["close"] - self.vwap) * side <= 0:
+            return f"price is on the wrong side of VWAP {self.vwap:,.2f} for a {'long' if side > 0 else 'short'}"
+        if p.orx_gap_mode in ("with", "against") and ctx.pdc is not None and self.open_px is not None:
+            gap = 1 if self.open_px > ctx.pdc else -1 if self.open_px < ctx.pdc else 0
+            if gap and (gap == side) != (p.orx_gap_mode == "with"):
+                return f"the opening gap {'agrees' if gap == side else 'disagrees'} with the trade - {p.orx_gap_mode}-gap days only"
         return None
 
     def _try_enter(self, i: Idea, bar: Bar, px: float, stop: float, now: datetime, extra=None, direct=False) -> list[dict]:
@@ -711,6 +776,8 @@ class AlphaStrategy:
                 extra.append(f"stop tightened to {risk:.0f} pts (loss cap ${risk * p.point_value:,.0f} per contract)")
             else:
                 why_not = f"stop would be {risk:.0f} pts away (max {cap:g})"
+        if why_not is None:
+            why_not = self._day_filters()
         if why_not is None and i.setup == "orx":
             why_not = self._orx_filters(side, entry, risk)
         elif why_not is None and p.trend_filter and self.ctx and self.ctx.trend_long and side != self.ctx.trend_long:

@@ -33,6 +33,8 @@ class DayContext:
     trend_long: int = 0                    # +1 / -1 / 0: last close vs its N-day average (orx "trend" policy)
     sma_long: float | None = None
     trend_len: int = 50
+    trend_dist_atr: float | None = None    # (last close - N-day average) / daily ATR(10) of the trend history
+    atr_ratio: float | None = None         # daily ATR(10) / ATR(100) of the trend history: >1 = volatility expanding
     er5: float | None = None               # 5-day efficiency ratio of daily closes
     bias: int = 0
     bias_label: str = "Mixed"
@@ -85,6 +87,12 @@ def build_context(day: date, prior_daily: pd.DataFrame, overnight: pd.DataFrame 
         src = src[[ts.date() < day for ts in idx]]
         ctx.trend_long, ctx.sma_long = long_trend(src["close"], trend_len)
         ctx.trend_mid, _ = long_trend(src["close"], 20)
+        if {"high", "low"} <= set(src.columns) and len(src) >= 12:
+            a10, a100 = _atr(src, 10), _atr(src, 100)
+            if a10 and ctx.sma_long is not None:
+                ctx.trend_dist_atr = round((float(src["close"].iloc[-1]) - ctx.sma_long) / a10, 3)
+            if a10 and a100 and len(src) >= 100:
+                ctx.atr_ratio = round(a10 / a100, 3)
     ctx.fomc = any("FOMC" in (e.get("name") or "") for e in ctx.events)
     if len(prior_daily):
         last = prior_daily.iloc[-1]

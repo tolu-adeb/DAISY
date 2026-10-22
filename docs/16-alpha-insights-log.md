@@ -401,3 +401,35 @@ python -m pytest -q tests/                                  # 219 tests
 7. **Monday weakness** (+0.03R) and **10:20 entries** (−0.10R): probably noise. Re-check with more data before acting.
 
 *Educational research log; not financial advice. All figures are simulated or paper.*
+
+## 12. Strategy Lab results (Oct 22, 2026; see docs/17)
+
+- **Protocol:** whitelisted settings only (loss controls excluded). The search window is Jul 2024 – Apr 2026
+  (453 sessions). The locked holdout is the last 6 months (124 sessions), with 6 counted looks. To pass, a
+  change needs a better win rate AND a better net/max-drawdown, at least 80% of trades and 90% of profit,
+  consistency in 3 of 4 sub-periods, a working neighbour value, and no edge on random-walk data.
+- **Result: 57 trials, 10 search-window candidates, 6 holdout looks, 0 passed. No change adopted.**
+- **The current rule is weaker recently:** 59.7% win rate and net/DD 1.31 on the holdout, against 67.2% and
+  8.11 over the search window.
+- **Lower Target 1 (0.5–0.6R):**
+  - Raises the win rate in both windows (holdout 62–65% vs 60%).
+  - Cuts holdout net by 33–57% (net/DD 0.56–0.85 vs 1.31).
+  - **Lesson: win rate bought with an earlier target isn't free.** A recent, choppier regime pays the runners
+    less.
+- **Exhaustion filter** (skip break candles closing more than 0.4 range-heights past the edge), **+ lock 25%
+  of risk at T1:**
+  - The best in-sample result: +28% profit, +20% net/DD.
+  - On the holdout: 58.2% wins and net/DD 0.62, worse than doing nothing.
+  - **Lesson: big in-sample gains from filters can be regime-specific.**
+- **Faint-trend day filter** (skip when price sits within 0.5 daily ATR of the 50-day average), **+ lock:**
+  holdout net −$4. Skipping faint trends did not protect the recent period.
+- **Rejected on the search window alone** (each fails at least one check): VWAP confirmation, gap with/against,
+  grade A only, one leg only, earlier entry cutoffs, opening-range-size filters, volatility-shock filters,
+  wider or tighter stops (0.6/1.0×), trail 1.0/2.0 ATR, other final targets, `be_mode` t1_close, 10-minute
+  opening range, one trade a day, orx-only.
+- **Process lessons for an agent:**
+  1. Keep a holdout the researcher cannot see, and count every look.
+  2. Gate on several metrics at once (win rate AND net/DD AND frequency AND profit). Single-metric gates
+     select the T1 trade-off every time.
+  3. Record losers, not just winners.
+  4. Once the look budget is spent, stop and wait for new data. Don't re-slice the same months.

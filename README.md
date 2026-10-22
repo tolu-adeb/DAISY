@@ -66,6 +66,8 @@ abg portfolio show                       # live P&L, weights, portfolio VaR
 abg alert add NVDA price_above 150
 abg alert cross NVDA 150                 # alert when price crosses 150 (--up / --down / --repeat)
 abg alpha backtest --walk-forward              # MNQ signal bot backtest (docs/14)
+abg lab test "Name" "Why" t1_r=0.6           # Strategy Lab: gate a bot change against a locked holdout (docs/17)
+abg lab run                                    # Strands research agents (needs ABG_ANTHROPIC_API_KEY)
 abg monitor                              # run the live signal monitor in this window
 abg notify-test                          # check Discord / email / desktop alerts
 
@@ -115,6 +117,8 @@ asyncio.run(main())
 13. [Deployment](docs/13-deployment.md): always-on server, Tailscale, tokens, backups, health checks, updates
 14. [MNQ signal bot](docs/14-alpha-mnq-bot.md): opening-session MNQ strategy, backtests, adaptive filter, Discord lifecycle messages (test mode)
 15. [Alert routing](docs/15-alert-routing.md): Alerio-style routes with risk-based sizing, pre-trade loss room, stale/chase guards and replay (dry run)
+16. [MNQ research log](docs/16-alpha-insights-log.md): every insight, what helped, what didn't, traps, porting checklist (agent-ready)
+17. [Strategy Lab & research agents](docs/17-strategy-lab.md): locked-holdout validation gate, trial ledger, Strands + Claude research agents, MCP, evals
 
 ## Tests
 
