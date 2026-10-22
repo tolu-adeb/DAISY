@@ -298,6 +298,21 @@ Walk-forward (pick the trend length from 10/20/50/100 on all earlier half-years,
 66% wins, **+0.12R, +$4,600/micro out of sample**.  Random-walk check: no edge (−0.02R).  By month: 23 of
 28 positive, worst −$247, median +$262, ~19 trades a month (one micro).
 
+**Correction (Oct 22).** The rows above had no daily history before Jul 2024, so the first 50 sessions
+(Jul 1 – Sep 11, 2024, including the Aug 2024 volatility shock) were trend warm-up with almost no trades.
+Re-run with QQQ daily history from Dec 2023 so those sessions trade too:
+
+| Same rules, full trend history | Trades | Win rate | Avg R | $ / micro | Max DD | Months positive |
+| --- | --- | --- | --- | --- | --- | --- |
+| New defaults | 584 | 65% | +0.11 | +5,256 | 881 | 20 of 28 |
+| New defaults + adaptive book (= live) | 566 | 66% | +0.12 | +5,478 | 584 | 21 of 28 (worst −$353) |
+
+Walk-forward with the full history: 451 trades, 65% wins, **+0.11R, +$4,047/micro out of sample**.  If 200-day
+is added to the candidates it is picked on thin 2024 data and the result drops to +0.07R - the 50-day is the
+only length positive in every half-year.  A latent look-ahead was also fixed: a daily frame whose index was
+not a `DatetimeIndex` (e.g. python dates) skipped the "before today" filter and handed every day the final
+trend.  The live bot and CLI always pass a `DatetimeIndex`, so live signals were never affected.
+
 **What changed and why**
 
 1. **Trend rule replaces the follow/fade pick** (`orx_policy="trend"`).  Trade the first 5-min close outside

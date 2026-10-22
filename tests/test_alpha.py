@@ -489,6 +489,11 @@ def test_long_trend_and_tz_aware_daily():
     day = idx[70].date()
     ctx = build_context(day, daily.iloc[:0], long_daily=daily)       # today's (and later) bars must be ignored
     assert ctx.trend_long == 1 and ctx.sma_long == pytest.approx(daily["close"].iloc[20:70].mean())
+    # a python-date (object) index must be filtered too - unfiltered it would leak the future trend into every day
+    falling = pd.DataFrame({"close": np.r_[np.linspace(200, 100, 60), np.linspace(100, 400, 60)]},
+                           index=[d.date() for d in pd.date_range("2026-01-01", periods=120, freq="B")])
+    day = falling.index[60]
+    assert build_context(day, falling.iloc[:0], long_daily=falling).trend_long == -1
 
 
 def test_orx_trend_policy_follows_with_and_fades_against_the_trend():

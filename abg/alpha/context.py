@@ -79,8 +79,10 @@ def build_context(day: date, prior_daily: pd.DataFrame, overnight: pd.DataFrame 
     ctx = DayContext(day=day, events=events or [], trend_len=trend_len)
     src = long_daily if long_daily is not None and len(long_daily) else prior_daily
     if src is not None and len(src):
-        if isinstance(src.index, pd.DatetimeIndex):         # naive or tz-aware: compare calendar dates
-            src = src[[ts.date() < day for ts in src.index]]
+        # Always keep only days strictly before ``day`` - whatever the index type (naive / tz-aware timestamps,
+        # python dates, strings).  An index this filter skipped would hand every day the *final* trend (look-ahead).
+        idx = src.index if isinstance(src.index, pd.DatetimeIndex) else pd.DatetimeIndex(pd.to_datetime(src.index))
+        src = src[[ts.date() < day for ts in idx]]
         ctx.trend_long, ctx.sma_long = long_trend(src["close"], trend_len)
         ctx.trend_mid, _ = long_trend(src["close"], 20)
     ctx.fomc = any("FOMC" in (e.get("name") or "") for e in ctx.events)
