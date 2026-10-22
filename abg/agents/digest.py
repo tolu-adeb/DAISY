@@ -73,12 +73,11 @@ def bot_section(data_dir: Path, start: date, end: date, now: datetime | None = N
     try:
         st = AlphaStore(f)
         trades = [t for t in st.trades(5000) if start.isoformat() <= t["date"] <= end.isoformat()]
-        sess = sessions_between(start, end, now.date())
+        sess = [d for d in sessions_between(start, end, now.date())        # today counts once the open has passed
+                if not (d == now.date() and now.time() < datetime.strptime("09:31", "%H:%M").time())]
         up, late_start, down, stale = [], [], [], 0
         for d in sess:
             evs = st.events(d.isoformat(), 500)
-            if d == now.date() and now.time() < datetime.strptime("09:30", "%H:%M").time():
-                continue
             briefs = [e for e in evs if e["type"] == "brief"]
             stale += sum(1 for e in evs if e.get("delivered") == "late - not posted")
             if not evs:
@@ -177,15 +176,19 @@ def findings(d: dict) -> list[str]:
     out: list[str] = []
     b, exp, lab, rw = d.get("bot") or {}, d.get("expected") or {}, d.get("lab") or {}, d.get("regime")
     n = b.get("trades", 0)
-    if n:
+    tr = lambda k: f"{k} trade{'s' if k != 1 else ''}"
+    if n and n < 8:
+        out.append(f"{tr(n)} this period ({b['wins']} won, {b['net_r']:+.2f}R, {b['net_usd']:+,.0f} $/micro) - too few to "
+                   f"compare with the backtest's {exp.get('win_rate', 0):.0%} win rate.")
+    elif n:
         wr, ewr = b["win_rate"], exp.get("win_rate")
         if ewr:
             z = (wr - ewr) / _se(ewr, n)
             verdict = ("in line with" if abs(z) < 1 else "a little off" if abs(z) < 2 else "well off")
-            out.append(f"Win rate {wr:.0%} on {n} trades vs {ewr:.0%} expected from the backtest - {verdict} "
+            out.append(f"Win rate {wr:.0%} on {tr(n)} vs {ewr:.0%} expected from the backtest - {verdict} "
                        f"(±{_se(ewr, n):.0%} is normal noise at this sample size).")
         if exp.get("avg_r") is not None:
-            out.append(f"Net {b['net_r']:+.2f}R ({b['net_usd']:+,.0f} $/micro) vs about {exp['avg_r'] * n:+.2f}R expected for {n} trades.")
+            out.append(f"Net {b['net_r']:+.2f}R ({b['net_usd']:+,.0f} $/micro) vs about {exp['avg_r'] * n:+.2f}R expected for {tr(n)}.")
     elif b.get("sessions"):
         out.append("No paper trades this period" + (" - the bot wasn't running at most opens." if len(b.get("up_at_open", [])) < b["sessions"] / 2 else "."))
     miss = len(b.get("late_start", [])) + len(b.get("down", []))

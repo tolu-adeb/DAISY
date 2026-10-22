@@ -43,7 +43,7 @@ def test_bot_section_counts_trades_uptime_and_stale(tmp_path):
 
 
 def test_findings_flag_missed_opens_noise_and_the_holdout():
-    d = {"bot": {"trades": 3, "win_rate": 2 / 3, "net_r": 0.55, "net_usd": 48.3, "sessions": 3, "up_at_open": ["a"],
+    d = {"bot": {"trades": 3, "wins": 2, "win_rate": 2 / 3, "net_r": 0.55, "net_usd": 48.3, "sessions": 3, "up_at_open": ["a"],
                  "late_start": ["2026-10-20"], "down": ["2026-10-21"], "held_back_stale": 1},
          "expected": {"win_rate": 0.76, "avg_r": 0.11},
          "lab": {"trials_in_period": 0, "proposals_pending": [], "fresh_holdout_from": "2027-01-21", "holdout_looks": 6,
@@ -51,8 +51,10 @@ def test_findings_flag_missed_opens_noise_and_the_holdout():
          "regime": {"months": 1, "to": "2026-10-21", "recent": {"trades": 20, "win_rate": 0.70, "avg_r": 0.02, "ratio": 0.5},
                     "all": {"trades": 600, "win_rate": 0.76, "avg_r": 0.11, "ratio": 10.8}}}
     f = " | ".join(findings(d))
-    assert "in line with" in f and "normal noise" in f                         # 3 trades can't contradict 76%
+    assert "too few to compare" in f                                           # 3 trades can't contradict 76%
     assert "1 of 3 sessions" in f and "2026-10-21" in f
+    d["bot"].update(trades=40, wins=26, win_rate=0.65, net_r=1.0)
+    assert "normal noise" in " ".join(findings(d))
     assert "held back as stale" in f and "2027-01-21" in f and "edge weakening" in f
 
 
