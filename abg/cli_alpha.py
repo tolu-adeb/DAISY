@@ -66,7 +66,10 @@ def backtest_cmd(csv: Optional[Path] = typer.Option(None, help="Intraday bars CS
                  save: bool = typer.Option(False, help="Save walk-forward settings for the live bot (only if they beat the defaults)."),
                  seed_learner: bool = typer.Option(False, help="Seed the live bot's adaptive book from this backtest."),
                  out: Optional[Path] = typer.Option(None, "--json", help="Write the full result to this file."),
-                 trades: bool = typer.Option(False, help="List every trade.")):
+                 trades: bool = typer.Option(False, help="List every trade."),
+                 trend_daily: Optional[Path] = typer.Option(None, "--trend-daily", help="Daily CSV for the 50-day trend "
+                                                            "(default: download 5y of daily bars; else the CSV's own days warm it up)."),
+                 trend_symbol: str = typer.Option("QQQ", help="Symbol for the downloaded daily trend history.")):
     """Backtest the MNQ strategy on intraday bars (the same code the live bot runs)."""
     from .alpha.backtest import run_backtest, walk_forward
     from .alpha.context import calendar_events
@@ -80,17 +83,28 @@ def backtest_cmd(csv: Optional[Path] = typer.Option(None, help="Intraday bars CS
     else:
         bars = _run(lambda eng: fetch_intraday(eng, symbol, interval, period))
     console.print(f"[dim]{len(bars):,} bars · {bars.index[0]:%Y-%m-%d %H:%M} → {bars.index[-1]:%Y-%m-%d %H:%M} ET[/dim]")
+    tdaily = None
+    try:
+        if trend_daily:
+            from .alpha.data import load_daily_csv
+            tdaily = load_daily_csv(trend_daily)
+        else:
+            from .alpha.data import fetch_daily
+            tdaily = _run(lambda eng: fetch_daily(eng, trend_symbol, "5y"))
+        console.print(f"[dim]daily trend history: {len(tdaily)} days from {trend_daily or trend_symbol}[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]no daily trend history ({e}); the first ~50 days of bars only warm the trend up[/yellow]")
     ev = lambda d: calendar_events(d, s)  # noqa: E731
     params_path = Path(s.data_dir).expanduser() / "alpha_params.json"
     base = AlphaParams()
     book = AdaptiveBook()
-    res = run_backtest(bars, base, learner=book, events_for=ev, commission_rt=s.alpha_commission_rt)
+    res = run_backtest(bars, base, learner=book, events_for=ev, commission_rt=s.alpha_commission_rt, trend_daily=tdaily)
     console.print(_stats_table("MNQ strategy - default settings, adaptive filter on", res.stats))
     _groups(res.stats)
     full = {"backtest": res.to_dict()}
     if walk:
         wf = walk_forward(bars, base, events_for=ev, commission_rt=s.alpha_commission_rt, min_win_rate=s.alpha_min_win_rate,
-                          min_trades=10)
+                          min_trades=10, trend_daily=tdaily)
         console.print(f"\n[bold]Walk-forward[/bold]: fit on {wf['train_days'][0]}…{wf['train_days'][1]} ({wf['train_days'][2]} days), "
                       f"test on {wf['test_days'][0]}…{wf['test_days'][1]} ({wf['test_days'][2]} days)")
         console.print(f"best settings on the fit window: {wf['best']}")
@@ -209,7 +223,13 @@ def replay_cmd(csv: Path, day: str = typer.Option(..., "--date", help="YYYY-MM-D
     from .alpha.messages import Renderer
     s = _settings()
     bars = load_intraday_csv(csv, tz)
-    res = run_backtest(bars, collect_events=True, days=[date.fromisoformat(day)])
+    tdaily = None
+    try:
+        from .alpha.data import fetch_daily
+        tdaily = _run(lambda eng: fetch_daily(eng, "QQQ", "5y"))
+    except Exception:
+        pass                                      # the CSV's own days warm the trend up instead
+    res = run_backtest(bars, collect_events=True, days=[date.fromisoformat(day)], trend_daily=tdaily)
     rd = Renderer(s.alpha_tag, None)
     for ev in res.events:
         r = rd.render(ev)

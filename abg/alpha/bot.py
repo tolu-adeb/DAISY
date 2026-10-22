@@ -26,7 +26,7 @@ import statistics
 import threading
 import time as _time
 from collections import deque
-from datetime import date, datetime, time, timedelta
+from datetime import timezone, date, datetime, time, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -255,10 +255,17 @@ class AlphaBot:
         if self.feed == "proxy" and (self.ratio is None or _time.time() - self.ratio_at > 1800) and t >= time(9, 15):
             await self.calibrate()
         if time(9, 30) <= t < time(16, 1):
-            if self.feed == "direct" or (t >= time(9, 33) and _time.time() - self.last_tick > 180):
+            quiet = _time.time() - self.last_tick
+            # Stream quiet: poll real-time proxy quotes first (Oct 16: the stream dropped, the bot fell back to
+            # delayed 1-min bars, and the 09:55 signal arrived at 10:04 - too late to post).  Delayed bars only
+            # if the quotes fail too.
+            polled = False
+            if self.feed == "proxy" and t >= time(9, 30, 30) and quiet > 30:
+                polled = await self.poll_quote(now)
+            if self.feed == "direct" or (not polled and t >= time(9, 33) and quiet > 180):
                 if self.feed == "proxy" and "stream quiet" not in self.notes:
                     self.notes.append("stream quiet")
-                    log.warning("alpha: proxy stream silent - polling %s (delayed data)", self.symbol)
+                    log.warning("alpha: proxy stream and quotes silent - polling %s (delayed data)", self.symbol)
                 await self.poll_direct(now)
             elif self.builder.stale(now):
                 b = self.builder.close()
@@ -271,6 +278,22 @@ class AlphaBot:
     async def _bars(self, symbol: str, interval: str, period: str) -> pd.DataFrame:
         res = await self.engine.history(symbol, period=period, interval=interval, use_cache=False)
         return utc_naive_to_et(getattr(res, "value", res).df)   # engine returns Fetched(value=PriceHistory)
+
+    async def _daily(self, period: str = "1y") -> pd.DataFrame:
+        """Daily closes for the N-day trend (MNQ, else the proxy), indexed by naive calendar date."""
+        from .data import fetch_daily
+        for sym in (self.symbol, self.proxy):
+            if not sym:
+                continue
+            try:
+                df = await fetch_daily(self.engine, sym, period)
+                if len(df) >= 25:
+                    if sym != self.symbol:
+                        self.notes.append(f"daily trend read from {sym} ({self.symbol} daily history unavailable)")
+                    return df
+            except Exception as e:
+                self.errors.append({"ts": _time.time(), "error": f"daily {sym}: {e}"[:300]})
+        return pd.DataFrame()
 
     async def prepare_day(self, d: date) -> None:
         self.day, self.brief_posted, self.ended = d, False, False
@@ -290,7 +313,11 @@ class AlphaBot:
         prior = {k: v for k, v in sessions.items() if k < d}
         daily = rth_daily(pd.concat(prior.values())) if prior else pd.DataFrame()
         pre = today[[x.time() < time(9, 30) or x.time() >= time(18, 0) for x in today.index]] if len(today) else None
-        ctx = build_context(d, daily, pre if pre is not None and len(pre) else None, calendar_events(d, self.s))
+        long_daily = await self._daily("1y") if self.params.orx_policy == "trend" else None
+        ctx = build_context(d, daily, pre if pre is not None and len(pre) else None, calendar_events(d, self.s),
+                            long_daily=long_daily, trend_len=self.params.orx_trend_len)
+        if self.params.orx_policy == "trend" and not ctx.trend_long:
+            self.notes.append("no daily trend read (not enough daily history) - the opening-range trade sits out today")
         from .context import apply_orx, orx_shadow
         history = []
         for k in sorted(prior):
@@ -341,6 +368,30 @@ class AlphaBot:
                              q.get("tick_low", q["price"]), q.get("n", 1))
         if b is not None:
             await self.process(b)
+
+    async def poll_quote(self, now: datetime) -> bool:
+        """One real-time proxy quote into the minute builder.  False when there is no fresh quote."""
+        try:
+            res = await self.engine.quote(self.proxy, use_cache=False)
+        except Exception as e:
+            self.errors.append({"ts": _time.time(), "error": f"quote poll: {e}"[:300]})
+            return False
+        q = getattr(res, "value", res)
+        px = getattr(q, "price", None)
+        ts = getattr(q, "timestamp", None)
+        if not px or getattr(q, "synthetic", False):
+            return False
+        if isinstance(ts, datetime):
+            age = (now - (ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc))).total_seconds()
+            if age > 90:
+                return False
+        if "polling quotes" not in self.notes:
+            self.notes.append("polling quotes")
+            log.warning("alpha: proxy stream quiet - polling real-time %s quotes", self.proxy)
+        b = self.builder.add(_time.time(), float(px), float(px), float(px))
+        if b is not None:
+            await self.process(b)
+        return True
 
     async def poll_direct(self, now: datetime) -> None:
         try:
@@ -452,7 +503,9 @@ class AlphaBot:
     async def optimize(self, save: bool = True) -> dict:
         from .backtest import walk_forward
         bars = await self._bars(self.symbol, "5m", "60d")
-        res = await asyncio.to_thread(walk_forward, bars, self.params, min_win_rate=self.s.alpha_min_win_rate)
+        daily = await self._daily("2y")
+        res = await asyncio.to_thread(walk_forward, bars, self.params, min_win_rate=self.s.alpha_min_win_rate,
+                                      trend_daily=daily if len(daily) else None)
         ts, tst = res["test_stats"], res["default_test_stats"]
         from .backtest import worth_adopting
         better = worth_adopting(ts, tst)

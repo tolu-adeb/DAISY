@@ -3,6 +3,7 @@ messages and the live bot plumbing (all offline)."""
 import json
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -211,7 +212,7 @@ def test_adaptive_book_pauses_and_recovers(tmp_path):
 
 # ---------------------------------------------------------------- backtester
 def test_backtest_has_no_edge_on_random_walk():
-    res = run_backtest(random_walk_bars(60, seed=11))
+    res = run_backtest(random_walk_bars(120, seed=11))     # 120 days: the 50-day trend needs ~50 to warm up
     st = res.stats
     assert st["trades"] > 20 and abs(st["avg_r"]) < 0.35          # loose: one seed is noisy; the CLI runs 3 x 120 days
     assert {"by_setup", "by_time", "max_dd_pts", "net_usd_per_micro"} <= set(st)
@@ -403,7 +404,8 @@ def test_shadow_and_mode_choice():
 
 
 def test_orx_fades_first_breakout_in_fade_mode():
-    s = AlphaStrategy(AlphaParams())
+    ad = AlphaParams(orx_policy="adaptive", setups=("orx",), orx_final_mode="fixed")
+    s = AlphaStrategy(ad)
     ctx = _ctx()
     ctx.orx_mode, ctx.orx_scores = "fade", {"fade": 2.1, "follow": -1.5, "sessions": 3}
     s.start_day(ctx, _warm())
@@ -412,7 +414,7 @@ def test_orx_fades_first_breakout_in_fade_mode():
     assert sig["setup"] == "orx" and sig["side"] == -1 and "FADE" in " ".join(sig["reasons"])
     assert sig["final"] == pytest.approx(sig["entry"] - 2.0 * sig["risk"], abs=0.25)
     assert any(e["type"] in ("t1", "final") for e in ev)
-    s = AlphaStrategy(AlphaParams())
+    s = AlphaStrategy(ad)
     s.start_day(_ctx(), _warm())                                         # mode off -> no trade
     assert "signal" not in [e["type"] for e in _run(s, _orb_day("down").bars)]
 
@@ -463,12 +465,70 @@ def test_loss_controls_tighten_and_room_filter():
 
 def test_saved_settings_cannot_loosen_loss_controls():
     from abg.alpha.strategy import load_saved_params
-    p = load_saved_params({"params": {"max_risk_pts": 120, "risk_cap_mode": "skip", "orx_k": 0.6}})
+    p = load_saved_params({"params": {"orx_policy": "trend", "max_risk_pts": 120, "risk_cap_mode": "skip", "orx_k": 0.6}})
     assert p.max_risk_pts == AlphaParams().max_risk_pts and p.risk_cap_mode == "tighten" and p.orx_k == 0.6
-    assert load_saved_params({"params": {"max_risk_pts": 120}, "safety_override": True}).max_risk_pts == 120
+    assert load_saved_params({"params": {"orx_policy": "trend", "max_risk_pts": 120}, "safety_override": True}).max_risk_pts == 120
+    # a file from before the trend re-test (no orx_policy) must not switch the new defaults back to the old rule
+    old = load_saved_params({"params": {"setups": ["orx"], "entry_end": "10:30", "orx_lookback": 3}})
+    assert old == AlphaParams()
 
 
 def test_failed_exit_message_renders():
     tr = {"id": 1, "entry": 100.0, "exit": 95.0, "t1_hit": False, "mfe": 2.0}
     r = Renderer().render({"type": "failed", "trade": tr, "pts": -5.0, "r": -0.2, "why": "no follow-through after 20 min"})
     assert r and "CUT EARLY" in r[1]["title"]
+
+
+# ---------------------------------------------------------------- Oct 2026: trend policy, paper learning
+def test_long_trend_and_tz_aware_daily():
+    from abg.alpha.context import long_trend
+    up = pd.Series(range(1, 61), dtype=float)
+    assert long_trend(up, 50)[0] == 1 and long_trend(-up, 50)[0] == -1 and long_trend(up[:10], 50) == (0, None)
+    idx = pd.date_range("2026-06-01", periods=80, freq="B", tz="America/New_York")
+    daily = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": np.linspace(100, 200, 80)}, index=idx)
+    day = idx[70].date()
+    ctx = build_context(day, daily.iloc[:0], long_daily=daily)       # today's (and later) bars must be ignored
+    assert ctx.trend_long == 1 and ctx.sma_long == pytest.approx(daily["close"].iloc[20:70].mean())
+
+
+def test_orx_trend_policy_follows_with_and_fades_against_the_trend():
+    p = AlphaParams(setups=("orx",), orx_final_mode="fixed")
+    for trend, want in ((1, 1), (-1, -1)):                      # the first break in _orb_day is UP
+        s = AlphaStrategy(p)
+        s.start_day(_ctx(trend_long=trend, trend_mid=trend, trend_d=trend), _warm())
+        sig = next(e for e in _run(s, _orb_day("down").bars) if e["type"] == "signal")["trade"]
+        why = " ".join(sig["reasons"])
+        assert sig["setup"] == "orx" and sig["side"] == want
+        assert ("FOLLOW the break with the trend" if want == 1 else "FADE the break against the trend") in why
+        assert "grade A" in why
+    s = AlphaStrategy(p)
+    s.start_day(_ctx(trend_long=1, trend_mid=-1), _warm())
+    sig = next(e for e in _run(s, _orb_day("up").bars) if e["type"] == "signal")["trade"]
+    assert "grade B" in " ".join(sig["reasons"])
+    s = AlphaStrategy(p)
+    s.start_day(_ctx(), _warm())                                  # no trend read -> stand aside
+    assert "signal" not in [e["type"] for e in _run(s, _orb_day("up").bars)]
+
+
+def test_filter_blocked_setup_keeps_learning_on_paper():
+    """Before: once the adaptive book switched a setup off it never got another result and stayed off for good
+    (2 years of bars: 14 trades)."""
+    book = AdaptiveBook(min_n=1, off_below=0.0)
+    book.record("orx", "trend", -1.0)
+    book.record("orx", "range", -1.0)
+    n0 = {k: v["n"] for k, v in book.stats.items()}
+    s = AlphaStrategy(AlphaParams(setups=("orx",), orx_final_mode="fixed"), book)
+    s.start_day(_ctx(trend_long=1, trend_mid=1, trend_d=1), _warm())
+    ev = _run(s, _orb_day("up").bars)
+    assert "signal" not in [e["type"] for e in ev]               # blocked live ...
+    summ = ev[-1]
+    assert len(summ["paper"]) == 1 and summ["paper"][0]["setup"] == "orx"
+    assert sum(v["n"] for v in book.stats.values()) == sum(n0.values()) + 1    # ... but its result was recorded
+
+
+def test_brief_explains_the_trend_plan():
+    s = AlphaStrategy(AlphaParams())
+    ev = s.start_day(_ctx(trend_long=-1, trend_mid=-1, trend_d=-1, sma_long=20500.0), _warm())
+    content, emb = Renderer().render(ev[0])
+    txt = json.dumps(emb)
+    assert "Daily trend **DOWN**" in txt and "SHORT only" in txt and "Grade **A**" in txt and "flat by 12:00" in txt

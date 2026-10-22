@@ -280,3 +280,64 @@ and the worst trade fall more.
 **Caveat.** The rules were picked on the same 43 sessions, and resampling only reshuffles those sessions. Treat
 the new numbers as a better-shaped hypothesis and confirm them with longer 1-minute history:
 `abg alpha backtest --csv FILE --walk-forward`.
+
+## 14.9 Two-year re-test and the trend rule (Oct 21, 2026)
+
+The 42-day MNQ sample (14.1b) was a good stretch for the adaptive follow/fade rule.  Re-tested on
+**577 sessions (Jul 2024 – Oct 2026)** of real-time-proxy bars (QQQ 5-min × the MNQ/QQQ ratio; on the 43
+overlapping days the proxy reproduced all 26 MNQ trades on the same side), the old rule was close to break-even:
+
+| Rule (same simulator, costs in) | Trades | Win rate | Avg R | $ / micro | Max DD | Half-years positive |
+| --- | --- | --- | --- | --- | --- | --- |
+| Old: adaptive follow/fade, 09:45–10:30, room filter | 387 | 59% | +0.03 | +1,273 | 1,849 | 2 of 5 |
+| Old + adaptive book (as it was) | 14 | 29% | −0.46 | −572 | 575 | – (switched itself off for good) |
+| **New defaults** (below) | **546** | **67%** | **+0.15** | **+6,437** | **584** | **5 of 5** |
+| New defaults + adaptive book (fixed) | 536 | 66% | +0.14 | +6,010 | 605 | 5 of 5 |
+
+Walk-forward (pick the trend length from 10/20/50/100 on all earlier half-years, test the next): 456 trades,
+66% wins, **+0.12R, +$4,600/micro out of sample**.  Random-walk check: no edge (−0.02R).  By month: 23 of
+28 positive, worst −$247, median +$262, ~19 trades a month (one micro).
+
+**What changed and why**
+
+1. **Trend rule replaces the follow/fade pick** (`orx_policy="trend"`).  Trade the first 5-min close outside
+   the 15-min opening range *in the direction of the daily trend* (last close vs its 50-day average): follow
+   a break with the trend, fade a break against it.  The 3-session follow/fade pick earned the same as always
+   following (+0.03R); the trend side earned +0.10R in the replay and both legs pay (follow +0.15R, fade +0.12R).
+   Longer trends were steadily better (5/10/20/50-day: +0.06/+0.07/+0.10/+0.12R); 200-day fell off.
+2. **Grade A / B** on every signal: A when the 10-, 20- and 50-day trends all agree (+0.15R, 370 trades),
+   B when only the 50-day does (+0.06R).  Shown in the reasons and the brief; not a filter.
+3. **Adaptive book can't lock itself out**: a trade it blocks is followed silently on paper and recorded, so a
+   setup it switched off can switch back on (before: one bad run in 2024 → off for two years).
+4. **More trades, same edge**: breakout-retest (`orb`) back on, *with the daily trend only* (+0.24R alone);
+   room-to-level filter off (cost 60 trades, no gain under the trend rule); entries to 11:30.
+5. **Flat by 12:00** (like the NY-morning services): max drawdown 719 → 584 for ~$90 less.
+6. **Liquidity final target**: nearest prior-day / overnight level 1.8–4R away, else 2R (slightly better
+   than fixed 2R; members see a named target).
+7. **Old settings files are ignored** (no `orx_policy` key) so a stale `alpha_params.json` can't switch the
+   old rule back on.  Sunday re-fits now search `orx_trend_len` 20/50/100 instead of the follow/fade lookback.
+
+**Tested and not adopted**: a second with-trend entry after a win (+0.07–0.10R but negative half-years);
+sweep (no edge even trend-filtered); 5- or 30-min opening range (worse), 10-min (more money, +55% drawdown);
+switching between the old and new rule by recent results (worse than trend alone); trading only when both
+agree (+0.18R but half the trades).  Target 1 at 1R makes more (+0.17R) at a 58% win rate - kept 0.7R for
+the ~67% win rate you asked for.
+
+**Other services, for perspective** (their own posts, not verified fills):
+* *TradingBrain* (3 signals, Oct 16–20): HTF bias first ("BEARISH (HIGH) · continuation"), wait for the
+  open's counter-trend sweep, enter with the bias, 1R Target 1, liquidity final, flat by noon, one trade a
+  day.  The testable parts - bias from the higher-timeframe trend, both legs, liquidity targets, the noon
+  window - are what 1, 2, 5 and 6 above now do.
+* *TradingMind* journal (123 trades, Jul 2 – Oct 13): +3,484 pts; most of it **against** the 50-day trend
+  (shorts into an up-trend, +35 pts/trade vs +19 with it) and in the first half hour (09:xx +49 pts/trade,
+  11:xx +9).  Its daily P&L is uncorrelated with this bot's (0.04) - a different edge, so don't put the
+  trend filter on Alerio's TradingMind copy.  An early-session momentum rule of our own did not hold up over
+  two years (+0.03–0.08R).
+
+**Live October so far** (paper, 5 trades: −1.0, +0.35, −1.0, +0.34, +1.35 R) is too few to judge.  The bot
+was running at the open on only ~5 of 15 sessions; `deploy/windows-autostart.ps1` (or the server) fixes that.
+When the price stream goes quiet the bot now polls real-time proxy quotes before falling back to delayed bars
+(Oct 16's 09:55 signal reached the bot at 10:04 and was correctly held back as stale).
+
+Re-run on your PC: `abg alpha backtest --csv data/mnq_proxy_5m.csv --walk-forward` (the trend history is
+downloaded automatically; `--trend-daily FILE` to use your own).

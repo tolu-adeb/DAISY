@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 GREEN, RED, BLUE, GREY, YELLOW, ORANGE, TEAL = 0x2ECC71, 0xE74C3C, 0x3498DB, 0x95A5A6, 0xF1C40F, 0xF57C00, 0x13FE9E
-SETUP_NAMES = {"orx": "Adaptive opening-range trade", "orb": "Opening-range breakout + retest", "sweep": "Liquidity sweep + reclaim", "vwap": "VWAP trend pullback"}
+SETUP_NAMES = {"orx": "Opening-range trend trade", "orb": "Opening-range breakout + retest", "sweep": "Liquidity sweep + reclaim", "vwap": "VWAP trend pullback"}
 LEVEL_NAMES = {"PDH": "yesterday's high", "PDL": "yesterday's low", "PDC": "yesterday's close", "ONH": "overnight high",
                "ONL": "overnight low", "ORH": "opening-range high", "ORL": "opening-range low", "VWAP": "VWAP"}
 
@@ -74,7 +74,19 @@ class Renderer:
             "Last 5 days were mixed.")
         setups = p.get("setups", [])
         plan = []
-        if "orx" in setups:
+        if "orx" in setups and p.get("orx_policy", "adaptive") == "trend":
+            tl, ma, n = c.get("trend_long", 0), c.get("sma_long"), p.get("orx_trend_len", 50)
+            if tl:
+                up = tl > 0
+                grade = "A" if c.get("trend_d") == tl and c.get("trend_mid") == tl else "B"
+                plan.append(f"• **Opening range** 09:30-{_add_min('09:30', p['or_minutes'])} ET. Daily trend **{'UP' if up else 'DOWN'}** "
+                            f"(last close {'above' if up else 'below'} its {n}-day average{(' ' + f(ma, 0)) if ma else ''}) - "
+                            f"we trade the first close outside the range **{'LONG' if up else 'SHORT'} only**: follow a break "
+                            f"{'up' if up else 'down'}, fade a break {'down' if up else 'up'}. Grade **{grade}**"
+                            + (" (10/20/50-day trends agree)." if grade == "A" else " (shorter trends mixed - lower conviction)."))
+            else:
+                plan.append("• **Opening range**: no clear daily trend read - the opening-range trade **stands aside** today.")
+        elif "orx" in setups:
             mode, sc = c.get("orx_mode", "off"), c.get("orx_scores") or {}
             hist = " · ".join(f"{h['date'][5:]} {h.get('dir', '-')}: follow {h['follow']:+.1f}R / fade {h['fade']:+.1f}R"
                               for h in (c.get("orx_history") or [])[-p.get("orx_lookback", 3):] if h.get("follow") is not None)
@@ -85,7 +97,8 @@ class Renderer:
                         + (f" (last {sc.get('sessions')} sessions: fade {sc.get('fade', 0):+.1f}R, follow {sc.get('follow', 0):+.1f}R)." if sc else ".")
                         + (f"\n  _{hist}_" if hist else ""))
         if "orb" in setups:
-            plan.append("• **Breakout retest**: a strong 5-min close outside the opening range arms a retest idea.")
+            plan.append("• **Breakout retest**: a strong 5-min close outside the opening range arms a retest idea"
+                        + (" (with the daily trend only)." if p.get("trend_filter") else "."))
         if "sweep" in setups:
             plan.append("• **Sweeps**: a quick run through " + ", ".join(k for k, v in lv.items() if v and k != "PDC")
                         + " that snaps back = reversal setup.")
@@ -93,7 +106,7 @@ class Renderer:
             plan.append("• **VWAP pullback** only if the open is clearly one-sided.")
         rules = (f"New entries {p['entry_start']}-{p['entry_end']} ET · max {p['max_trades']} trades"
                  + (" · stop after the first loss" if p.get("stop_after_loss") else "")
-                 + f" · Target 1 = {f(p['t1_r'])}R banks half")
+                 + f" · Target 1 = {f(p['t1_r'])}R banks half · flat by {p.get('flat_time', '15:55')} ET")
         fields = [{"name": "🎯 Levels", "value": levels or "n/a", "inline": False},
                   {"name": "🧭 Bias", "value": bias + (": " + "; ".join(c.get("bias_reasons") or []) if c.get("bias_reasons") else "")
                    + "\n_A lean only - setups in either direction can trigger._", "inline": False},
@@ -242,7 +255,7 @@ class Renderer:
                               "BREAK-EVEN — the runner closed at entry")
 
     def _closed(self, ev):
-        why = {"flat time": "Flat before the close.", "session end": "Session over.", "runner stop": "Trailing stop hit."}.get(
+        why = {"flat time": "Flat time - the bot closes everything by its cut-off.", "session end": "Session over.", "runner stop": "Trailing stop hit."}.get(
             ev.get("why"), ev.get("why", ""))
         return self._exit_msg(ev, "✅ TRADE CLOSED", GREEN if ev["pts"] > 0 else GREY, f"{why} **Close your position now** if you're still in.",
                               "TRADE CLOSED — close your position now")

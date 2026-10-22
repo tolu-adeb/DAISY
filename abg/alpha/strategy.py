@@ -51,16 +51,23 @@ def _mins(t: time) -> int:
 class AlphaParams:
     or_minutes: int = 15
     entry_start: str = "09:35"
-    entry_end: str = "10:30"
+    entry_end: str = "11:30"           # Oct 2026 re-test (docs/14): 11:30 entries + flat by noon kept the edge, +30 trades
     vwap_start: str = "09:50"
-    flat_time: str = "15:55"
+    flat_time: str = "12:00"           # flat by noon like the NY-morning signal services; trims drawdown, costs ~nothing
     max_trades: int = 2
     stop_after_loss: bool = True
     max_daily_loss_r: float = 1.5
-    setups: tuple = ("orx",)            # orb / sweep / vwap are available but lost money in the backtest (docs/14)
+    setups: tuple = ("orx", "orb")      # orb only with the daily trend; sweep / vwap had no edge even trend-filtered (docs/14)
     orx_k: float = 0.8                  # adaptive opening-range trade: stop = k x opening ATR
     orx_lookback: int = 3               # sessions replayed to pick follow / fade
     orx_final_r: float = 2.0
+    orx_policy: str = "trend"           # trend: trade the first breakout in the direction of the N-day trend (follow it
+                                        # when it breaks with the trend, fade it when it breaks against); adaptive: the
+                                        # old follow/fade pick from the last orx_lookback sessions (docs/14)
+    orx_trend_len: int = 50             # N for the daily trend (last close vs its N-day average)
+    orx_final_mode: str = "liquidity"      # fixed: orx_final_r; liquidity: the nearest prior-day/overnight level in the
+                                        # trade's direction if it sits between min_final_r and max_final_r, else orx_final_r
+    trend_filter: bool = True           # orb / sweep / vwap ideas only in the direction of that daily trend
     atr_len: int = 14
     disp_body_atr: float = 0.6
     zone_atr: float = 0.25
@@ -88,7 +95,7 @@ class AlphaParams:
     tick: float = 0.25
     # ---- single-trade loss controls (docs/14 "Capping the big loser"); 0 / "" = off
     risk_cap_mode: str = "tighten"      # skip | tighten : what to do when the stop is wider than max_risk_pts
-    room_min_r: float = 0.7             # skip when a key level (PDH/PDL/ONH/ONL/PDC) sits in the way closer than this x risk
+    room_min_r: float = 0.0             # skip when a key level (PDH/PDL/ONH/ONL/PDC) sits in the way closer than this x risk
     orx_min_edge: float = 0.0           # the winning follow/fade score must be at least this many R
     orx_respect_bias: bool = False      # no orx trade against the day's bias
     fail_min: int = 20                  # "no follow-through" exit: after this many minutes ...
@@ -119,6 +126,10 @@ SAFETY_KEYS = ("max_risk_pts", "risk_cap_mode", "room_min_r", "fail_min", "fail_
 def load_saved_params(d: dict | None) -> "AlphaParams":
     d = dict(d or {})
     raw = dict(d.get("params", d))
+    if "orx_policy" not in raw:
+        # Written before the Oct 2026 trend re-test: its setups / window / mode were fitted to the old adaptive rule
+        # on 42 days and would quietly switch the new defaults back off.  Use the defaults instead.
+        return AlphaParams()
     if not d.get("safety_override"):
         for k in SAFETY_KEYS:
             raw.pop(k, None)
@@ -233,6 +244,8 @@ class AlphaStrategy:
         self.vwap_hist: list[tuple[datetime, float]] = []
         self.flat_done = False
         self.orx_done = False
+        self.paper: Trade | None = None           # a trade the adaptive filter blocked, followed silently (see _paper)
+        self.paper_log: list[dict] = []
         self.size_mult = 1.0
         if ctx.fomc and p.fomc_mode == "half":
             self.size_mult = 0.5
@@ -250,6 +263,8 @@ class AlphaStrategy:
         last = self.prev_bar
         if self.trade is not None and last is not None:
             out += self._exit(self.trade, last.close, last.end, "closed", "session end")
+        if self.paper is not None and last is not None:
+            self._paper_done(last.close, last.end)
         for i in self.ideas:
             if i.state in ("watch", "armed"):
                 i.state = "expired"
@@ -266,7 +281,7 @@ class AlphaStrategy:
         return {"type": "day_summary", "ts": ts, "trades": [t.to_dict() for t in tr], "n": len(tr),
                 "wins": len(wins), "losses": len(losses), "be": len(tr) - len(wins) - len(losses),
                 "net_pts": round(sum(t.pts or 0 for t in tr), 2), "net_r": round(sum(t.r or 0 for t in tr), 2),
-                "ideas": len(self.ideas), "done_reason": self.done_reason}
+                "ideas": len(self.ideas), "done_reason": self.done_reason, "paper": list(self.paper_log)}
 
     # ================================================================== bars
     def on_bar(self, bar: Bar) -> list[dict]:
@@ -290,6 +305,8 @@ class AlphaStrategy:
         # manage the open trade first (entry bar itself is not re-tested)
         if self.trade is not None:           # entries happen after this point, so the entry bar is never re-tested
             out += self._manage(self.trade, bar)
+        if self.paper is not None:
+            self._paper(bar)
         # flat time
         if not self.flat_done and _mins(t) + bar.minutes > _mins(_t(p.flat_time)):
             self.flat_done = True
@@ -419,22 +436,40 @@ class AlphaStrategy:
         out = []
         body = abs(f.close - f.open)
         # ---- adaptive opening-range trade: follow or fade the first close outside the range
+        policy = p.orx_policy
+        trend = self.ctx.trend_long if self.ctx else 0
         mode = self.ctx.orx_mode if self.ctx else "off"
-        if "orx" in p.setups and self.or_done and not self.orx_done and mode in ("follow", "fade") and self.or_hi is not None:
+        armed = (trend != 0) if policy == "trend" else mode in ("follow", "fade")
+        if "orx" in p.setups and self.or_done and not self.orx_done and armed and self.or_hi is not None:
             s = 1 if f.close > self.or_hi else -1 if f.close < self.or_lo else 0
             if s:
                 self.orx_done = True
-                side = s if mode == "follow" else -s
+                if policy == "trend":
+                    side = trend
+                    mode = "follow" if s == trend else "fade"
+                else:
+                    side = s if mode == "follow" else -s
                 day = f.ts.date()
                 orb = [x for x in self.fives if x.ts.date() == day and x.ts.time() >= time(9, 30) and
                        x.ts < datetime.combine(day, time(9, 30), f.ts.tzinfo) + timedelta(minutes=p.or_minutes)]
                 oatr = sum(x.high - x.low for x in orb) / len(orb) if orb else a
                 sc = self.ctx.orx_scores or {}
                 edge = self.or_hi if s > 0 else self.or_lo
-                why = [f"first 5-min close {'above' if s > 0 else 'below'} the opening range ({edge:,.2f})",
-                       (f"last {sc.get('sessions', p.orx_lookback)} sessions: fading the first breakout made "
-                        f"{sc.get('fade', 0):+.1f}R vs following {sc.get('follow', 0):+.1f}R - so today we "
-                        + ("FADE it (expecting the break to fail)" if mode == "fade" else "FOLLOW it (breaks have been running)"))]
+                why = [f"first 5-min close {'above' if s > 0 else 'below'} the opening range ({edge:,.2f})"]
+                grade = ""
+                if policy == "trend":
+                    ma = self.ctx.sma_long
+                    agree = self.ctx.trend_d == trend and self.ctx.trend_mid == trend
+                    grade = "A" if agree else "B"
+                    why.append(f"daily trend is {'UP' if trend > 0 else 'DOWN'} (last close {'above' if trend > 0 else 'below'} "
+                               f"its {p.orx_trend_len}-day average{f' {ma:,.0f}' if ma else ''}) - so we "
+                               + ("FOLLOW the break with the trend" if mode == "follow" else "FADE the break against the trend"))
+                    why.append("grade A: the 10-, 20- and 50-day trends all agree" if grade == "A" else
+                               "grade B: only the 50-day trend points this way (shorter trends mixed) - lower conviction")
+                else:
+                    why.append(f"last {sc.get('sessions', p.orx_lookback)} sessions: fading the first breakout made "
+                               f"{sc.get('fade', 0):+.1f}R vs following {sc.get('follow', 0):+.1f}R - so today we "
+                               + ("FADE it (expecting the break to fail)" if mode == "fade" else "FOLLOW it (breaks have been running)"))
                 i = self._new_idea("orx", side, "ORH" if s > 0 else "ORL", edge, (f.close, f.close), f.close,
                                    f.close - side * p.orx_k * oatr, f.end, why)
                 if i:
@@ -599,8 +634,9 @@ class AlphaStrategy:
                 why.append(note)
         return s, why
 
-    def _final_target(self, side: int, entry: float, risk: float) -> tuple[float, str]:
+    def _final_target(self, side: int, entry: float, risk: float, fallback_r: float | None = None) -> tuple[float, str]:
         p = self.p
+        fb = p.final_r if fallback_r is None else fallback_r
         cands = []
         for name, lv in self._levels().items():
             d = (lv - entry) * side
@@ -614,7 +650,7 @@ class AlphaStrategy:
             d, name, lv = min(cands)
             if d <= p.max_final_r * risk:
                 return self._round(lv - side * p.tick), name
-        return self._round(entry + side * p.final_r * risk), f"{p.final_r:g}R"
+        return self._round(entry + side * fb * risk), f"{fb:g}R"
 
     def _round(self, x: float) -> float:
         return round(x / self.p.tick) * self.p.tick
@@ -677,11 +713,15 @@ class AlphaStrategy:
                 why_not = f"stop would be {risk:.0f} pts away (max {cap:g})"
         if why_not is None and i.setup == "orx":
             why_not = self._orx_filters(side, entry, risk)
+        elif why_not is None and p.trend_filter and self.ctx and self.ctx.trend_long and side != self.ctx.trend_long:
+            why_not = f"against the daily trend (last close {'above' if self.ctx.trend_long > 0 else 'below'} its {p.orx_trend_len}-day average)"
         edge = i.zone_hi if side > 0 else i.zone_lo
         if why_not is None and i.setup == "orb" and (px - edge) * side > p.chase_r * max(risk, 1e-9):
             why_not = f"price is already {(px - edge) * side:.0f} pts past the entry zone - not chasing"
         if why_not is not None:
             final, final_name = None, ""
+        elif i.setup == "orx" and p.orx_final_mode == "liquidity":
+            final, final_name = self._final_target(side, entry, risk, p.orx_final_r)
         elif i.setup == "orx":
             final, final_name = self._round(entry + side * p.orx_final_r * risk), f"{p.orx_final_r:g}R"
         else:
@@ -690,6 +730,12 @@ class AlphaStrategy:
         score, swhy = self._score(i, risk, (final - entry) * side / risk if final else 0, now, regime) if why_not is None else (0, [])
         if why_not is None and self.learner and not self.learner.allowed(i.setup, regime):
             why_not = f"{i.setup} setups are underperforming in {regime} conditions lately (adaptive filter)"
+            if self.paper is None and final is not None:
+                # Follow it on paper: the book keeps learning while the setup is off, so it can switch back on.
+                # (Before this, a setup switched off never produced another result and stayed off for good.)
+                self.paper = Trade(0, i.setup, side, entry, stop, stop, risk, self._round(entry + side * p.t1_r * risk),
+                                   final, final_name, now, (round(i.zone_lo, 2), round(i.zone_hi, 2)), round(i.optimal, 2),
+                                   0.0, regime, ["paper (adaptive filter)"], i.key, level_name=i.level_name)
         if why_not is None and score < p.min_score:
             why_not = f"score {score:.0f} below {p.min_score:.0f}"
         if why_not is not None:
@@ -771,6 +817,30 @@ class AlphaStrategy:
                         "mfe": round(t.mfe, 2), "to_final": round((t.final - bar.close) * s, 2), "stop": t.stop,
                         "lock": round(max(0.0, (t.stop - t.entry) * s), 2)})
         return out
+
+    def _paper(self, bar: Bar) -> None:
+        """Silent management of a filter-blocked trade: stop, Target 1 (stop to break-even), final target."""
+        t, p = self.paper, self.p
+        s = t.side
+        fav, adv = (bar.high, bar.low) if s > 0 else (bar.low, bar.high)
+        if (adv - t.stop) * s <= 0:
+            return self._paper_done(t.stop - s * p.slippage_ticks * p.tick, bar.end)
+        if not t.t1_hit and (fav - t.t1) * s >= 0:
+            t.t1_hit, t.banked, t.stop = True, (t.t1 - t.entry) * s * p.scale_frac, t.entry
+        if (fav - t.final) * s >= 0:
+            return self._paper_done(t.final, bar.end)
+        if _mins(bar.ts.time()) + bar.minutes > _mins(_t(p.flat_time)):
+            return self._paper_done(bar.close, bar.end)
+
+    def _paper_done(self, px: float, ts) -> None:
+        t, s = self.paper, self.paper.side
+        pts = t.banked + (px - t.entry) * s * (1 - self.p.scale_frac) if t.t1_hit else (px - t.entry) * s
+        r = round(pts / t.risk, 3) if t.risk else 0.0
+        self.paper = None
+        self.paper_log.append({"setup": t.setup, "regime": t.regime, "side": t.side, "entry": t.entry,
+                               "opened": str(t.opened), "closed": str(ts), "pts": round(pts, 2), "r": r})
+        if self.learner:
+            self.learner.record(t.setup, t.regime, r, ts)
 
     def _exit(self, t: Trade, px: float, ts, reason: str, why: str) -> list[dict]:
         s = t.side

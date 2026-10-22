@@ -29,6 +29,10 @@ class DayContext:
     open_ref: float | None = None          # last price before 9:30
     atr_d: float | None = None             # daily ATR(10), points
     trend_d: int = 0                       # +1 / -1 / 0 from prior closes vs their 10-day mean
+    trend_mid: int = 0                     # +1 / -1 / 0: last close vs its 20-day average (signal grade)
+    trend_long: int = 0                    # +1 / -1 / 0: last close vs its N-day average (orx "trend" policy)
+    sma_long: float | None = None
+    trend_len: int = 50
     er5: float | None = None               # 5-day efficiency ratio of daily closes
     bias: int = 0
     bias_label: str = "Mixed"
@@ -58,10 +62,27 @@ def _atr(daily: pd.DataFrame, n: int = 10) -> float | None:
     return float(tr.tail(n).mean())
 
 
+def long_trend(closes: pd.Series, n: int = 50) -> tuple[int, float | None]:
+    """+1 / -1 for the last close above / below its ``n``-day average; 0 when there aren't ``n`` closes."""
+    c = pd.Series(closes).dropna()
+    if n <= 0 or len(c) < n:
+        return 0, None
+    ma = float(c.tail(n).mean())
+    return int(np.sign(float(c.iloc[-1]) - ma)), ma
+
+
 def build_context(day: date, prior_daily: pd.DataFrame, overnight: pd.DataFrame | None = None,
-                  events: list[dict] | None = None) -> DayContext:
-    """``prior_daily``: daily bars strictly before ``day``; ``overnight``: that session's bars before 9:30."""
-    ctx = DayContext(day=day, events=events or [])
+                  events: list[dict] | None = None, long_daily: pd.DataFrame | None = None,
+                  trend_len: int = 50) -> DayContext:
+    """``prior_daily``: daily bars strictly before ``day``; ``overnight``: that session's bars before 9:30;
+    ``long_daily``: a longer daily history (strictly before ``day``) for the N-day trend, else ``prior_daily``."""
+    ctx = DayContext(day=day, events=events or [], trend_len=trend_len)
+    src = long_daily if long_daily is not None and len(long_daily) else prior_daily
+    if src is not None and len(src):
+        if isinstance(src.index, pd.DatetimeIndex):         # naive or tz-aware: compare calendar dates
+            src = src[[ts.date() < day for ts in src.index]]
+        ctx.trend_long, ctx.sma_long = long_trend(src["close"], trend_len)
+        ctx.trend_mid, _ = long_trend(src["close"], 20)
     ctx.fomc = any("FOMC" in (e.get("name") or "") for e in ctx.events)
     if len(prior_daily):
         last = prior_daily.iloc[-1]
@@ -102,7 +123,8 @@ def _bias(ctx: DayContext) -> None:
 
 
 def contexts_from_intraday(bars: pd.DataFrame, daily: pd.DataFrame | None = None,
-                           events_for=None, params=None) -> dict[date, tuple[DayContext, pd.DataFrame]]:
+                           events_for=None, params=None, trend_daily: pd.DataFrame | None = None
+                           ) -> dict[date, tuple[DayContext, pd.DataFrame]]:
     """For each session in ``bars``: (context, that session's RTH bars).  Daily levels come from
     ``daily`` when given (e.g. a long daily CSV), else from the intraday bars' own RTH sessions."""
     from .data import rth_daily
@@ -118,7 +140,8 @@ def contexts_from_intraday(bars: pd.DataFrame, daily: pd.DataFrame | None = None
         if rth.empty:
             continue
         ev = events_for(d) if events_for else []
-        ctx = build_context(d, prior, pre if len(pre) else None, ev)
+        ctx = build_context(d, prior, pre if len(pre) else None, ev, long_daily=trend_daily,
+                            trend_len=getattr(params, "orx_trend_len", 50))
         apply_orx(ctx, history, params)
         out[d] = (ctx, rth)
         if len(rth) >= 30:

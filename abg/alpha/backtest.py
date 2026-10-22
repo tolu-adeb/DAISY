@@ -57,12 +57,14 @@ def _warmup(sessions: dict, d: date, minutes: int) -> list[Bar]:
 def run_backtest(bars: pd.DataFrame, params: AlphaParams | None = None, daily: pd.DataFrame | None = None,
                  learner: AdaptiveBook | None = None, events_for=None, commission_rt: float = 1.24,
                  point_value: float = MNQ_POINT, collect_events: bool = False,
-                 days: list[date] | None = None) -> BTResult:
+                 days: list[date] | None = None, trend_daily: pd.DataFrame | None = None) -> BTResult:
+    """``trend_daily``: optional longer daily history for the N-day trend (the orx "trend" policy needs ~50
+    sessions before the first day; without it the first ~50 days of ``bars`` only warm the trend up)."""
     params = params or AlphaParams()
     strat = AlphaStrategy(params, learner)
     minutes = bar_minutes(bars)
     sessions = split_sessions(bars)
-    ctxs = contexts_from_intraday(bars, daily, events_for, params)
+    ctxs = contexts_from_intraday(bars, daily, events_for, params, trend_daily)
     trades, day_rows, events = [], [], []
     for d, (ctx, rth) in sorted(ctxs.items()):
         if days is not None and d not in days:
@@ -143,7 +145,7 @@ DEFAULT_GRID = {
     "t1_r": [0.5, 0.7, 1.0],
     "orx_k": [0.6, 0.8, 1.0],
     "orx_final_r": [1.5, 2.0, 3.0],
-    "orx_lookback": [3, 5],
+    "orx_trend_len": [20, 50, 100],
 }
 
 

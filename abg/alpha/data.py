@@ -194,6 +194,17 @@ async def fetch_intraday(engine, symbol: str = "MNQ=F", interval: str = "5m", pe
     return utc_naive_to_et(getattr(res, "value", res).df)
 
 
+async def fetch_daily(engine, symbol: str = "MNQ=F", period: str = "2y") -> pd.DataFrame:
+    """Daily bars indexed by naive calendar date (for the N-day trend)."""
+    res = await engine.history(symbol, period=period, interval="1d", use_cache=False)
+    df = getattr(res, "value", res).df.copy()
+    idx = pd.DatetimeIndex(df.index)
+    if idx.tz is not None:
+        idx = idx.tz_convert(NY).tz_localize(None)
+    df.index = idx.normalize()
+    return df[~df.index.duplicated(keep="last")]
+
+
 def session_date(ts: pd.Timestamp) -> date:
     """CME equity index session: 18:00 ET belongs to the next trading day."""
     d = ts.date()
