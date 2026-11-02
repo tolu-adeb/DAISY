@@ -30,7 +30,7 @@ from pathlib import Path
 SKIP = {"monitor.lock", "health.json", "uptime.json", "jobs.json", "spinoff.json", "site_commands.json"}
 MNQ_ITEMS = ["swing", "lab/rolling", "live", "parity", "papers", "refit.json"]
 MNQ_KEYS = ["ABG_SWING_WEBHOOK_URL", "ABG_SWING_RESEARCH", "ABG_SWING_WIDE_POST", "ABG_RD_ENABLED", "ABG_RD_ANALYST_NOTE",
-            "ABG_LAB_AUTO_RUN", "ABG_LAB_REFRESH_DATA", "ABG_ALPHA_TAG"]
+            "ABG_LAB_AUTO_RUN", "ABG_LAB_REFRESH_DATA"]
 TURN_ON = {"ABG_SWING_ENABLED": "true", "ABG_FWD_ENABLED": "true", "ABG_PITCH_ENABLED": "true", "ABG_DATA_DIR": "data"}
 HOLD = "#HELD "
 HELD_KEYS = ("ABG_SMTP_HOST", "ABG_EMAIL_TO")          # e-mail alerts would also go out twice
