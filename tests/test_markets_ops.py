@@ -247,7 +247,10 @@ async def test_gateway_commands_and_admin_gate(tr):
         await ws.send(json.dumps({"op": 0, "t": "READY", "s": 1, "d": {"session_id": "s"}}))
         await ws.send(json.dumps(inter("1", "track", "42", [{"name": "text", "type": 3,
                                                                "value": "$ABC long 99-101 sl 95 tp 110"}])))
-        await asyncio.sleep(1.0)                                    # let /track finish before the read-only query
+        for _ in range(200):                                        # wait for /track to save the idea (a fixed
+            if tr.store.open_ideas():                               # sleep raced on slower machines, e.g. Windows)
+                break
+            await asyncio.sleep(0.05)
         await ws.send(json.dumps(inter("2", "cancel", "7", [{"name": "id", "type": 4, "value": 1}])))
         await ws.send(json.dumps(inter("3", "ideas", "7")))
         await asyncio.sleep(3)
@@ -256,7 +259,7 @@ async def test_gateway_commands_and_admin_gate(tr):
         port = srv.sockets[0].getsockname()[1]
         gw = DiscordGateway(tr.s, http, tr, url=f"ws://127.0.0.1:{port}")
         task = asyncio.ensure_future(gw.run())
-        for _ in range(80):
+        for _ in range(400):                                        # up to 20 s; ends as soon as all 3 are in
             await asyncio.sleep(0.05)
             if gw.handled >= 3:
                 break
