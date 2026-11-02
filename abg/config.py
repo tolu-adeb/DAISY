@@ -261,6 +261,76 @@ class Settings(BaseSettings):
     rd_monthly: bool = True                     # first weekday of the month, 08:00 ET (for the month just ended)
     rd_analyst_note: bool = True                # add a short Claude note when ABG_ANTHROPIC_API_KEY is set
 
+    # ---- ported from the MNQ bot spin-off (c3.lab/mnq-bot, docs/20): reliability, forward lab, swing desk
+    # Features that run on their own are off until switched on in .env (ABG_FWD_ENABLED, ABG_SWING_ENABLED).
+    keep_awake: bool = True                     # Windows: don't sleep while the monitor runs, 08:55-16:35 ET trading days
+    papers_enabled: bool = False                # needs the website link (above) and ABG_ANTHROPIC_API_KEY
+    papers_model: str | None = None             # default: anthropic_model
+    papers_max_tokens_per_day: int = 400_000    # Claude tokens (in + out) for paper analyses per New York day
+    papers_max_tokens_per_paper: int = 90_000   # longer papers are cut to their key sections to fit
+    papers_max_mb: int = 20
+    alpha_refit_adopt: bool = False             # ... but only suggests (to the forward lab) unless this is true
+    alpha_brief_until: str = "09:45"            # a morning brief later than this (a restart) stays on the dashboard
+    parity_enabled: bool = True                 # live-vs-backtest check after the forward lab's daily data refresh
+    fwd_enabled: bool = False                   # runs after the close on its own copy of the dataset (never the lab's holdout)
+    fwd_time: str = "16:45"                     # ET, trading days
+    fwd_per_day: int = 16                       # ideas tested per day (~10 s per backtest, ~3 backtests per idea)
+    fwd_budget_min: float = 30.0                # stop starting new backtests after this; the cache resumes tomorrow
+    fwd_workers: int = 1                        # backtest processes (1 is safest inside the monitor)
+    fwd_folds: int = 6                          # walk-forward periods over all sessions
+    fwd_min_fold_wins: int = 5                  # win rate >= live in at least this many periods
+    fwd_max_active: int = 5                     # paper strategies at once
+    fwd_min_sessions: int = 20                  # unseen sessions before a strategy can be READY
+    fwd_min_trades: int = 15
+    fwd_max_sessions: int = 60                  # retired if not ready by then
+    fwd_agent: bool = True                      # + up to 4 ideas a day from Claude (needs an API key; one call)
+    fwd_post: bool = True                       # post new paper / ready / retired to the R&D channel
+    fwd_profit_route: bool = True               # also pass ideas that hold the win rate and clearly improve profit/drawdown:
+    fwd_profit_route_wr_slack: float = 0.005    #   win rate no more than 0.5 pt below live
+    fwd_profit_route_ratio: float = 0.15        #   net/max-drawdown at least 15% better
+    fwd_profit_route_net: float = 0.10          #   net profit at least 10% higher
+    swing_enabled: bool = False                 # grade + track swing ideas inside the monitor (dashboard: Swing Desk)
+    swing_webhook_url: str | None = None        # Discord channel for swing alerts; unset = dashboard only
+    swing_interval_min: int = 30                # intraday pass during market hours (prices, fills, in-zone nudges)
+    swing_close_time: str = "16:20"             # after-close pass: final daily bars -> fills/exits, scanner, digest
+    swing_scan: bool = True                     # after the close, look for the channel's own pattern (config/universe.txt)
+    swing_research: str = "off"                 # "weekly" = Strands R&D agent on Sundays 11:00 ET (needs an API key; costs tokens)
+    swing_pitch: bool = False                   # analyst agent writes a pitch for each idea the gate takes (API key; tokens)
+    swing_ai_intake: bool = True                # pasted prose the parsers can't read goes to the intake agent (Haiku) if a key is set
+    swing_use_twelvedata: bool = False          # daily bars/quotes from Twelve Data instead of yfinance (shares the MNQ bot's quota)
+    swing_max_posts: int = 12                   # per pass; anything beyond is summarised in one message
+    swing_wide: bool = True                     # runs only when ABG_POLYGON_API_KEY is set
+    swing_wide_post: bool = False               # false = shadow: tracked on the dashboard only; true = best few to Discord
+    swing_wide_time: str = "17:15"              # ET; retried every 30 min until 21:30 if the day's bars aren't out yet
+    swing_wide_max_posts: int = 3               # per day, when posting
+    swing_wide_min_price: float = 5.0
+    swing_wide_min_dollar_vol_m: float = 20.0   # median 20-day dollar volume, $M
+    swing_wide_min_breadth: float = 30.0        # % of liquid stocks above their 50-day average; below it nothing posts
+    swing_wide_news_top: int = 12               # candidates whose headlines get read (Finnhub + Claude Haiku)
+    swing_wide_earnings_sessions: int = 10      # earnings inside this many sessions = binary_event (half size)
+    swing_wide_history: int = 130               # sessions of whole-market bars kept for the scan
+    swing_wide_polygon_per_min: float = 5.0     # free plan limit
+    swing_wide_finnhub_per_min: float = 50.0    # free plan allows 60
+    swing_wide_rank: str = "entry"              # which taken setups post first: "entry" = closest to its entry (likeliest
+    swing_wide_chase_atr: float = 1.0           # wide ideas only: if price closes above the zone by <= this many ATR before
+    swing_wide_backfill_to: int = 400           # sessions of whole-market bars to build up, a little each night (~100 MB)
+    swing_wide_backfill_per_night: int = 60     # Polygon calls per night for that (5/min: ~12 minutes)
+    swing_wide_backtest_weekly: bool = True     # re-run the backtest on all stored history, Saturdays 09:00 ET
+    swing_wide_post_min_trades: int = 40        # posting stays held until the backtest of what would post has this many
+    swing_wide_post_min_win: float = 65.0       # closed trades, at least this win rate (%) and a positive total R
+
+    # Pitch desk v1 (docs/20): screen -> valuation -> memo with sources -> scorecard vs SPY.  Off until enabled.
+    pitch_enabled: bool = False
+    pitch_webhook_url: str | None = None          # optional Discord channel for pitch memos (empty = dashboard only)
+    pitch_universe: str = ""                       # comma list; empty = the built-in large-cap list (+ your watchlist)
+    pitch_max_names: int = 3                       # memos per weekly batch
+    pitch_weekday: int = 5                         # 0=Mon .. 6=Sun (default Saturday)
+    pitch_time: str = "10:00"                      # ET
+    pitch_risk_free: float = 0.042                 # discount rate = risk-free + beta x equity premium
+    pitch_equity_premium: float = 0.05
+    pitch_terminal_growth: float = 0.025
+    pitch_ai_memo: bool = False                    # Claude write-up from the data pack only (API key; tokens)
+
     log_level: str = "WARNING"
 
     # ---------------------------------------------------------------- helpers

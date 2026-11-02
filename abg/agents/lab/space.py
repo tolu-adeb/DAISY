@@ -56,14 +56,25 @@ class Knob:
             return tuple(dict.fromkeys(items))
         raise ValueError(f"unknown kind {k}")
 
-    def neighbours(self, v: Any) -> list[Any]:
+    def neighbours(self, v: Any, cur: Any = None) -> list[Any]:
+        """One step either side.  When a side lands on the current value (an idea one step from live), that side uses a
+        half step instead: otherwise the only neighbour left is two steps away (Oct 22: orx_trend_len 40 was judged on
+        30 alone, never on 45)."""
         if self.kind not in ("float", "int") or not self.step:
             return []
         out = []
-        for x in (v - self.step, v + self.step):
-            if (self.lo is None or x >= self.lo) and (self.hi is None or x <= self.hi):
-                out.append(self.coerce(x))
-        return [x for x in out if x != v]
+        for side in (-1, 1):
+            x = v + side * self.step
+            if cur is not None and abs(x - cur) < 1e-9:
+                x = v + side * self.step / 2
+            if (self.lo is None or x >= self.lo - 1e-9) and (self.hi is None or x <= self.hi + 1e-9):
+                try:
+                    y = self.coerce(x)
+                except ValueError:
+                    continue
+                if y != v and (cur is None or y != cur) and y not in out:
+                    out.append(y)
+        return out
 
 
 KNOBS: dict[str, Knob] = {k.name: k for k in [
@@ -134,6 +145,24 @@ class Hypothesis(BaseModel):
 
     def label(self) -> str:
         return ", ".join(f"{k}={','.join(v) if isinstance(v, tuple) else v}" for k, v in self.changes.items())
+
+
+def strip_noops(h: "Hypothesis", base: AlphaParams) -> "Hypothesis | None":
+    """Drop changes that set a value the live settings already have ("T1 at 0.35R" when T1 is 0.35R); None if nothing
+    is left.  Such ideas used to be backtested anyway and duplicated another test."""
+    keep = {}
+    for k, v in h.changes.items():
+        try:
+            cur = KNOBS[k].coerce(getattr(base, k))
+        except (ValueError, KeyError, AttributeError):
+            cur = getattr(base, k, None)
+        if v != cur:
+            keep[k] = v
+    if not keep:
+        return None
+    if len(keep) == len(h.changes):
+        return h
+    return Hypothesis(name=h.name, rationale=h.rationale, changes=keep)
 
 
 def describe_space(base: AlphaParams | None = None) -> list[dict]:

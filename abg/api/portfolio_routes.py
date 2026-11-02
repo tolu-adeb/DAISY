@@ -233,22 +233,33 @@ async def notify_test(request: Request, channel: str = "all"):
 
 
 def start_monitor(app) -> None:
+    """Start the live monitor in this server.  When another monitor holds the lock, this dashboard is read-only and
+    checks every ``monitor_retry_s`` (30 s) - it takes over as soon as the other one stops (docs/20)."""
     mon = app.state.monitor
     if mon.running:
         return
-    holder = mon.lock.holder()
-    if holder and (holder.get("pid"), holder.get("host")) != (mon.lock.me["pid"], mon.lock.me["host"]):
-        app.state.monitor_note = (f"Another monitor is running (pid {holder.get('pid')}); this server shows its "
-                                  f"saved signals but won't send duplicate alerts.")
-        return
+    retry_s = float(getattr(app.state, "monitor_retry_s", 30.0))
 
     async def runner():
-        try:
-            await mon.run()
-        except MonitorBusy as e:
-            app.state.monitor_note = e.message
-        except ABGError as e:  # pragma: no cover
-            app.state.monitor_note = e.message
+        while True:
+            holder = mon.lock.holder()
+            if holder and (holder.get("pid"), holder.get("host")) != (mon.lock.me["pid"], mon.lock.me["host"]):
+                app.state.monitor_note = (f"Another monitor is running (pid {holder.get('pid')}); this dashboard is "
+                                          f"read-only until it stops (it takes over on its own).")
+            else:
+                try:
+                    app.state.monitor_note = None
+                    await mon.run()
+                    return
+                except MonitorBusy as e:
+                    app.state.monitor_note = e.message + " - read-only until it stops (it takes over on its own)."
+                except ABGError as e:  # pragma: no cover
+                    app.state.monitor_note = e.message
+                    return
+            try:
+                await asyncio.wait_for(mon._stop.wait(), timeout=retry_s)
+                return                                   # shutting down
+            except asyncio.TimeoutError:
+                pass
 
-    app.state.monitor_note = None
     app.state.monitor_task = asyncio.ensure_future(runner())

@@ -58,6 +58,19 @@ def _scale_to(bars: pd.DataFrame, daily: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# spin-off PATCH (PATCHES.md #1): the fingerprint used the path string exactly as given, so "data\\mnq_proxy_5m.csv"
+# (Windows) and "data/mnq_proxy_5m.csv" were different datasets and the 60-trial ledger looked empty on Windows.  Same
+# key, separator- and working-directory-independent: inside this repo -> "data/mnq_proxy_5m.csv", the ledger's key.
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _fp_path(p) -> str:
+    try:
+        return Path(p).resolve().relative_to(_REPO).as_posix().replace("\\", "/")
+    except ValueError:
+        return str(p).replace("\\", "/")
+
+
 def load_dataset(bars_csv: str | Path, trend_csv: str | Path | None = None, holdout_months: int = 6,
                  n_blocks: int = 4) -> Dataset:
     bars = load_intraday_csv(bars_csv)
@@ -73,7 +86,7 @@ def load_dataset(bars_csv: str | Path, trend_csv: str | Path | None = None, hold
     size = -(-len(search) // n_blocks)
     blocks = [search[i:i + size] for i in range(0, len(search), size)]
     h = hashlib.sha1()
-    h.update(f"{bars_csv}|{len(bars)}|{bars.index[0]}|{bars.index[-1]}|{float(bars['close'].sum()):.2f}".encode())
+    h.update(f"{_fp_path(bars_csv)}|{len(bars)}|{bars.index[0]}|{bars.index[-1]}|{float(bars['close'].sum()):.2f}".encode())
     if daily is not None:
         h.update(f"|{len(daily)}|{daily.index[0]}|{float(daily['close'].sum()):.2f}".encode())
     return Dataset(bars, daily, sess, search, holdout, blocks, str(bars_csv), h.hexdigest()[:12])

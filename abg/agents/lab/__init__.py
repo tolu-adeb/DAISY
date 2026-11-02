@@ -78,29 +78,35 @@ class Lab:
         return out
 
     # ------------------------------------------------------------------ test (search window only)
+    def neighbours(self, h: Hypothesis) -> list[AlphaParams]:
+        ns = []
+        for k, v in h.changes.items():
+            cur = getattr(self.base, k)
+            for nv in KNOBS[k].neighbours(v, cur if isinstance(cur, (int, float)) and not isinstance(cur, bool) else None):
+                if nv == cur:                          # the current value is the baseline, not a neighbour
+                    continue
+                ns.append(Hypothesis(name=h.name, rationale=h.rationale, changes={**h.changes, k: nv}).apply(self.base))
+        return ns
+
     def test_many(self, hyps: list[Hypothesis], source: str = "cli", deadline: float | None = None) -> list[dict]:
         """``deadline``: raise ``TimeBudget`` instead of running past it (finished backtests stay cached, so a
-        second call resumes).  Nothing is written to the ledger until every backtest for the batch is done."""
+        second call resumes).  Nothing is written to the ledger until every backtest for the batch is done.
+        Neighbours (the stability check) are only backtested for ideas that pass every other check - most don't, and
+        their neighbours used to cost two backtests each for nothing."""
         cands = [h.apply(self.base) for h in hyps]
-        neigh: list[list[AlphaParams]] = []
-        for h in hyps:
-            ns = []
-            for k, v in h.changes.items():
-                cur = getattr(self.base, k)
-                for nv in KNOBS[k].neighbours(v):
-                    if nv == cur:                      # the current value is the baseline, not a neighbour
-                        continue
-                    ns.append(Hypothesis(name=h.name, rationale=h.rationale, changes={**h.changes, k: nv}).apply(self.base))
-            neigh.append(ns)
-        self.runner.run_many([self.base] + cands + [p for ns in neigh for p in ns], deadline=deadline)
+        self.runner.run_many([self.base] + cands, deadline=deadline)
         base_run = self.runner.get(self.base)
+        first = [None if phash(cp) == phash(self.base) else compare(self.runner.get(cp), base_run, self.ds, self.gate)
+                 for cp in cands]
+        neigh: list[list[AlphaParams]] = [self.neighbours(h) if r is not None and r["pass"] else [] for h, r in zip(hyps, first)]
+        if any(neigh):
+            self.runner.run_many([p for ns in neigh for p in ns], deadline=deadline)
         if deadline is not None:                                   # random-walk checks first, so the ledger write is atomic
-            for h, cp, ns in zip(hyps, cands, neigh):
-                if phash(cp) == phash(self.base):
+            for h, cp, ns, res in zip(hyps, cands, neigh, first):
+                if res is None or not res["pass"]:
                     continue
-                res = compare(self.runner.get(cp), base_run, self.ds, self.gate)
                 stable = not ns or any(headline_pass(compare(self.runner.get(n), base_run, self.ds, self.gate)) for n in ns)
-                if res["pass"] and stable:
+                if stable:
                     self.runner.random_walk(cp, deadline=deadline)
         out = []
         for h, cp, ns in zip(hyps, cands, neigh):
@@ -123,12 +129,14 @@ class Lab:
             summary = {k: res["search"][k] for k in ("trades", "win_rate", "net_usd", "max_dd_usd", "ratio", "avg_r")}
             summary["baseline"] = {k: res["baseline"][k] for k in ("trades", "win_rate", "net_usd", "max_dd_usd", "ratio", "avg_r")}
             summary["failed"] = failed
+            summary["route"] = res.get("route", "win rate")
             tid = self.ledger.add_trial(source=source, name=h.name, rationale=h.rationale, changes=h.changes,
                                         phash=phash(cp), base_phash=phash(self.base), fingerprint=self.ds.fingerprint,
                                         holdout_start=self.ds.holdout_start, verdict=verdict, summary=summary,
                                         detail=res["checks"])
             out.append({"trial_id": tid, "name": h.name, "changes": h.changes, "verdict": verdict, "failed": failed,
-                        "search": res["search"], "baseline": res["baseline"], "checks": res["checks"]})
+                        "search": res["search"], "baseline": res["baseline"], "checks": res["checks"],
+                        "route": res.get("route", "win rate")})
         return out
 
     def test(self, h: Hypothesis, source: str = "cli") -> dict:
@@ -147,11 +155,15 @@ class Lab:
         if used >= self.gate.peek_budget:
             raise ValueError(f"holdout from {self.ds.holdout_start} is used up ({used} looks). Wait for new sessions "
                              f"(a fresh holdout) instead of re-using it")
+        ds_eff, seen = self._unseen_holdout(t["changes"])            # docs/17.10: only sessions no selection saw
         h = Hypothesis(name=t["name"], rationale=t["rationale"], changes=t["changes"])
         cp = h.apply(self.base)
         cand, base = self.runner.run_many([cp, self.base], deadline=deadline)
-        res = confirm(cand, base, self.ds, self.gate)
-        res["window"] = [self.ds.holdout_start, str(self.ds.holdout[-1])]
+        res = confirm(cand, base, ds_eff, self.gate)
+        res["window"] = [self.ds.holdout_start, str(self.ds.holdout[-1])]      # the look is charged to the whole holdout
+        if seen:
+            res["unseen_after"] = seen
+            res["judged_on"] = [str(ds_eff.holdout[0]), str(ds_eff.holdout[-1])]
         self.ledger.add_peek(trial_id, self.ds.holdout_start, self.ds.fingerprint, res["pass"], res)
         out = {"trial_id": trial_id, "name": t["name"], "changes": t["changes"], "pass": res["pass"], **res,
                "peeks_used": used + 1, "peek_budget": self.gate.peek_budget,
@@ -165,6 +177,30 @@ class Lab:
         else:
             self.ledger.set_verdict(trial_id, "failed_holdout")
         return out
+
+    MIN_UNSEEN_HOLDOUT = 40
+
+    def _unseen_holdout(self, changes: dict):
+        """The holdout minus every session an earlier selection of this idea already looked at (the forward lab
+        tests on all data; an earlier look at the holdout saw it too).  Too few left = no look (it isn't counted)."""
+        from dataclasses import replace
+
+        from abg.agents.lab import shared
+        seen = shared.seen_through(self.data_dir, changes)
+        if not seen or not self.ds.holdout or seen < str(self.ds.holdout[0]):
+            return self.ds, None
+        unseen = [d for d in self.ds.holdout if str(d) > seen]
+        if len(unseen) < self.MIN_UNSEEN_HOLDOUT:
+            raise ValueError(f"this idea was already selected using data through {seen}, so only {len(unseen)} holdout "
+                             f"sessions are new to it (need {self.MIN_UNSEEN_HOLDOUT}).  Its forward-lab paper record is "
+                             f"the clean test until more sessions arrive; no look was used")
+        return replace(self.ds, holdout=unseen), seen
+
+    def holdout_queue(self) -> list[dict]:
+        """Which ideas deserve the scarce holdout looks: best paper record first, with the sessions each hasn't seen."""
+        from abg.agents.lab import shared
+        return shared.holdout_queue(self.data_dir, self.ds.holdout_start, self.MIN_UNSEEN_HOLDOUT,
+                                    [str(d) for d in self.ds.holdout], phash(self.base))
 
     # ------------------------------------------------------------------ human decision
     def approve(self, pid: int, note: str = "") -> Path:

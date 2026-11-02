@@ -1,0 +1,11 @@
+pandas>=2.2
+numpy>=1.26
+pyyaml>=6
+beautifulsoup4>=4.12
+requests>=2.31
+yfinance>=0.2.50
+strands-agents>=1.60
+anthropic>=0.40
+pydantic>=2.7
+gspread>=6.0
+pytest>=8

@@ -1,0 +1,92 @@
+name: swing desk
+
+on:
+  schedule:
+    - cron: "*/30 13-20 * * 1-5"   # intraday monitor (covers EDT and EST market hours)
+    - cron: "20 21 * * 1-5"        # after the close: daily bars final -> fills/exits/digest + scanner
+    - cron: "0 15 * * 0"           # Sunday: R&D research cycle (opens a PR if it proposes changes)
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "monitor | close | research | ingest"
+        default: monitor
+
+concurrency:
+  group: swingdesk
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+  SHEET_ID: ${{ secrets.SHEET_ID }}
+
+jobs:
+  desk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt
+
+      - name: Pick task
+        id: task
+        run: |
+          T="${{ github.event.inputs.task }}"
+          if [ -z "$T" ]; then
+            case "${{ github.event.schedule }}" in
+              "20 21 * * 1-5") T=close ;;
+              "0 15 * * 0")    T=research ;;
+              *)               T=monitor ;;
+            esac
+          fi
+          echo "task=$T" >> "$GITHUB_OUTPUT"
+
+      - name: Ingest new Discord exports dropped in inbox/
+        if: steps.task.outputs.task != 'research'
+        run: |
+          shopt -s nullglob
+          for f in inbox/*.html; do python -m swingdesk.cli ingest --export "$f" && git rm -q "$f"; done
+
+      - name: Intraday monitor
+        if: steps.task.outputs.task == 'monitor'
+        run: python -m swingdesk.cli monitor --quotes
+
+      - name: Close: final bars, scanner, digest
+        if: steps.task.outputs.task == 'close'
+        run: |
+          python -m swingdesk.cli monitor
+          python -m swingdesk.cli scan
+          python -m swingdesk.cli monitor          # grade + pitch anything the scanner found
+          python -m swingdesk.cli digest --period daily
+          if [ "$(date +%u)" = "5" ]; then python -m swingdesk.cli digest --period weekly; fi
+          if [ "$(date +%d)" -le "07" ] && [ "$(date +%u)" = "5" ]; then python -m swingdesk.cli digest --period monthly; fi
+
+      - name: Commit state
+        if: steps.task.outputs.task != 'research'
+        run: |
+          git config user.name "swingdesk-bot"
+          git config user.email "swingdesk-bot@users.noreply.github.com"
+          git add -A state data inbox || true
+          git diff --cached --quiet || (git commit -qm "desk: ${{ steps.task.outputs.task }} $(date -u +%FT%TZ)" && git push)
+
+      - name: R&D research cycle
+        if: steps.task.outputs.task == 'research'
+        run: python -m swingdesk.cli research
+
+      - name: Open PR for research proposals
+        if: steps.task.outputs.task == 'research'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: research/${{ github.run_id }}
+          title: "R&D proposal ${{ github.run_id }}"
+          body: "Automated research cycle. Review research/proposals/*.md; config changes only apply when a human edits config/strategy.yaml and merges."
+          add-paths: research/proposals/*

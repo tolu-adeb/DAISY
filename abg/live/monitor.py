@@ -48,6 +48,37 @@ class MonitorBusy(ABGError):
     code = "monitor_busy"
 
 
+def _pid_alive(pid) -> bool:
+    """True unless we can tell the process is gone (when in doubt: alive, and the heartbeat decides).
+    Never ``os.kill(pid, 0)`` on Windows: there it terminates the process."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return True
+    if pid <= 0:
+        return True
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        h = k.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5          # access denied = it exists; anything else = gone
+        try:
+            code = ctypes.c_ulong()
+            if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+                return True
+            return code.value == 259                     # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 class MonitorLock:
     def __init__(self, path: Path, stale_after: float = 180.0):
         self.path = Path(path)
@@ -60,6 +91,10 @@ class MonitorLock:
         except Exception:
             return None
         if time.time() - d.get("heartbeat", 0) > self.stale_after:
+            return None
+        # a holder on this machine whose process has exited (window closed, crash) is free now, not 3 minutes from now
+        # - otherwise a quick restart came up read-only (ported from the MNQ bot spin-off, docs/20)
+        if d.get("host") == self.me["host"] and d.get("pid") != self.me["pid"] and not _pid_alive(d.get("pid")):
             return None
         return d
 
@@ -184,6 +219,41 @@ class Monitor:
                 log.exception("R&D desk disabled")
                 self.errors.append({"ts": time.time(), "where": "rd init", "error": str(e)[:300]})
 
+        # reliability (docs/20): uptime spans, Windows keep-awake during the session, autostart check, data/health.json
+        from .uptime import KeepAwake, Uptime
+        self.data_dir = Path(self.s.data_dir).expanduser()
+        self.uptime = Uptime(self.data_dir / "uptime.json")
+        self.keep_awake = KeepAwake(getattr(self.s, "keep_awake", True))
+        self.autostart: bool | None = None
+        self._autostart_at = 0.0
+        self._health_at = 0.0
+
+        # forward lab (docs/17.9) and swing desk (docs/19) - ported from the MNQ bot spin-off, off until enabled
+        self.forward = None
+        if getattr(self.s, "fwd_enabled", False):
+            try:
+                from ..agents.lab.rolling import ForwardDesk
+                self.forward = ForwardDesk(self)
+            except Exception as e:   # pragma: no cover
+                log.exception("forward lab disabled")
+                self.errors.append({"ts": time.time(), "where": "forward lab init", "error": str(e)[:300]})
+        self.swing = None
+        if getattr(self.s, "swing_enabled", False):
+            try:
+                from ..swing.desk import SwingDesk
+                self.swing = SwingDesk(self.s, hub, engine.http)
+            except Exception as e:   # pragma: no cover
+                log.exception("swing desk disabled")
+                self.errors.append({"ts": time.time(), "where": "swing init", "error": str(e)[:300]})
+        self.pitch = None
+        if getattr(self.s, "pitch_enabled", False):
+            try:
+                from ..pitch.desk import PitchDesk
+                self.pitch = PitchDesk(self.s, engine, hub)
+            except Exception as e:   # pragma: no cover
+                log.exception("pitch desk disabled")
+                self.errors.append({"ts": time.time(), "where": "pitch init", "error": str(e)[:300]})
+
         # Alerio copy-trading shadow (docs/15)
         self.alerio = None
         if self.s.alerio_watch and self.s.alerio_cookie:
@@ -238,6 +308,9 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.alerio.run()))
             if self.rd is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.rd.run()))
+            for comp in (self.forward, self.swing, self.pitch):
+                if comp is not None:
+                    self._aux_tasks.append(asyncio.ensure_future(comp.run()))
             while not self._stop.is_set():
                 open_ = is_market_open() or not self.s.monitor_market_hours_only
                 if was_open is not None and open_ != was_open:
@@ -260,6 +333,7 @@ class Monitor:
                     self.lock.beat()
                 except OSError as e:
                     self.errors.append({"ts": time.time(), "where": "lock", "error": str(e)})
+                await self._guard("health", self._health_beat())
                 # wake at least every 60 s so the lock heartbeat stays fresh: off-hours sweeps are 30 min apart, and a
                 # heartbeat older than the lock's 180 s let a second monitor (e.g. the 9:00 autostart) start alongside
                 wait = max(1.0, min(self.next_quote_at, self.next_analysis_at, time.monotonic() + 60) - time.monotonic())
@@ -277,7 +351,8 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd):
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd, self.forward, self.swing,
+                         self.pitch):
                 if comp is not None:
                     comp.stop()
             for t in self._aux_tasks:
@@ -476,6 +551,31 @@ class Monitor:
         return await self.hub.publish(sig)
 
     # ------------------------------------------------------------------ status
+    async def _health_beat(self) -> None:
+        """Every ~30 s: uptime span, keep-awake, hourly autostart check, data/health.json for `abg health`."""
+        if time.time() - self._health_at < 25:
+            return
+        self._health_at = time.time()
+        self.uptime.beat(started=self.started_at)
+        self.keep_awake.update()
+        if time.time() - self._autostart_at > 3600:
+            from .uptime import autostart_registered
+            self._autostart_at = time.time()
+            self.autostart = await asyncio.to_thread(autostart_registered)
+        tmp = self.data_dir / "health.json.tmp"
+        tmp.write_text(json.dumps(self.health(), default=str))
+        os.replace(tmp, self.data_dir / "health.json")
+
+    def health(self) -> dict:
+        a = self.alpha
+        st = a.status() if a is not None else None
+        return {"ts": time.time(), "pid": os.getpid(), "host": socket.gethostname(), "running": self.running,
+                "started": self.started_at,
+                "alpha": {k: st.get(k) for k in ("day", "last_bar", "stream_age_s", "ratio", "done_reason")} if st else None,
+                "stream_connected": bool(self.stream and getattr(self.stream, "connected", False)),
+                "swing": {k: (self.swing.state() or {}).get(k) for k in ("seeded", "last_pass", "last_kind")} if self.swing else None,
+                "keep_awake": self.keep_awake.active, "autostart": self.autostart, "errors": len(self.errors)}
+
     def status(self) -> dict:
         mono, wall = time.monotonic(), time.time()
         in_ = lambda t: None if not self.running or not t else max(0.0, t - mono)  # noqa: E731
@@ -498,5 +598,11 @@ class Monitor:
             "alpha": self.alpha.status() if self.alpha is not None else {"enabled": False},
             "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
             "rd": self.rd.status() if self.rd is not None else {"enabled": False},
+            "forward": self.forward.status() if self.forward is not None else {"enabled": False},
+            "swing": self.swing.status() if self.swing is not None else {"enabled": False},
+            "pitch": self.pitch.status() if self.pitch is not None else {"enabled": False},
+            "uptime": {"days": self.uptime.days(10), "since": self.uptime.since(),
+                       "keep_awake": {"on": self.keep_awake.active, "available": self.keep_awake.enabled},
+                       "autostart": self.autostart, "healthcheck": bool(self.s.healthcheck_url)},
             "intervals": {"quote_s": self.s.monitor_quote_interval, "analysis_s": self.s.monitor_analysis_interval,
                           "offhours_quote_s": self.s.monitor_offhours_interval}})

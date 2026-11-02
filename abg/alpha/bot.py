@@ -77,6 +77,23 @@ CREATE TABLE IF NOT EXISTS sent (k TEXT PRIMARY KEY, ts REAL);
         rows = self.db.execute(q, (day, limit) if day else (limit,)).fetchall()
         return [{"at": ts, "type": ty, "data": json.loads(d), "delivered": dl} for ts, ty, d, dl in rows]
 
+    def delivered_before(self, day: str, kind: str, tid=None, ts=None) -> bool:
+        """True when this event already reached Discord today, according to the events table.  A second guard next to
+        ``claim``: on Oct 22 the morning brief went out three times (twice at 9:25, again after a 12:28 restart)."""
+        rows = self.db.execute("SELECT data FROM events WHERE day=? AND type=? AND delivered IN ('ok', 'edited')",
+                               (day, kind)).fetchall()
+        if kind in ("brief", "day_summary", "session_closed", "done"):
+            return bool(rows)
+        for (d,) in rows:
+            try:
+                e = json.loads(d)
+            except ValueError:
+                continue
+            etid = e.get("id") or (e.get("trade") or {}).get("id")
+            if str(etid) == str(tid) and str(e.get("ts")) == str(ts):
+                return True
+        return False
+
     def claim(self, k: str) -> bool:
         """Atomically claim a Discord post (True once per key, across processes sharing this database)."""
         with self._lock:
@@ -217,6 +234,8 @@ class AlphaBot:
         self.today_events: deque = deque(maxlen=200)
         self.errors: deque = deque(maxlen=20)
         self.notes: list[str] = []
+        from abg.alpha.daylog import DayLog
+        self.daylog = DayLog(self.data_dir / "live")
         self._stop = asyncio.Event()
 
     # ------------------------------------------------------------------ config
@@ -279,7 +298,7 @@ class AlphaBot:
             elif self.builder.stale(now):
                 b = self.builder.close()
                 if b:
-                    await self.process(b)
+                    await self.process(b, source="quote" if "polling quotes" in self.notes else "stream")
         if t >= time(16, 1) and not self.ended:
             await self.end_day()
 
@@ -350,6 +369,11 @@ class AlphaBot:
         evs = self.strat.start_day(ctx, warm)
         self.brief = evs[0]
         self.store.set("today", {"day": str(d), "ctx": ctx.to_dict()})
+        try:                                   # what the bot saw, for the live-vs-backtest check (never blocks the day)
+            self.daylog.start(d, ctx.to_dict(), self.params.to_dict(), self.learner.to_dict() if self.learner else None,
+                              warm, feed=self.feed, symbol=self.symbol, proxy=self.proxy, ratio=self.ratio)
+        except Exception as e:
+            self.errors.append({"ts": _time.time(), "error": f"day log: {e}"[:200]})
 
     async def calibrate(self) -> None:
         """MNQ/proxy price ratio from same-minute closes (yesterday 15:59, or today's delayed bars)."""
@@ -377,7 +401,7 @@ class AlphaBot:
         b = self.builder.add(q.get("ts") or _time.time(), q["price"], q.get("tick_high", q["price"]),
                              q.get("tick_low", q["price"]), q.get("n", 1))
         if b is not None:
-            await self.process(b)
+            await self.process(b, source="stream")
 
     async def poll_quote(self, now: datetime) -> bool:
         """One real-time proxy quote into the minute builder.  False when there is no fresh quote."""
@@ -400,7 +424,7 @@ class AlphaBot:
             log.warning("alpha: proxy stream quiet - polling real-time %s quotes", self.proxy)
         b = self.builder.add(_time.time(), float(px), float(px), float(px))
         if b is not None:
-            await self.process(b)
+            await self.process(b, source="quote")
         return True
 
     async def poll_direct(self, now: datetime) -> None:
@@ -413,9 +437,9 @@ class AlphaBot:
             if b.ts.date() != self.day or not is_rth(pd.Timestamp(b.ts)) or b.end > now:
                 continue
             if self.last_bar is None or b.ts > self.last_bar:
-                await self.process(b, scaled=True)
+                await self.process(b, scaled=True, source="delayed")
 
-    async def process(self, bar: Bar, scaled: bool = False) -> None:
+    async def process(self, bar: Bar, scaled: bool = False, source: str = "stream") -> None:
         if self.strat is None or (self.last_bar is not None and bar.ts <= self.last_bar):
             return
         if not scaled:
@@ -423,6 +447,11 @@ class AlphaBot:
                 return
             bar = _scale(bar, self.ratio)
         self.last_bar = bar.ts
+        try:
+            self.daylog.bar(self.day, bar, source, self.ratio if not scaled else None)
+        except Exception as e:
+            if "day log" not in " ".join(x.get("error", "") for x in self.errors):
+                self.errors.append({"ts": _time.time(), "error": f"day log: {e}"[:200]})
         for ev in self.strat.on_bar(bar):
             await self.emit(ev)
 
@@ -452,6 +481,24 @@ class AlphaBot:
         lim = getattr(self.s, "alpha_stale_sec", 120)
         return bool(lim) and (now - ts).total_seconds() > lim
 
+    def _late_brief(self, now: datetime | None = None) -> bool:
+        lim = getattr(self.s, "alpha_brief_until", "09:45") or ""
+        if not lim:
+            return False
+        h, m = lim.split(":")
+        now = now or datetime.now(NY)
+        return now.date() == self.day and now.time() >= time(int(h), int(m))
+
+    def posting_paused(self) -> bool:
+        """spin-off PATCH 8: Discord posting held (trades are still tracked and logged)."""
+        p = self.store.get("posting_paused")
+        return bool(p and p.get("on"))
+
+    def set_posting_paused(self, on: bool, by: str = "dashboard") -> dict:
+        v = {"on": bool(on), "at": str(datetime.now(NY)), "by": by}
+        self.store.set("posting_paused", v)
+        return v
+
     async def emit(self, ev: dict) -> None:
         day = str(self.day)
         kind = ev["type"]
@@ -462,11 +509,15 @@ class AlphaBot:
         msg, delivered = None, "dashboard"
         if r is not None and self._stale(ev):
             r, delivered = None, "late - not posted"     # a replayed signal/stop from hours ago must never reach Discord
+        if r is not None and kind == "brief" and self._late_brief():
+            r, delivered = None, "late - not posted"     # a restart at noon must not re-post the morning brief
+        if r is not None and self.posting_paused():
+            r, delivered = None, "paused - not posted"   # spin-off PATCH 8: paused from the website or dashboard
         if r is not None and self.poster.enabled:
             tid = ev.get("id") or (ev.get("trade") or {}).get("id")
             key = f"{day}:{kind}" + (f":{tid}:{ev.get('ts')}" if kind not in ("brief", "day_summary", "session_closed", "done") else "")
-            if not self.store.claim(key):
-                r, delivered = None, "duplicate - not posted"   # a second bot process already posted this exact event
+            if self.store.delivered_before(day, kind, tid, ev.get("ts")) or not self.store.claim(key):
+                r, delivered = None, "duplicate - not posted"   # already posted (this process, another one, or before a restart)
         if r is not None and self.poster.enabled:
             content, emb = r
             if kind == "idea_cancel" and self.msg_ids.get(f"idea:{ev['id']}"):
@@ -507,6 +558,7 @@ class AlphaBot:
                 "last_bar": str(self.last_bar) if self.last_bar else None,
                 "stream_age_s": round(_time.time() - self.last_tick, 1) if self.last_tick else None,
                 "discord": {"mode": self.poster.mode, "sent": self.poster.sent, "errors": list(self.poster.errors)[-3:]},
+                "paused": self.store.get("posting_paused") or {"on": False},
                 "brief": self.brief, "open_trade": self.open_trade,
                 "done_reason": st.done_reason if st else None,
                 "levels": {"OR": [st.or_lo, st.or_hi] if st else None, "VWAP": round(st.vwap, 2) if st and st.vwap else None,
@@ -524,7 +576,11 @@ class AlphaBot:
         ts, tst = res["test_stats"], res["default_test_stats"]
         from .backtest import worth_adopting
         better = worth_adopting(ts, tst)
-        res["adopted"] = bool(save and better)
+        # The re-fit used to write alpha_params.json by itself every Sunday, which bypassed both labs and your approval.
+        # Now it only suggests (the forward lab tests the suggestion like any other idea) unless ABG_ALPHA_REFIT_ADOPT=true.
+        res["better"] = bool(better)
+        res["suggest"] = {k: v for k, v in (res.get("best") or {}).items() if getattr(self.params, k, None) != v} if better else {}
+        res["adopted"] = bool(save and better and getattr(self.s, "alpha_refit_adopt", False))
         if res["adopted"]:
             self.params_path.write_text(json.dumps({"params": res["params"], "fitted": str(datetime.now(NY)),
                                                     "test_stats": {k: ts.get(k) for k in ("trades", "avg_r", "net_pts", "win_rate")}},

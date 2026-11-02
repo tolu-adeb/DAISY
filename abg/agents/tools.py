@@ -179,6 +179,23 @@ def make_lab_tools(session: LabSession, repo_root: str | Path | None = None) -> 
         return lab_trials(lab, limit)
 
     @tool
+    def forward_lab() -> dict:
+        """The forward lab's results (docs/17.10): ideas it tested on ALL sessions (walk-forward) and the ones paper
+        trading on sessions after they were picked.  A paper record is the cleanest evidence there is; an idea the
+        forward lab rejected on all data rarely deserves a lab trial."""
+        from abg.agents.lab import shared
+        return {"recent": [t for t in shared.history_for_prompt(lab.data_dir, 40) if t["lab"] == "forward"],
+                "paper": [{k: s.get(k) for k in ("id", "name", "changes", "status", "fwd_start", "forward")}
+                          for s in shared.forward_strategies(lab.data_dir) if s.get("status") in ("paper", "ready")],
+                "counts": shared.counts(lab.data_dir)}
+
+    @tool
+    def holdout_queue() -> list:
+        """Spend holdout looks in this order: candidates ranked by their forward-lab paper record, each with the
+        holdout sessions it hasn't seen.  Ineligible ones (fewer than 40 unseen) would be refused without a look."""
+        return lab.holdout_queue()
+
+    @tool
     def trial_detail(trial_id: int) -> dict:
         """Every check for one trial, with the numbers."""
         return lab_trial(lab, trial_id)
@@ -196,14 +213,28 @@ def make_lab_tools(session: LabSession, repo_root: str | Path | None = None) -> 
             return {"accepted": 0, "error": f"research budget used ({session.max_rounds} rounds) - stop"}
         ok, errors = [], []
         tested = {json.dumps(t["changes"], sort_keys=True, default=list) for t in lab.ledger.trials(500)}
+        from abg.agents.lab import shared
+        fwd_rejected = {t["key"] for t in shared.forward_trials(lab.data_dir) if t["verdict"] == "rejected" and len(t["failed"]) >= 2}
         for i, h in enumerate(hypotheses[: session.max_per_round]):
             try:
                 hy = Hypothesis(**h)
             except Exception as e:  # pydantic validation -> tell the agent exactly what to fix
                 errors.append(f"#{i + 1}: {e}")
                 continue
+            from abg.agents.lab.space import strip_noops
+            h2 = strip_noops(hy, lab.base)
+            if h2 is None:
+                errors.append(f"#{i + 1} '{hy.name}': every change equals the current setting - nothing to test")
+                continue
+            if h2 is not hy:
+                errors.append(f"#{i + 1} '{hy.name}': dropped "
+                              f"{', '.join(k for k in hy.changes if k not in h2.changes)} (already the current value)")
+                hy = h2
             if json.dumps(hy.changes, sort_keys=True, default=list) in tested:
                 errors.append(f"#{i + 1} '{hy.name}': already tested - see past_trials")
+                continue
+            if shared.key(hy.changes) in fwd_rejected:
+                errors.append(f"#{i + 1} '{hy.name}': the forward lab already rejected it on all sessions - see forward_lab")
                 continue
             ok.append(hy)
         if len(hypotheses) > session.max_per_round:
@@ -234,6 +265,6 @@ def make_lab_tools(session: LabSession, repo_root: str | Path | None = None) -> 
         session.decision = {"decision": d, "reason": reason, "trial_id": trial_id}
         return {"recorded": session.decision}
 
-    return {"researcher": [overview, search_space, baseline, past_trials, research_log, submit_hypotheses],
-            "critic": [round_results, trial_detail, overview, past_trials, research_log, decide],
+    return {"researcher": [overview, search_space, baseline, past_trials, forward_lab, research_log, submit_hypotheses],
+            "critic": [round_results, trial_detail, overview, past_trials, forward_lab, holdout_queue, research_log, decide],
             "reporter": [round_results, overview]}

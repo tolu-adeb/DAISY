@@ -1,0 +1,41 @@
+# Swing desk alpha strategy. Deterministic: code reads this, the LLM never overrides it.
+# Changes only land through a reviewed PR (the R&D agent opens proposals; a human merges).
+version: 1
+fitted_on: "88 House of Traders signals, 2026-07-02 .. 2026-10-21 (see analysis/report)"
+
+gate:                          # "Rule B": take the signal if EITHER condition holds at post time
+  max_atr_pct: 4.0             # ATR(14) / price, percent
+  spy_below_sma: 20            # SPY close below its N-day SMA = market has pulled back
+  require: any                 # any | all
+
+hard_blocks:
+  min_price: 3.0               # sub-$3 names: spreads/gaps make stop math meaningless
+  min_dollar_volume_m: 5.0     # 20-day avg dollar volume, $M
+
+entry:
+  style: limit                 # limit at the top of the posted zone (long) / bottom (short)
+  fill_window_bars: 30         # order expires after this many sessions
+  cancel_if_target_first: true # setup ran away -> do not chase
+  cancel_if_stop_first: true
+
+exit:
+  take_profit_r: 0.75          # full exit at +0.75R (posted target is used if it is closer)
+  alt_scale_out:               # alternative tested profile (higher avg R, slightly lower win rate)
+    tp1_r: 1.0
+    tp1_frac: 0.5
+    move_stop_to_breakeven: true
+  stop: posted                 # posted (respects "daily close" wording) | intraday | atr
+  time_stop_bars: null
+
+risk:                          # enforced in code; agents can only read these
+  risk_per_trade_pct: 0.5      # of account equity per 1R
+  max_open_positions: 6
+  max_per_sector: 2
+  size_down_flags:             # multiply risk by 0.5 if any flag is present
+    - binary_event             # FDA / clinical readout / earnings inside the hold window
+    - price_below_10
+
+research:                      # guardrails for the R&D agent's proposals
+  min_closed_trades_for_change: 25
+  require_out_of_sample_gain: true
+  max_param_changes_per_proposal: 2

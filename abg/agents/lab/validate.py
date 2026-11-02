@@ -22,6 +22,13 @@ class Gate:
     min_block_wins: int = 3           # win rate >= current in at least 3 of the 4 sub-periods
     rw_max_abs_r: float = 0.15        # no edge on random-walk bars
     peek_budget: int = 6              # holdout looks allowed per holdout window
+    # second way to pass the win-rate check (forward lab only; 0 = off, the Strategy Lab's default): the win rate holds
+    # within ``alt_wr_slack`` while net/max-drawdown is ``alt_ratio_gain`` better and net ``alt_profit_gain`` higher.
+    # Its sub-period check then counts periods where net >= current and the win rate is within ``alt_block_wr_slack``.
+    alt_ratio_gain: float = 0.0
+    alt_profit_gain: float = 0.10
+    alt_wr_slack: float = 0.005
+    alt_block_wr_slack: float = 0.02
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -45,25 +52,47 @@ def compare(cand: dict, base: dict, ds, gate: Gate) -> dict:
              f"{c['trades']} vs {b['trades']} trades ({c['trades'] / max(1, b['trades']):.0%}; need {gate.min_trade_frac:.0%})"),
         _chk("profit", c["net_usd"] >= gate.min_profit_frac * b["net_usd"],
              f"${c['net_usd']:,.0f} vs ${b['net_usd']:,.0f} (need {gate.min_profit_frac:.0%})"),
-        _chk("win_rate", c["win_rate"] >= b["win_rate"] + gate.min_win_delta,
-             f"{c['win_rate']:.1%} vs {b['win_rate']:.1%} (need +{gate.min_win_delta:.1%})"),
+        _win_check(c, b, gate),
         _chk("risk_to_profit", _ratio(c) >= _ratio(b) * (1 + gate.min_ratio_gain),
              f"net/max-DD {c['ratio']:.2f} vs {b['ratio']:.2f} (need +{gate.min_ratio_gain:.0%}); "
              f"max DD ${c['max_dd_usd']:,.0f} vs ${b['max_dd_usd']:,.0f}"),
     ]
+    route = checks[3].get("route", "win rate")
     rows, wins, money_ok = [], 0, True
     for blk in ds.blocks:
         days = [str(d) for d in blk]
         cm, bm = metrics(cand["trades"], days), metrics(base["trades"], days)
         rows.append({"from": days[0], "to": days[-1], "cand_wr": cm["win_rate"], "base_wr": bm["win_rate"],
                      "cand_net": cm["net_usd"], "base_net": bm["net_usd"]})
-        wins += cm["win_rate"] >= bm["win_rate"]
+        if route == "profit":
+            wins += cm["net_usd"] >= bm["net_usd"] and cm["win_rate"] >= bm["win_rate"] - gate.alt_block_wr_slack
+        else:
+            wins += cm["win_rate"] >= bm["win_rate"]
         if bm["net_usd"] > 0 and cm["net_usd"] <= 0:
             money_ok = False
+    what = (f"net >= current with the win rate within {gate.alt_block_wr_slack:.0%}" if route == "profit"
+            else "win rate >= current")
     checks.append(_chk("consistency", wins >= gate.min_block_wins and money_ok,
-                       f"win rate >= current in {wins}/{len(ds.blocks)} sub-periods; "
+                       f"{what} in {wins}/{len(ds.blocks)} sub-periods; "
                        f"{'no' if money_ok else 'a'} sub-period turned from profit to loss", blocks=rows))
-    return {"search": c, "baseline": b, "checks": checks, "pass": all(x["pass"] for x in checks)}
+    return {"search": c, "baseline": b, "checks": checks, "pass": all(x["pass"] for x in checks), "route": route}
+
+
+def _win_check(c: dict, b: dict, gate: Gate) -> dict:
+    if c["win_rate"] >= b["win_rate"] + gate.min_win_delta:
+        return _chk("win_rate", True, f"{c['win_rate']:.1%} vs {b['win_rate']:.1%} (need +{gate.min_win_delta:.1%})",
+                    route="win rate")
+    if gate.alt_ratio_gain > 0 and c["win_rate"] >= b["win_rate"] - gate.alt_wr_slack \
+            and _ratio(c) >= _ratio(b) * (1 + gate.alt_ratio_gain) and b["net_usd"] > 0 \
+            and c["net_usd"] >= b["net_usd"] * (1 + gate.alt_profit_gain):
+        return _chk("win_rate", True,
+                    f"{c['win_rate']:.1%} vs {b['win_rate']:.1%}: held (within {gate.alt_wr_slack:.1%}) - passes on the profit "
+                    f"route: net +{c['net_usd'] / b['net_usd'] - 1:.0%}, net/max-DD +{_ratio(c) / max(1e-9, _ratio(b)) - 1:.0%}",
+                    route="profit")
+    extra = (f"; or hold it within {gate.alt_wr_slack:.1%} with net +{gate.alt_profit_gain:.0%} and net/max-DD "
+             f"+{gate.alt_ratio_gain:.0%} (the profit route)") if gate.alt_ratio_gain > 0 else ""
+    return _chk("win_rate", False, f"{c['win_rate']:.1%} vs {b['win_rate']:.1%} (need +{gate.min_win_delta:.1%}{extra})",
+                route="win rate")
 
 
 def headline_pass(cmp_: dict) -> bool:

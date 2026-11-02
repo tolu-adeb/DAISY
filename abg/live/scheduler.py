@@ -88,7 +88,10 @@ class Scheduler:
         await self.tr.post_portfolio("🧪 MNQ bot weekly re-fit", [
             f"Walk-forward on the last ~60 days of 5-min bars: best {res['best']}",
             f"Out-of-sample: {ts.get('trades', 0)} trades, avg {ts.get('avg_r') or 0:+.2f}R, net {ts.get('net_pts') or 0:+.1f} pts",
-            "Adopted for next week." if res["adopted"] else "Not adopted - it didn't beat the current settings out of sample."],
+            "Adopted for next week." if res["adopted"] else
+            ("Not adopted: suggested to the forward lab, which tests it on all the data and then on paper "
+             "(ABG_ALPHA_REFIT_ADOPT=true restores automatic adoption)." if res.get("suggest")
+             else "Not adopted - it didn't beat the current settings out of sample.")],
             "info", key="alpha_opt")
 
     async def weekly_recap(self) -> None:

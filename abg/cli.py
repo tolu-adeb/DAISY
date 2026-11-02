@@ -372,6 +372,10 @@ from . import cli_alpha  # noqa: E402,F401  (MNQ signal bot: `abg alpha ...`)
 from . import cli_routes  # noqa: E402,F401  (alert routing: `abg route ...`)
 from . import cli_alerio  # noqa: E402,F401  (Alerio copy-trading: `abg alerio ...`)
 from . import cli_lab  # noqa: E402,F401  (Strategy Lab + research agents: `abg lab ...`, `abg mcp`)
+from .swing.cli import swing_app  # noqa: E402  (`abg swing ...`)
+from .pitch.cli import pitch_app  # noqa: E402  (`abg pitch ...`)
+app.add_typer(swing_app, name="swing")
+app.add_typer(pitch_app, name="pitch")
 
 if __name__ == "__main__":  # pragma: no cover
     app()

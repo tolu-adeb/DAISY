@@ -12,3 +12,10 @@ data/
 *.lock
 portfolio-backup*.json
 .env.*.local
+
+# swing desk: raw Discord export (other people's messages) stays local; signals.csv is the tracked list
+swingdesk/data/export.html
+swingdesk/data/signals_raw.json
+swingdesk/state/*
+!swingdesk/state/.gitkeep
+!swingdesk/data/

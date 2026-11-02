@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from ..markets.instruments import canonical, spec_for
 from ..markets.overview import overview
@@ -116,3 +116,111 @@ async def alpha_status(request: Request):
         from ..alpha.learn import AdaptiveBook
         out["learner"] = AdaptiveBook.load(dd / "alpha_learner.json").summary()
     return jsonable(out)
+
+
+# --------------------------------------------------------------------------- MNQ Bot tab (docs/20)
+def _alpha_store(request: Request):
+    from ..alpha.bot import AlphaStore
+    bot = getattr(request.app.state.monitor, "alpha", None)
+    if bot is not None:
+        return bot.store
+    return AlphaStore(Path(request.app.state.engine.settings.data_dir).expanduser() / "alpha.sqlite3")
+
+
+@router.post("/alpha/pause")
+async def alpha_pause(request: Request, body: dict = Body(...)):
+    """Hold (or resume) the MNQ bot's Discord posts.  Trades are still tracked and logged while paused."""
+    bot = getattr(request.app.state.monitor, "alpha", None)
+    if bot is None or not getattr(request.app.state.monitor, "running", False):
+        raise HTTPException(409, "the signal bot isn't running in this window")
+    return {"paused": bot.set_posting_paused(bool(body.get("on")), str(body.get("by") or "dashboard")[:40])}
+
+
+@router.get("/alpha/events")
+async def alpha_events(request: Request, day: str | None = None, limit: int = Query(200, ge=1, le=1000)):
+    """The bot's event log (brief, ideas, signals, management, day close) with what reached Discord."""
+    from ..alpha.messages import Renderer
+    s = request.app.state.engine.settings
+    bot = getattr(request.app.state.monitor, "alpha", None)
+    rd = bot.renderer if bot is not None else Renderer(s.alpha_tag, None)
+    try:
+        evs = await asyncio.to_thread(_alpha_store(request).events, day, limit)
+    except Exception as e:
+        return {"events": [], "error": type(e).__name__}
+    out = []
+    for e in evs:
+        try:
+            r = rd.render(e["data"])
+            title = r[1].get("title") if r else None
+        except Exception:
+            title = None
+        d = e["data"]
+        out.append({"at": e["at"], "type": e["type"], "delivered": e["delivered"], "title": title,
+                    "ts": d.get("ts"), "day": (d.get("ctx") or {}).get("day") or (str(d.get("ts") or "")[:10] or None)})
+    return jsonable({"events": out})
+
+
+def paper_stats(trades: list[dict], commission_rt: float = 1.24, point_value: float = 2.0) -> dict:
+    """Live paper record: win rate, net, drawdown, by month (same formulas as the backtest)."""
+    import numpy as np
+    tr = sorted(trades, key=lambda t: (t.get("date", ""), t.get("opened", "")))
+    if not tr:
+        return {"trades": 0}
+    pts = np.array([float(t.get("pts") or 0) for t in tr])
+    usd = pts * point_value - commission_rt
+    by_day: dict[str, float] = {}
+    by_month: dict[str, list[float]] = {}
+    for t, u in zip(tr, usd):
+        by_day[t["date"]] = by_day.get(t["date"], 0.0) + u
+        by_month.setdefault(t["date"][:7], []).append(u)
+    cum = np.cumsum([by_day[d] for d in sorted(by_day)])
+    dd = float(np.max(np.maximum.accumulate(np.concatenate([[0.0], cum]))[1:] - cum)) if len(cum) else 0.0
+    wins, losses = pts[pts > 0.5], pts[pts < -0.5]
+    return {"trades": len(tr), "wins": int(len(wins)), "losses": int(len(losses)), "win_rate": float(len(wins) / len(tr)),
+            "net_pts": round(float(pts.sum()), 2), "net_usd": round(float(usd.sum()), 2), "max_dd_usd": round(dd, 2),
+            "avg_r": round(float(np.mean([float(t.get("r") or 0) for t in tr])), 3),
+            "first": tr[0]["date"], "last": tr[-1]["date"],
+            "months": [{"month": k, "trades": len(v), "net_usd": round(sum(v), 2)} for k, v in sorted(by_month.items())]}
+
+
+@router.get("/alpha/paper")
+async def alpha_paper(request: Request, since: str | None = None):
+    s = request.app.state.engine.settings
+    try:
+        trades = await asyncio.to_thread(_alpha_store(request).trades, 5000)
+    except Exception:
+        trades = []
+    if since:
+        trades = [t for t in trades if str(t.get("date") or "") >= since]
+    return jsonable({"stats": paper_stats(trades, s.alpha_commission_rt), "trades": trades[:50]})
+
+
+@router.get("/system")
+async def system(request: Request):
+    """System tab: monitor, jobs, errors, data freshness and which features are on (no secret values)."""
+    import time as _t
+    s = request.app.state.engine.settings
+    m = request.app.state.monitor
+    dd = Path(s.data_dir).expanduser()
+    files = {}
+    for name in ("alpha.sqlite3", "mnq_proxy_5m.csv", "qqq_daily.csv", "lab/lab.sqlite3", "swing/state/book.json",
+                 "pitch/pitches.json", "health.json", "uptime.json"):
+        f = dd / name
+        files[name] = {"exists": f.exists(), "age_h": round((_t.time() - f.stat().st_mtime) / 3600, 1) if f.exists() else None,
+                       "kb": round(f.stat().st_size / 1024) if f.exists() else None}
+    feats = {"MNQ bot": s.alpha_enabled, "R&D desk": s.rd_enabled, "forward lab": s.fwd_enabled, "swing desk": s.swing_enabled,
+             "pitch desk": getattr(s, "pitch_enabled", False), "external signals": s.ext_enabled,
+             "Alerio shadow": bool(s.alerio_watch and s.alerio_cookie)}
+    keys = {"Finnhub (real-time)": bool(s.finnhub_api_key), "Polygon": bool(s.polygon_api_key),
+            "Twelve Data": bool(s.twelvedata_api_key), "FMP": bool(s.fmp_api_key), "Anthropic (agents)": bool(s.anthropic_api_key),
+            "MNQ Discord": bool(s.alpha_webhook_url or s.alpha_channel_id), "R&D Discord": bool(s.rd_webhook_url),
+            "Swing Discord": bool(s.swing_webhook_url), "Pitch Discord": bool(getattr(s, "pitch_webhook_url", None)),
+            "Healthcheck": bool(s.healthcheck_url)}
+    st = m.status()
+    return jsonable({"monitor": {k: st.get(k) for k in ("running", "started_at", "elsewhere", "market", "errors", "uptime")},
+                     "note": getattr(request.app.state, "monitor_note", None), "features": feats, "keys": keys,
+                     "files": files, "data_dir": str(dd),
+                     "jobs": {"scheduler": ((st.get("external") or {}).get("scheduler")), "rd": st.get("rd"),
+                              "forward": {k: (st.get("forward") or {}).get(k) for k in ("enabled", "busy", "last", "errors")},
+                              "swing": {k: (st.get("swing") or {}).get(k) for k in ("enabled", "busy", "last_pass", "errors")},
+                              "pitch": st.get("pitch")}})

@@ -22,6 +22,10 @@ dependencies = [
   "uvicorn>=0.27",
   "tzdata>=2024.1",
   "websockets>=12",
+  "pyyaml>=6",            # swing desk rules file
+  "beautifulsoup4>=4.12", # swing desk Discord-export parser
+  "requests>=2.31",       # swing desk price fetch
+  "pypdf>=4",             # research-paper queue
 ]
 
 [project.optional-dependencies]

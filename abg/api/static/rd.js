@@ -15,13 +15,13 @@ async function loadRD() {
   const b = (last && last.bot) || {};
   $("#rd-kpis").innerHTML = [
     rdKpi("Bot (last digest)", b.trades ? rdPct(b.win_rate) : "—", b.trades ? `${b.trades} trades · ${Number(b.net_r).toFixed(2)}R · ${esc(last.label)}` : "no paper trades yet"),
-    rdKpi("Lab trials", lab ? lab.trials_so_far : "—", lab ? `data ${esc(lab.data.first)} → ${esc(lab.data.last)}` : esc(r.hint || "")),
+    rdKpi("Lab trials", lab ? lab.trials_so_far : "—", lab ? (r.shared ? `${r.shared.total} across both labs · ` : "") + `data ${esc(lab.data.first)} → ${esc(lab.data.last)}` : esc(r.hint || "")),
     rdKpi("Holdout looks", lab ? `${lab.holdout_looks}/${lab.look_budget}` : "—", lab && lab.fresh_holdout_from ? `fresh holdout once data reaches ${esc(lab.fresh_holdout_from)}` : "locked last 6 months"),
     rdKpi("Proposals", (r.proposals || []).filter((p) => p.status === "pending").length, "waiting for approval"),
     rdKpi("Settings", lab ? `T1 ${lab.current.t1_r}R` : "—", lab ? `bank ${Math.round(lab.current.scale_frac * 100)}% · trend ${lab.current.orx_trend_len}d · flat ${esc(lab.current.flat_time)}` : ""),
   ].join("");
   $("#rd-desk").innerHTML = `<b>R&amp;D desk</b>
-    <span class="${dk.webhook ? "pos" : "neg"}">Discord ${dk.webhook ? "connected" : "not set (ABG_RD_WEBHOOK_URL)"}</span>
+    <span class="${dk.webhook ? "pos" : (window.RD_HELD ? "muted" : "neg")}">Discord ${dk.webhook ? "connected" : window.RD_HELD ? "held: digests stay on this page until ABG_MNQ_PRIMARY=true" : "not set (ABG_RD_WEBHOOK_URL)"}</span>
     <span>digests: ${["daily", "weekly", "monthly"].filter((k) => dk[k] !== false).join(" · ") || "off"}</span>
     <span>agent research: ${esc(dk.auto_run || "off")}${dk.api_key ? "" : ' <span class="neg">(no API key - agents idle)</span>'}</span>
     ${dk.busy ? `<span class="pos">running: ${esc(dk.busy)}</span>` : ""}
@@ -36,6 +36,21 @@ async function loadRD() {
   renderReports(r.reports || []);
   renderTrials(r.trials || [], lab);
   renderProposals(r.proposals || []);
+  renderHoldoutQueue(r.holdout_queue || [], lab);
+}
+
+function renderHoldoutQueue(q, lab) {
+  const el = $("#rd-hq");
+  if (!el) return;
+  el.innerHTML = q.length ? `<table><thead><tr><th>Idea</th><th>Changes</th><th>From</th><th class="n">Paper sessions</th><th class="n">Paper win</th><th class="n">Paper net</th><th class="n">Unseen holdout</th><th>Next look</th></tr></thead><tbody>
+    ${q.map((x) => `<tr><td>${esc(x.name)}</td><td><code>${esc(JSON.stringify(x.changes))}</code></td>
+      <td class="muted">${x.lab_trial ? `lab #${x.lab_trial}` : ""}${x.lab_trial && x.forward_id ? " · " : ""}${x.forward_id ? `forward #${x.forward_id} (${esc(x.forward_status)})` : ""}</td>
+      <td class="n">${x.paper_sessions || "—"}</td><td class="n">${x.paper_win_rate == null ? "—" : rdPct(x.paper_win_rate) + ` <span class="muted">vs ${rdPct(x.live_win_rate)}</span>`}</td>
+      <td class="n">${x.paper_net == null ? "—" : rdUsd(x.paper_net) + ` <span class="muted">vs ${rdUsd(x.live_net)}</span>`}</td>
+      <td class="n">${x.unseen_holdout_sessions ?? "—"}</td>
+      <td class="${x.eligible ? "pos" : "muted"}">${x.eligible ? "eligible" : esc(x.blocker || "")}</td></tr>`).join("")}</tbody></table>
+    <p class="muted small">${lab && lab.fresh_holdout_from ? `The holdout is used up until ${esc(lab.fresh_holdout_from)}; until then the paper record is the test. ` : ""}Agents spend looks in this order (tool: holdout_queue); an idea with fewer than 40 unseen holdout sessions is refused without using a look.</p>`
+    : '<p class="muted">No candidates yet. Strategy Lab candidates and forward-lab paper strategies appear here.</p>';
 }
 
 function digestHtml(d) {
@@ -80,10 +95,11 @@ function renderReports(reps) {
 
 function renderTrials(tr, lab) {
   $("#rd-ledger-note").textContent = lab ? `${lab.trials_so_far} trials · search window ${lab.data.search[0]} → ${lab.data.search[1]} · holdout ${lab.data.holdout ? lab.data.holdout[0] + " → " + lab.data.holdout[1] : "none"}` : "";
-  $("#rd-trials").innerHTML = tr.length ? `<div class="rd-scroll"><table><thead><tr><th>#</th><th>Hypothesis</th><th>Changes</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Net/DD</th><th>Verdict</th><th>Failed checks</th></tr></thead><tbody>
+  $("#rd-trials").innerHTML = tr.length ? `<div class="rd-scroll"><table><thead><tr><th>#</th><th>Hypothesis</th><th>Changes</th><th class="n">Trades</th><th class="n">Win</th><th class="n">Net/DD</th><th>Verdict</th><th>Failed checks</th><th>Forward lab</th></tr></thead><tbody>
     ${tr.map((t) => `<tr><td>${t.id}</td><td>${esc(t.name)}<br><span class="muted">${esc(t.source || "")}</span></td><td><code>${esc(JSON.stringify(t.changes))}</code></td>
       <td class="n">${t.search.trades ?? ""}</td><td class="n">${rdPct(t.search.win_rate)}</td><td class="n">${t.search.ratio == null ? "—" : Number(t.search.ratio).toFixed(2)}</td>
-      <td class="${t.verdict === "confirmed" ? "pos" : t.verdict === "candidate" ? "" : "neg"}">${esc(t.verdict)}</td><td class="muted">${esc((t.failed || []).join(", "))}</td></tr>`).join("")}
+      <td class="${t.verdict === "confirmed" ? "pos" : t.verdict === "candidate" ? "" : "neg"}">${esc(t.verdict)}</td><td class="muted">${esc((t.failed || []).join(", "))}</td>
+      <td>${t.forward ? `<a href="#rd/forward" class="${["paper", "ready", "passed"].includes(t.forward.status) ? "pos" : "muted"}">${esc(t.forward.status)}${t.forward.id ? ` #${t.forward.id}` : ""}${t.forward.sessions ? ` · ${t.forward.sessions} sessions` : ""}</a>` : '<span class="muted">—</span>'}</td></tr>`).join("")}
     </tbody></table></div>` : '<p class="muted">No trials yet - <code>abg lab test</code> or <code>abg lab run</code>.</p>';
 }
 
