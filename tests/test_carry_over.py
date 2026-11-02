@@ -81,3 +81,16 @@ def test_pack_for_server(tmp_path):
     assert "abg-data/alpha.sqlite3" in names and "abg-data/carry_over.json" not in names
     assert "ABG_ALPHA_WEBHOOK_URL=https://a" in env and "ABG_DATA_DIR" not in env and "ABG_KEEP_AWAKE" not in env
     c.close()
+
+
+def test_hold_local_after_move(tmp_path):
+    spec2 = importlib.util.spec_from_file_location("pack_for_server2", ROOT / "scripts" / "pack_for_server.py")
+    pk = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(pk)
+    (tmp_path / ".env").write_text("ABG_ALPHA_WEBHOOK_URL=https://a\nABG_FINNHUB_API_KEY=k\nABG_MONITOR_ON_SERVE=true\n")
+    assert pk.main(["--daisy", str(tmp_path), "--hold-local"]) == 0
+    env = (tmp_path / ".env").read_text()
+    assert "#HELD ABG_ALPHA_WEBHOOK_URL=https://a" in env and "ABG_FINNHUB_API_KEY=k" in env
+    assert env.count("ABG_MONITOR_ON_SERVE") == 1 and "ABG_MONITOR_ON_SERVE=false" in env
+    assert pk.main(["--daisy", str(tmp_path), "--hold-local"]) == 0       # re-run doesn't double-hold
+    assert "#HELD #HELD" not in (tmp_path / ".env").read_text()

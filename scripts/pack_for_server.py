@@ -22,12 +22,35 @@ import carry_over as co  # noqa: E402
 DROP = ("ABG_DATA_DIR", "ABG_CACHE_DIR", "ABG_KEEP_AWAKE")   # the server sets its own paths; keep-awake is Windows-only
 
 
+def hold_local(daisy: Path) -> int:
+    """The server is the poster now: comment out this PC's webhooks / e-mail and keep its dashboard read-only, so
+    opening Start Dashboard.bat or Start Monitor.bat here can never post a second copy."""
+    env = daisy / ".env"
+    lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
+    out = []
+    for ln in lines:
+        k = co.key_of(ln)
+        if k == "ABG_MONITOR_ON_SERVE" or ln.startswith("# --- moved to the server"):
+            continue
+        if k and (k.endswith("_WEBHOOK_URL") or k in co.HELD_KEYS) and not ln.startswith(co.HOLD):
+            ln = co.HOLD + ln
+        out.append(ln)
+    out += ["# --- moved to the server (docs/20.4): this PC never posts", "ABG_MONITOR_ON_SERVE=false"]
+    env.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print("this PC's .env: Discord / e-mail held, dashboard won't start a monitor")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--daisy", type=Path, default=Path(__file__).resolve().parents[1])
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--hold-local", action="store_true",
+                    help="after the move: hold this PC's Discord / e-mail lines and stop its dashboard from starting a monitor")
     a = ap.parse_args(argv)
     daisy = a.daisy.resolve()
+    if a.hold_local:
+        return hold_local(daisy)
     out = (a.out or daisy.parent / "daisy-server.tgz").resolve()
     if (age := co.lock_age(daisy / "data")) is not None and age < 300:
         print(f"DAISY's monitor is still running on this PC (heartbeat {age:.0f}s ago) - close it first, then re-run.")

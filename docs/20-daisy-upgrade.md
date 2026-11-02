@@ -119,6 +119,22 @@ DAISY runs as the systemd service `abg` on the OVH VPS, next to VERA. VERA's DAI
 (`config/projects.yaml` in the vera repo) points its health check at `localhost:8000/api/health`. FIX-E's fixes arrive
 as draft pull requests: you merge, the server deploys.
 
+**One command does all of it** (from the DAISY folder, any time; it waits for 16:25 ET on a trading day):
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\move-to-vps.ps1 -Server <user>@<vps>
+```
+It runs these steps:
+1. Checks SSH to the server.
+2. Pushes DAISY to GitHub.
+3. Stops every DAISY process on the PC and keeps the old startup task disabled.
+4. Packs, copies and deletes the local archive.
+5. Runs `deploy/vps-finish.sh` on the server: installs DAISY, checks its health and updates VERA's DAISY settings.
+6. Holds the PC's Discord lines, so the PC can never post a second copy.
+
+You type your SSH passphrase and the server's sudo password yourself when asked.
+
+The same steps by hand:
+
 **1. On the PC, after the close.** Close DAISY's monitor window, then:
 ```bat
 cd %USERPROFILE%\Documents\DAISY
