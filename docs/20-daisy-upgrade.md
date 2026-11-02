@@ -113,6 +113,56 @@ python scripts\carry_over.py --terminal ..\school\AIBG\abg-terminal --mnq ..\c3.
 
 `c3.lab/mnq-bot` stays installed and held.
 
+## 20.4 Moving DAISY to the VPS (where VERA runs)
+
+DAISY runs as the systemd service `abg` on the OVH VPS, next to VERA. VERA's DAISY entry
+(`config/projects.yaml` in the vera repo) points its health check at `localhost:8000/api/health`. FIX-E's fixes arrive
+as draft pull requests: you merge, the server deploys.
+
+**1. On the PC, after the close.** Close DAISY's monitor window, then:
+```bat
+cd %USERPROFILE%\Documents\DAISY
+python scripts\pack_for_server.py
+scp ..\daisy-server.tgz <user>@<vps>:~
+del ..\daisy-server.tgz
+```
+The archive holds your keys. Delete it as soon as it's copied.
+
+**2. On the VPS**, as your normal login user:
+```bash
+tar -xzf ~/daisy-server.tgz -C ~ && rm ~/daisy-server.tgz          # -> ~/abg-data and ~/.env.server.local
+curl -fsSL https://raw.githubusercontent.com/tolu-adeb/DAISY/main/deploy/setup-server.sh -o setup-server.sh
+REPO_SSH=https://github.com/tolu-adeb/DAISY.git bash setup-server.sh
+rm ~/.env.server.local setup-server.sh
+curl -fsS localhost:8000/api/health && systemctl status abg --no-pager | head -5
+```
+`setup-server.sh` sets up:
+- the code in `~/abg`
+- the venv
+- the `.env`, with the server's data paths and fresh dashboard tokens
+- the `abg` service (starts on boot, restarts on crash)
+- the nightly **`abg-update.timer`**
+- Tailscale, so the dashboard is private: `sudo tailscale serve --bg 8000`
+
+**3. Back on the PC:** keep `Disable-ScheduledTask -TaskName "ABG Monitor"` disabled. The PC dashboard can still be
+opened. The PC's monitor must not run again while the server's does.
+
+### How changes reach the server
+
+`abg-update.timer` runs `deploy/auto-update.sh` at 17:40 ET on weekdays and at noon on weekends, never during the
+session. It:
+1. Fetches `main`.
+2. Runs the whole test suite in a scratch copy.
+3. Only if the suite is green: fast-forwards the live checkout and restarts `abg`.
+4. Rolls back if the health check fails after the restart.
+
+A red suite leaves the running version alone and logs why: `journalctl -u abg-update -n 50`. Run it by hand with
+`sudo systemctl start abg-update.service`.
+
+**What VERA's agents may change.** FIX-E never touches these paths in DAISY: the live monitor, the signal bot, the
+strategy, risk, the broker bridge, workflows, deploy and `.env` (`config/policy.yaml`, `protected_paths.daisy`). Its
+fixes are draft PRs: nothing reaches the server until you merge.
+
 ## 20.2 Bugs fixed
 
 - Morning brief posted more than once after a restart: `delivered_before` guard + late-brief hold (`ABG_ALPHA_BRIEF_UNTIL`).

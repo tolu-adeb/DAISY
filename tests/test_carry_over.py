@@ -63,3 +63,21 @@ def test_lock_from_a_closed_window_counts_as_released(tmp_path):
     assert co.lock_age(d) is None                                   # dead pid on this machine
     (d / "monitor.lock").write_text(json.dumps({"pid": 999999, "host": "other-pc", "heartbeat": time.time()}))
     assert co.lock_age(d) < 5                                       # another machine: trust the heartbeat
+
+
+def test_pack_for_server(tmp_path):
+    import tarfile
+    spec2 = importlib.util.spec_from_file_location("pack_for_server", ROOT / "scripts" / "pack_for_server.py")
+    pk = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(pk)
+    term, mnq, daisy, c = _tree(tmp_path)
+    assert co.main(["--terminal", str(term), "--mnq", str(mnq), "--daisy", str(daisy), "--switch"]) == 0
+    (daisy / ".env").write_text((daisy / ".env").read_text() + "ABG_KEEP_AWAKE=true\n")
+    out = tmp_path / "pack.tgz"
+    assert pk.main(["--daisy", str(daisy), "--out", str(out)]) == 0
+    with tarfile.open(out) as tf:
+        names = tf.getnames()
+        env = tf.extractfile(".env.server.local").read().decode()
+    assert "abg-data/alpha.sqlite3" in names and "abg-data/carry_over.json" not in names
+    assert "ABG_ALPHA_WEBHOOK_URL=https://a" in env and "ABG_DATA_DIR" not in env and "ABG_KEEP_AWAKE" not in env
+    c.close()

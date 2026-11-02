@@ -6,7 +6,8 @@
 #   2 GitHub access (read-only deploy key for a private repo) and clone / update the code
 #   3 Python venv + install
 #   4 .env with fresh admin/view tokens (chmod 600) and a data folder
-#   5 systemd service "abg" (starts on boot, restarts on crash, sandboxed)
+#   5 systemd service "abg" (starts on boot, restarts on crash, sandboxed) + nightly auto-update timer
+#     (AUTO_UPDATE=0 to skip; a public repo can be cloned without a deploy key: REPO_SSH=https://github.com/...)
 #   6 Tailscale: install; `tailscale serve` publishes the dashboard privately once you've logged in
 set -euo pipefail
 REPO_SSH="${REPO_SSH:-git@github.com:tolu-adeb/DAISY.git}"
@@ -30,6 +31,8 @@ sudo systemctl restart systemd-journald || true
 
 say "2/6 GitHub access + code"
 if [ ! -d "$APP_DIR/.git" ]; then
+  case "$REPO_SSH" in https://*) ;;      # public repo over HTTPS: no deploy key needed
+  *)
   if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
     [ -f "$HOME/.ssh/id_ed25519" ] || ssh-keygen -t ed25519 -N "" -C "abg-server deploy key" -f "$HOME/.ssh/id_ed25519" >/dev/null
     echo
@@ -41,6 +44,8 @@ if [ ! -d "$APP_DIR/.git" ]; then
     echo "Then run this script again."
     exit 2
   fi
+  ;;
+  esac
   git clone -q --branch "$BRANCH" "$REPO_SSH" "$APP_DIR"
 else
   git -C "$APP_DIR" pull -q --ff-only
@@ -58,6 +63,8 @@ if [ ! -f "$APP_DIR/.env" ] && [ -f "$ENV_FILE" ]; then
   cp "$ENV_FILE" "$APP_DIR/.env"
   grep -q '^ABG_DATA_DIR=' "$APP_DIR/.env" || echo "ABG_DATA_DIR=$DATA_DIR" >> "$APP_DIR/.env"
   grep -q '^ABG_CACHE_DIR=' "$APP_DIR/.env" || echo "ABG_CACHE_DIR=$DATA_DIR/cache" >> "$APP_DIR/.env"
+  grep -q '^ABG_ADMIN_TOKEN=' "$APP_DIR/.env" || echo "ABG_ADMIN_TOKEN=$(openssl rand -hex 24)" >> "$APP_DIR/.env"
+  grep -q '^ABG_VIEW_TOKEN=' "$APP_DIR/.env" || echo "ABG_VIEW_TOKEN=$(openssl rand -hex 24)" >> "$APP_DIR/.env"
   echo "using your prepared settings from $ENV_FILE"
 fi
 if [ ! -f "$APP_DIR/.env" ]; then
@@ -101,7 +108,28 @@ LimitNOFILE=8192
 WantedBy=multi-user.target
 UNIT
 mkdir -p "$HOME/.abg-terminal" "$HOME/.cache/abg-terminal"
+# Nightly auto-update (docs/20.4): merged changes go live after the close, only when the tests pass.
+sudo tee /etc/systemd/system/abg-update.service >/dev/null <<UNIT
+[Unit]
+Description=DAISY: pull main, run the tests, restart abg if they pass
+After=network-online.target
+[Service]
+Type=oneshot
+Environment=APP_DIR=$APP_DIR APP_USER=$USER PORT=$PORT
+ExecStart=/bin/bash $APP_DIR/deploy/auto-update.sh
+UNIT
+sudo tee /etc/systemd/system/abg-update.timer >/dev/null <<UNIT
+[Unit]
+Description=DAISY auto-update after the US close and on weekends
+[Timer]
+OnCalendar=Mon..Fri *-*-* 17:40:00 America/New_York
+OnCalendar=Sat,Sun *-*-* 12:00:00 America/New_York
+Persistent=true
+[Install]
+WantedBy=timers.target
+UNIT
 sudo systemctl daemon-reload
+if [ "${AUTO_UPDATE:-1}" = 1 ]; then sudo systemctl enable -q --now abg-update.timer; fi
 sudo systemctl enable -q abg
 sudo systemctl restart abg
 sleep 6
