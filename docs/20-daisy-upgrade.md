@@ -121,14 +121,14 @@ as draft pull requests: you merge, the server deploys.
 
 **One command does all of it** (from the DAISY folder, any time; it waits for 16:25 ET on a trading day):
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy\move-to-vps.ps1 -Server <user>@<vps>
+powershell -ExecutionPolicy Bypass -File deploy\move-to-vps.ps1 -Server ubuntu@135.148.166.233
 ```
 It runs these steps:
 1. Checks SSH to the server.
 2. Pushes DAISY to GitHub.
 3. Stops every DAISY process on the PC and keeps the old startup task disabled.
 4. Packs, copies and deletes the local archive.
-5. Runs `deploy/vps-finish.sh` on the server: installs DAISY, checks its health and updates VERA's DAISY settings.
+5. Runs `deploy/vps-finish.sh` on the server: installs DAISY, and checks its health. VERA's own config lives in `tolu-adeb/vera` and isn't touched.
 6. Holds the PC's Discord lines, so the PC can never post a second copy.
 
 You type your SSH passphrase and the server's sudo password yourself when asked.

@@ -10,9 +10,10 @@
 #   4 stops DAISY's monitor on this PC and keeps the "ABG Monitor" startup task disabled (one Discord poster)
 #   5 packs data + settings, copies them and VERA's DAISY settings to the server, deletes the local copy
 #   6 runs deploy/vps-finish.sh there: installs DAISY as the "abg" service with the nightly tested auto-update,
-#     checks its health, updates VERA's config (sudo password asked on the server)
+#     checks its health (sudo password asked on the server).  VERA's own config lives in tolu-adeb/vera and is
+#     not touched here.
 param(
-  [string]$Server = "",
+  [string]$Server = "ubuntu@135.148.166.233",     # the OVH VPS-2 VERA runs on (vps-29a39fe0)
   [switch]$Now
 )
 $ErrorActionPreference = "Stop"
@@ -74,14 +75,9 @@ if ($LASTEXITCODE -ne 0) { throw "packing failed" }
 $pack = Join-Path (Split-Path -Parent $Daisy) "daisy-server.tgz"
 $stage = Join-Path $env:TEMP "daisy-move"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path "$stage\vera" | Out-Null
+New-Item -ItemType Directory -Path $stage | Out-Null
 Move-Item $pack "$stage\daisy-server.tgz"
 Copy-Item "$Daisy\deploy\vps-finish.sh" "$stage\vps-finish.sh"
-$vera = Join-Path (Split-Path -Parent $Daisy) "vera"
-if (Test-Path "$vera\config\projects.yaml") {
-  Copy-Item "$vera\config\projects.yaml" "$stage\vera\projects.yaml"
-  Copy-Item "$vera\cards\daisy.md" "$stage\vera\daisy.md"
-} else { Remove-Item "$stage\vera" -Recurse }
 & ssh $Server "rm -rf ~/daisy-move"
 & scp -r $stage "${Server}:~/daisy-move"
 $scpOk = $LASTEXITCODE
