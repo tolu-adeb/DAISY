@@ -5,7 +5,7 @@ if not exist ".venv\Scripts\abg.exe" (
   echo First-time setup: installing...
   python -m venv .venv
 )
-.venv\Scripts\python -c "import tzdata, plyer" 2>nul || .venv\Scripts\python -m pip install -e ".[all]"
+.venv\Scripts\python -c "import tzdata, plyer, yaml, bs4, pypdf" 2>nul || .venv\Scripts\python -m pip install -e ".[all]"
 start "" http://127.0.0.1:8000
 .venv\Scripts\abg.exe serve
 pause

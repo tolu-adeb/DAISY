@@ -69,6 +69,8 @@ abg alpha backtest --walk-forward              # MNQ signal bot backtest (docs/1
 abg lab test "Name" "Why" t1_r=0.6           # Strategy Lab: gate a bot change against a locked holdout (docs/17)
 abg lab run                                    # Strands research agents (needs ABG_ANTHROPIC_API_KEY)
 abg monitor                              # run the live signal monitor in this window
+abg swing status | pass | add "TEXT"     # swing desk: House of Traders ideas, graded and tracked (docs/19)
+abg pitch screen | make MSFT | list | score    # pitch desk: factor screen, valuation memo, scorecard vs SPY (docs/20)
 abg notify-test                          # check Discord / email / desktop alerts
 
 # external signals: interpret, track, relay (see docs/11)
@@ -119,6 +121,13 @@ asyncio.run(main())
 15. [Alert routing](docs/15-alert-routing.md): Alerio-style routes with risk-based sizing, pre-trade loss room, stale/chase guards and replay (dry run)
 16. [MNQ research log](docs/16-alpha-insights-log.md): every insight, what helped, what didn't, traps, porting checklist (agent-ready)
 17. [Strategy Lab & research agents](docs/17-strategy-lab.md): locked-holdout validation gate, trial ledger, Strands + Claude research agents, MCP, evals
+19. [Swing desk](docs/19-swing-desk.md): House of Traders swing ideas graded by the audited rules, replayed every pass, alerts, wide scan
+20. [DAISY upgrade](docs/20-daisy-upgrade.md): what came over from the MNQ bot spin-off, the pitch desk, the new dashboard tabs, carrying your data over
+
+Dashboard tabs: Analyze · Portfolio · Signals · Markets · **MNQ Bot** (plan, event log, paper record, posting pause, live vs
+backtest, uptime) · **Swing Desk** (book, add idea, all ideas, wide scan, track record, research) · **Pitch Desk** (screen,
+memos, scorecard) · R&D (findings, Strategy Lab, **forward lab**) · Compare · Providers · **System** (monitor, jobs, errors,
+data freshness, which features and keys are set).
 
 ## Tests
 

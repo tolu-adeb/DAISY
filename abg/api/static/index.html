@@ -6,6 +6,7 @@
 <title>ABG Intelligence Terminal</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c5cab'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/desk.css">
 <script src="/static/vendor/lightweight-charts.js"></script>
 </head>
 <body>
@@ -27,9 +28,13 @@
     <button class="tab" data-view="portfolio" role="tab">Portfolio <span id="sig-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="signals" role="tab">Signals <span id="ext-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="markets" role="tab">Markets</button>
+    <button class="tab" data-view="mnq" role="tab">MNQ Bot</button>
+    <button class="tab" data-view="swing" role="tab">Swing Desk <span class="count" id="nav-swing-count" hidden></span></button>
+    <button class="tab" data-view="pitch" role="tab">Pitch Desk</button>
     <button class="tab" data-view="rd" role="tab">R&amp;D</button>
     <button class="tab" data-view="compare" role="tab">Compare</button>
     <button class="tab" data-view="status" role="tab">Providers</button>
+    <button class="tab" data-view="system" role="tab">System</button>
     <button id="auth-btn" class="icon" title="Sign in" aria-label="Sign in" hidden>🔒</button>
     <button id="theme" class="icon" title="Toggle theme" aria-label="Toggle theme">◐</button>
   </nav>
@@ -195,6 +200,8 @@
 </main>
 
 <main id="view-rd" class="view" hidden>
+  <nav class="subnav desk-sub" aria-label="R&amp;D"><a data-sub="findings" href="#rd/findings">Findings &amp; Strategy Lab</a><a data-sub="forward" href="#rd/forward">Forward lab</a></nav>
+  <div data-panel="rd/findings">
   <section class="row kpis5" id="rd-kpis"></section>
   <section class="card monitor-bar" id="rd-desk"></section>
   <section class="row two">
@@ -202,8 +209,174 @@
     <div class="card"><div class="card-head"><h2>Research reports</h2></div><div id="rd-reports"></div></div>
   </section>
   <section class="card"><div class="card-head"><h2>Strategy Lab ledger</h2><span class="muted" id="rd-ledger-note"></span></div><div id="rd-trials"></div></section>
+  <section class="card"><div class="card-head"><h2>Holdout queue</h2><span class="muted">who gets the next looks: best paper record first; a look counts only sessions the idea hasn't seen</span></div><div id="rd-hq" class="scroll"></div></section>
   <section class="card"><div class="card-head"><h2>Proposals</h2><span class="muted">approve or reject with <code>abg lab approve / reject</code></span></div><div id="rd-proposals"></div></section>
+  </div>
+  <div data-panel="rd/forward" class="desk desk-in" hidden>
+    <section class="strip" id="fw-strip"></section>
+    <section class="card"><div class="card-head"><h2>How a change gets to the live bot</h2></div><ol class="fw-steps" id="fw-steps"></ol></section>
+    <section class="card"><div class="card-head"><h2>Paper strategies</h2><span class="muted" id="fw-st-note"></span></div><div id="fw-strategies"></div></section>
+    <section class="row two">
+      <div class="card"><div class="card-head"><h2>Latest ideas tested</h2><span class="muted" id="fw-tr-note"></span></div><div id="fw-trials" class="scroll"></div></div>
+      <div class="card"><div class="card-head"><h2>Daily runs</h2></div><div id="fw-runs" class="scroll"></div></div>
+    </section>
+    <section class="deskbar" id="fw-desk"></section>
+  </div>
 </main>
+
+<main id="view-mnq" class="view desk" hidden>
+  <nav class="subnav" aria-label="MNQ Bot"><a data-sub="live" href="#mnq/live">Live</a><a data-sub="trades" href="#mnq/trades">Paper trades</a><a data-sub="system" href="#mnq/system">Live vs backtest &amp; uptime</a></nav>
+  <section class="card monitor-bar" id="mq-bar"><span class="muted">Loading…</span></section>
+  <div data-panel="mnq/live" hidden>
+    <section class="strip" id="mq-kpis"></section>
+    <section class="row two">
+      <section class="card" id="mq-plan"></section>
+      <div class="card"><div class="card-head"><h2>Live event log</h2><span class="muted" id="mq-ev-note">today</span></div><div id="mq-events"></div></div>
+    </section>
+  </div>
+  <div data-panel="mnq/trades" hidden>
+    <section class="row two">
+      <div class="card"><div class="card-head"><h2>By month</h2></div><div id="mq-months"></div></div>
+      <div class="card"><div class="card-head"><h2>Recent paper trades</h2></div><div id="mq-trades"></div></div>
+    </section>
+  </div>
+  <div data-panel="mnq/system" hidden>
+  <div class="card"><div class="card-head"><h2>Live vs backtest</h2><span class="muted" id="par-note"></span></div><div id="par"></div></div>
+  <div class="card"><div class="card-head"><h2>Uptime</h2><span class="muted" id="up-note">market hours, last 10 sessions</span></div><div id="up"></div></div>
+  <div class="card"><div class="card-head"><h2>Monitor</h2><span class="muted">heartbeat, posting guard, feeds</span></div><div id="mq-detail"></div></div>
+</div>
+</main>
+
+<main id="view-swing" class="view desk" hidden>
+  <nav class="subnav" aria-label="Swing desk"><a data-sub="book" href="#swing/book">Book</a><a data-sub="add" href="#swing/add">Add idea</a><a data-sub="ideas" href="#swing/ideas">All ideas</a><a data-sub="wide" href="#swing/wide">Wide scan</a><a data-sub="record" href="#swing/record">Track record</a><a data-sub="research" href="#swing/research">Research</a></nav>
+  <div data-panel="swing/book" hidden>
+  <section class="gate" id="sw-gate"></section>
+  <section class="strip" id="sw-strip"></section>
+  <section class="book-grid">
+    <div>
+      <section class="card"><div class="card-head"><h2>Open positions</h2><span class="muted" id="sw-pos-note"></span></div><div id="sw-positions" class="ledger"></div></section>
+      <section class="card"><div class="card-head"><h2>Working orders</h2><span class="muted" id="sw-ord-note"></span></div><div id="sw-orders" class="ledger"></div></section>
+    </div>
+    <aside class="card feed-card"><div class="card-head"><h2>Alerts</h2><span class="muted" id="sw-feed-note"></span></div><div id="sw-feed" class="feed"></div></aside>
+  </section>
+  <section class="deskbar" id="sw-desk"></section>
+</div>
+  <div data-panel="swing/add" hidden>
+  <div class="add-grid">
+    <section class="card compose">
+      <div class="card-head"><h2>Paste the post</h2><span class="muted">Discord, a newsletter, your own notes</span></div>
+      <textarea id="sw-text" rows="9" maxlength="6000" spellcheck="false" aria-label="Trade idea text"
+        placeholder="KO | Coca-Cola&#10;Entry Area: 90 - 91&#10;Target: 97&#10;Stop Loss: 86 (daily close)&#10;&#10;or: $NVDA swing long entry zone 117.50-119, SL 112, TP1 130"></textarea>
+      <div class="compose-row">
+        <input id="sw-author" placeholder="Who posted it" maxlength="40" aria-label="Author">
+        <button class="btn" id="sw-read" type="button">Read it</button>
+        <span class="muted small" id="sw-read-src"></span>
+      </div>
+      <ul class="notes" id="sw-warn"></ul>
+      <details class="formats"><summary>Formats it reads</summary>
+        <p>The channel's layout (<code>TICKER | name</code>, <code>Entry Area</code>, <code>Target</code>, <code>Stop Loss</code>), free text like
+        <code>$AAPL long 180-182 SL 175 TP 195</code>, labelled cards, and <code>breakout over 252</code> entries. Prose goes to the intake agent when an Anthropic key is set. Nothing invents a missing level: fill it in on the right.</p>
+      </details>
+    </section>
+    <section class="card plan-card">
+      <div class="card-head"><h2>The plan</h2><span class="muted" id="sw-plan-note">fill in or edit any level</span></div>
+      <form id="sw-form" autocomplete="off">
+        <div class="fields">
+          <label class="f-sym">Ticker<input name="symbol" required maxlength="10" placeholder="KO"></label>
+          <div class="f-seg"><span>Side</span><div class="seg" role="radiogroup" aria-label="Side">
+            <label><input type="radio" name="direction" value="long" checked>Long</label><label><input type="radio" name="direction" value="short">Short</label></div></div>
+          <div class="f-seg"><span>Entry</span><div class="seg" role="radiogroup" aria-label="Entry type">
+            <label><input type="radio" name="entry_type" value="zone" checked>Zone</label><label><input type="radio" name="entry_type" value="close_above">Close above</label><label><input type="radio" name="entry_type" value="cmp">At market</label></div></div>
+          <label>Entry low<input name="entry_lo" type="number" step="any" inputmode="decimal"></label>
+          <label>Entry high<input name="entry_hi" type="number" step="any" inputmode="decimal"></label>
+          <label>Target<input name="target_lo" type="number" step="any" inputmode="decimal"></label>
+          <label>Upper target<input name="target_hi" type="number" step="any" inputmode="decimal" placeholder="optional"></label>
+          <label>Stop<input name="stop" type="number" step="any" inputmode="decimal"></label>
+          <div class="f-seg"><span>Stop on</span><div class="seg" role="radiogroup" aria-label="Stop basis">
+            <label><input type="radio" name="stop_basis" value="close" checked>Daily close</label><label><input type="radio" name="stop_basis" value="intraday">Intraday</label></div></div>
+          <label class="f-note">Note<input name="note" maxlength="200" placeholder="setup, catalyst, risk"></label>
+        </div>
+      </form>
+      <div id="sw-verdict" class="verdict"><p class="muted">Paste a post or fill in the levels and the desk grades it here: take or skip, the limit price, the 0.75R take-profit and the size.</p></div>
+      <div class="plan-actions">
+        <label class="equity">Account size $<input id="sw-equity" type="number" min="0" step="1000" inputmode="numeric" aria-label="Account size in dollars"></label>
+        <button class="primary" id="sw-track" type="button" disabled>Track it</button>
+      </div>
+    </section>
+  </div>
+</div>
+  <div data-panel="swing/ideas" hidden>
+  <section class="card">
+    <div class="card-head"><h2>Every idea</h2>
+      <div class="chips" id="sw-filters" role="group" aria-label="Filter by state"></div>
+      <input id="sw-search" class="search" type="search" placeholder="Ticker or author" aria-label="Search ideas">
+    </div>
+    <div class="scroll" id="sw-ideas"></div>
+  </section>
+</div>
+  <div data-panel="swing/wide" hidden>
+  <section class="strip" id="wd-strip"></section>
+  <section class="card"><div class="card-head"><h2>Ranked setups</h2><span class="muted" id="wd-run-note"></span></div><div id="wd-ranked" class="scroll"></div></section>
+  <section class="row two">
+    <div class="card"><div class="card-head"><h2>Shadow book</h2><span class="muted" id="wd-book-note"></span></div><div id="wd-book" class="ledger"></div></div>
+    <div class="card"><div class="card-head"><h2>Backtest</h2><span class="muted" id="wd-bt-note"></span></div><div id="wd-bt"></div></div>
+  </section>
+  <section class="deskbar" id="wd-desk"></section>
+</div>
+  <div data-panel="swing/record" hidden>
+  <section class="strip" id="sw-rec-strip"></section>
+  <section class="card"><div class="card-head"><h2>Cumulative R, taken ideas</h2><span class="muted" id="sw-curve-note"></span></div><div id="sw-curve" class="cum-chart"></div></section>
+  <section class="row three-eq">
+    <div class="card"><div class="card-head"><h2>By author</h2></div><div id="sw-by-author"></div></div>
+    <div class="card"><div class="card-head"><h2>By tier</h2></div><div id="sw-by-tier"></div></div>
+    <div class="card"><div class="card-head"><h2>By month posted</h2></div><div id="sw-by-month"></div></div>
+  </section>
+</div>
+  <div data-panel="swing/research" hidden>
+  <section class="row two">
+    <div class="card"><div class="card-head"><h2>Rules in force</h2><span class="muted" id="sw-rules-path"></span></div><div id="sw-rules"></div></div>
+    <div class="card"><div class="card-head"><h2>Desk actions</h2></div><div id="sw-actions"></div></div>
+  </section>
+  <section class="card"><div class="card-head"><h2>What if the rules changed</h2><span class="muted">every recorded idea replayed under each variant; split at Sep 1</span></div><div id="sw-variants" class="scroll"></div></section>
+  <section class="row two">
+    <div class="card"><div class="card-head"><h2>Proposals</h2><span class="muted">from the R&amp;D agent; a rule changes only when you commit it</span></div><div id="sw-proposals"></div></div>
+    <div class="card"><div class="card-head"><h2>R&amp;D reports</h2></div><div id="sw-reports"></div></div>
+  </section>
+</div>
+</main>
+
+<main id="view-pitch" class="view desk" hidden>
+  <nav class="subnav" aria-label="Pitch desk"><a data-sub="screen" href="#pitch/screen">Screen</a><a data-sub="memo" href="#pitch/memo">Memo</a><a data-sub="scorecard" href="#pitch/scorecard">Scorecard</a></nav>
+  <section class="strip" id="pt-kpis"></section>
+  <section class="deskbar" id="pt-desk"></section>
+  <form id="pt-form" class="card pt-form" autocomplete="off">
+    <label>Write a memo for <input id="pt-sym" maxlength="10" placeholder="MSFT" aria-label="Ticker for a pitch memo"></label>
+    <label class="chk"><input type="checkbox" id="pt-ai"> Claude write-up <span class="muted small">(API key; uses only the data pack)</span></label>
+    <button class="primary" type="submit">Write memo</button>
+    <span class="muted small">Research only, not advice. Every memo is scored against SPY from the day it's made.</span>
+  </form>
+  <div data-panel="pitch/screen" hidden><section class="card"><div class="card-head"><h2>Factor screen</h2><span class="muted" id="pt-screen-note"></span></div><div id="pt-screen" class="scroll"></div></section></div>
+  <div data-panel="pitch/memo" hidden><section class="card memo"><div class="card-head"><h2>Memo</h2><span class="muted" id="pt-memo-note"></span></div><div id="pt-memo"><p class="muted">Pick a name from the screen or the scorecard, or type a ticker above.</p></div></section></div>
+  <div data-panel="pitch/scorecard" hidden><section class="card"><div class="card-head"><h2>Every pitch vs SPY</h2></div><div id="pt-list" class="scroll"></div></section></div>
+</main>
+
+<main id="view-system" class="view desk" hidden>
+  <section class="card monitor-bar" id="sy-monitor"><span class="muted">Loading…</span></section>
+  <section class="row two">
+    <div class="card"><div class="card-head"><h2>Background jobs</h2></div><div id="sy-jobs"></div></div>
+    <div class="card"><div class="card-head"><h2>Recent errors</h2></div><div id="sy-errors"></div></div>
+  </section>
+  <section class="row three-eq">
+    <div class="card"><div class="card-head"><h2>Features</h2></div><div id="sy-features"></div></div>
+    <div class="card"><div class="card-head"><h2>Keys &amp; channels</h2></div><div id="sy-keys"></div></div>
+    <div class="card"><div class="card-head"><h2>Data freshness</h2></div><div id="sy-files"></div></div>
+  </section>
+</main>
+
+<aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog" aria-labelledby="drawer-title">
+  <div class="drawer-scrim" data-close></div>
+  <div class="drawer-panel"><button class="icon close" data-close aria-label="Close">×</button><div id="drawer-body" class="desk desk-in"></div></div>
+</aside>
 
 <main id="view-status" class="view" hidden>
   <div class="card" id="status-out"></div>
@@ -215,5 +388,13 @@
 <script src="/static/ext.js"></script>
 <script src="/static/markets.js"></script>
 <script src="/static/rd.js"></script>
+<script src="/static/desk.js"></script>
+<script src="/static/mnq.js"></script>
+<script src="/static/parity.js"></script>
+<script src="/static/swing.js"></script>
+<script src="/static/wide.js"></script>
+<script src="/static/forward.js"></script>
+<script src="/static/pitch.js"></script>
+<script src="/static/system.js"></script>
 </body>
 </html>

@@ -46,14 +46,72 @@
 
 ## 20.1 Results
 
-**Progress (save point, Nov 2):** stages 1-4 are in; stage 5 (dashboard tabs), 7 (switch-over) and the final docs are next.
-- Full suite: 290 passed, 3 skipped, plus 6 new pitch-desk tests.
-- New `.env` switches, all off by default: `ABG_SWING_ENABLED`, `ABG_FWD_ENABLED`, `ABG_PAPERS_ENABLED`, `ABG_PITCH_ENABLED`
-  (with `ABG_PITCH_WEBHOOK_URL`, `ABG_PITCH_AI_MEMO`).
-- New commands: `abg swing ...`, `abg pitch screen|make|list|score`.
-- New API: `/api/swing/*`, `/api/pitch/*`, `/api/alpha/pause|events|paper`, `/api/system`, `/api/rd/forward*`, `/api/rd/parity*`.
-- The raw House of Traders Discord export (`swingdesk/data/export.html`, `signals_raw.json`) is kept out of git because the
-  repo is public and it holds other people's messages; `signals.csv` (the tracked ideas) is committed.
+- **Stages 1-6 are in.** The full suite passes (see the commit for the count) and includes the spin-off's lab /
+  forward-lab / reliability / swing / wide-scan tests plus 6 pitch-desk tests on fixtures.
+- **Dashboard:** four new tabs (MNQ Bot, Swing Desk, Pitch Desk, System) and a Forward lab sub-tab under R&D, checked
+  on desktop (1440 px) and phone (390 px) with no console errors.
+  - The swing, wide-scan, forward-lab and live-vs-backtest screens are the spin-off's own code. Each file is wrapped so
+    its names can't clash with the terminal's (`swing.js`, `wide.js`, `forward.js`, `parity.js`).
+  - Their styles (`desk.css`) are scoped to the new tabs, so the old tabs look the same.
+  - Sub-tabs have links: `#swing/add`, `#rd/forward`, `#pitch/memo`, ...
+- **New `.env` switches,** all off by default: `ABG_SWING_ENABLED`, `ABG_FWD_ENABLED`, `ABG_PAPERS_ENABLED`,
+  `ABG_PITCH_ENABLED` (with `ABG_PITCH_WEBHOOK_URL`, `ABG_PITCH_AI_MEMO`).
+- **New commands:** `abg swing ...`, `abg pitch screen|make|list|score`.
+- **New API:**
+  - `/api/swing/*`, `/api/pitch/*`
+  - `/api/alpha/pause|events|paper`
+  - `/api/system`
+  - `/api/rd/forward*`, `/api/rd/parity*`
+- **Raw Discord export kept out of git:** `swingdesk/data/export.html` and `signals_raw.json` hold other people's
+  messages and the repo is public. `signals.csv` (the tracked ideas) and the price cache are committed.
+
+### Pitch desk v1
+
+| Step | What it does |
+|---|---|
+| Screen | 50 large caps (or `ABG_PITCH_UNIVERSE`) plus your watchlist. Each factor is a z-score: 12-1 month momentum 30%, earnings yield 25%, profit margin 25%, expected EPS growth (forward vs trailing) 15%, low 3-month volatility 5%. A missing field drops that factor, not the name. |
+| Valuation | 10-year earnings DCF. Growth fades from the first-year estimate to 2.5%. The discount rate is risk-free + beta x 5%. |
+| Reverse DCF | The growth today's price implies. |
+| Peer comps | Median P/E and forward P/E of same-sector names. |
+| Bear / base / bull | Growth x0.5 / x1 / x1.5, rate +1% / 0 / -0.5%. |
+| Fair value | Base DCF and comps, blended. |
+| Verdict (rules, not a model) | **LONG** when fair value is 15%+ above the price *and* the name ranks in the top third. **WATCH** when only one holds. **PASS** otherwise. |
+| Memo | Thesis, valuation table with every input, screen numbers, risks (generated from the data), sources: which provider served each piece, news links, SEC filings link. The Claude write-up is optional and only sees the data pack. |
+| Scorecard | Every memo is marked against SPY from its pitch-day price. |
+
+The free providers have no cash-flow statements, so the DCF discounts EPS (an owner-earnings proxy). Every memo says so.
+
+## 20.3 Carrying your data over and switching
+
+`scripts/carry_over.py` copies the old terminal's history into DAISY. The databases are copied with SQLite's backup
+API, so a running monitor can't leave a half-written copy.
+
+**What it copies:**
+- From the old terminal: bot trades and events, portfolio, signals, R&D digests, Strategy Lab, backups, Alerio, models,
+  bar caches.
+- From the spin-off: the swing desk's book, prices and wide scan; the forward lab; day logs; the live-vs-backtest check;
+  research papers.
+
+**`.env`:** it builds DAISY's `.env` from the terminal's, adds the spin-off keys DAISY understands and switches the new
+desks on. Values are never printed.
+
+**One poster per channel.** Until you switch, every Discord webhook and e-mail line in DAISY's `.env` is commented out
+with `#HELD`, so a DAISY window opened early shows everything on the dashboard and posts nothing.
+
+```bat
+cd %USERPROFILE%\Documents\DAISY
+python scripts\carry_over.py --terminal ..\school\AIBG\abg-terminal --mnq ..\c3.lab\mnq-bot
+```
+
+**After the close, to switch:**
+1. Close the old terminal's monitor window (or stop its task).
+2. Re-run the copy with `--switch`. It refuses while the old monitor's heartbeat is fresh, then copies once more and
+   releases the webhooks.
+3. Start `Start Monitor.bat` in DAISY. The first start builds DAISY's own `.venv`.
+4. Point the "ABG Monitor" autostart task at DAISY: `powershell -File deploy\windows-autostart.ps1` from the DAISY
+   folder.
+
+`c3.lab/mnq-bot` stays installed and held.
 
 ## 20.2 Bugs fixed
 

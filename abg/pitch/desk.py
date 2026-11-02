@@ -26,6 +26,7 @@ from .valuation import value
 
 log = logging.getLogger(__name__)
 NY = ZoneInfo("America/New_York")
+DAYS = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"]
 
 
 def _close(ph) -> "object":
@@ -292,6 +293,6 @@ class PitchDesk:
         st = self._load("state.json", {})
         return {"enabled": bool(getattr(self.s, "pitch_enabled", False)), "running": self.running,
                 "webhook": bool(self._webhook()), "ai_memo": bool(self.s.pitch_ai_memo),
-                "schedule": f"weekday {self.s.pitch_weekday} {self.s.pitch_time} ET", "max_names": self.s.pitch_max_names,
+                "schedule": f"{DAYS[int(self.s.pitch_weekday) % 7]} {self.s.pitch_time} ET", "max_names": self.s.pitch_max_names,
                 "universe": len(self.universe()), "last_screen": scr["at"] if scr else None,
                 "last_batch": st.get("last_batch"), "pitches": len(self.pitches()), "errors": list(self.errors)[-5:]}
