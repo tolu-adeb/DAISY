@@ -53,3 +53,13 @@ def test_switch_refused_while_old_monitor_alive(tmp_path):
     assert co.main(["--terminal", str(term), "--mnq", str(mnq), "--daisy", str(daisy), "--switch"]) == 2
     assert not (daisy / ".env").exists()
     c.close()
+
+
+def test_lock_from_a_closed_window_counts_as_released(tmp_path):
+    import socket
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "monitor.lock").write_text(json.dumps({"pid": 999999, "host": socket.gethostname(), "heartbeat": time.time()}))
+    assert co.lock_age(d) is None                                   # dead pid on this machine
+    (d / "monitor.lock").write_text(json.dumps({"pid": 999999, "host": "other-pc", "heartbeat": time.time()}))
+    assert co.lock_age(d) < 5                                       # another machine: trust the heartbeat

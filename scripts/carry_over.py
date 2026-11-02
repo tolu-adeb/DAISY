@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import socket
 import sqlite3
 import sys
 import time
@@ -150,12 +152,42 @@ def build_env(daisy: Path, terminal: Path, mnq: Path | None, hold: bool) -> list
     return added
 
 
+def pid_alive(pid: int) -> bool:
+    """Is this process still running on this machine?  (Windows: OpenProcess; never os.kill, which would end it.)"""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259            # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
 def lock_age(data: Path) -> float | None:
+    """Seconds since the monitor's last heartbeat, or None when no monitor holds the lock.  A lock left behind by a
+    closed window on this PC counts as released straight away (no need to wait for it to go stale)."""
     p = data / "monitor.lock"
     try:
-        return time.time() - float(json.loads(p.read_text()).get("heartbeat", 0))
+        d = json.loads(p.read_text())
     except (OSError, ValueError):
         return None
+    if str(d.get("host", "")).lower() == socket.gethostname().lower() and not pid_alive(d.get("pid")):
+        return None
+    return time.time() - float(d.get("heartbeat", 0))
 
 
 def main(argv=None) -> int:
@@ -177,7 +209,9 @@ def main(argv=None) -> int:
     if a.switch:
         age = lock_age(term / "data")
         if age is not None and age < 300 and not a.force:
-            print(f"the old terminal's monitor is still running (heartbeat {age:.0f}s ago) - close it, then re-run.")
+            who = json.loads((term / "data" / "monitor.lock").read_text())
+            print(f"the old terminal's monitor is still running (pid {who.get('pid')} on {who.get('host')}, heartbeat "
+                  f"{age:.0f}s ago).  Close its window (Ctrl+C), or in PowerShell:  Stop-Process -Id {who.get('pid')}  - then re-run.")
             return 2
     if rec.get("switched") and not a.force and not a.env_only:
         print("already switched over: DAISY's data is now the newest - not copying again (use --force to overwrite).")
