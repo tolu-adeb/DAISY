@@ -311,7 +311,10 @@ def audit(snap: dict) -> dict:
         side = 1 if s["side"] == "LONG" else -1
         tm = next((m[2] for m in reversed(s.get("mgmt") or []) if m[1] in ("stopped", "be", "final", "closed")), None)
         row = {"date": s["ts"][:10], "time_et": _ts(s["ts"]).strftime("%H:%M"), "num": s.get("num"), "side": s["side"],
-               "optimal": s["opt"], "stop": s["stop"], "risk_pts": round(abs(s["opt"] - s["stop"]), 2), "service_pts": tm,
+               "optimal": s.get("opt"), "stop": s.get("stop"),
+               # some Alerio signals come without an optimal entry or a stop: no risk figure, not a crash
+               "risk_pts": round(abs(s["opt"] - s["stop"]), 2) if s.get("opt") is not None and s.get("stop") is not None
+               else None, "service_pts": tm,
                "flags": [], "accounts": []}
         al = s.get("alerio") or {}
         t = s.get("trade") or {}
@@ -329,15 +332,15 @@ def audit(snap: dict) -> dict:
             for a_id, n, fill, exit_px, pnl, fills in t.get("acc") or []:
                 if fill is None or not n:
                     continue
-                worse = round((fill - s["opt"]) * side, 2)                  # + = paid more than the optimal
-                risk_usd = round(n * abs(fill - s["stop"]) * MNQ_PV, 0)
+                worse = round((fill - s["opt"]) * side, 2) if s.get("opt") is not None else None   # + = paid more
+                risk_usd = round(n * abs(fill - s["stop"]) * MNQ_PV, 0) if s.get("stop") is not None else None
                 budget = (acc.get(a_id) or {}).get("risk_per_trade")
                 info = {"account": (acc.get(a_id) or {}).get("nickname") or str(a_id), "contracts": n, "fill": fill,
                         "chase_pts": worse, "risk_usd": risk_usd, "pnl": pnl}
                 row["accounts"].append(info)
-                if worse >= 10:
+                if worse is not None and worse >= 10:
                     row["flags"].append(f"filled {worse:.1f} pts worse than the optimal (market order)")
-                if budget and risk_usd > 1.5 * budget:
+                if budget and risk_usd is not None and risk_usd > 1.5 * budget:
                     row["flags"].append(f"risked ${risk_usd:,.0f} vs ${budget:,.0f} risk-per-trade ({risk_usd / budget:.1f}x)")
                 if s.get("t1") is not None and (s["t1"] - fill) * side <= 0:
                     row["flags"].append("filled at/through Target 1 - the bracket's first take-profit was already reached")
@@ -349,7 +352,9 @@ def audit(snap: dict) -> dict:
         rows.append(row)
     live = [a for r in rows for a in r["accounts"]]
     return {"signals": len(rows), "live_fills": len(live),
-            "avg_chase_pts": round(sum(a["chase_pts"] for a in live) / len(live), 2) if live else None,
+            "avg_chase_pts": (round(sum(a["chase_pts"] for a in live if a["chase_pts"] is not None)
+                                    / max(1, sum(1 for a in live if a["chase_pts"] is not None)), 2)
+                              if any(a["chase_pts"] is not None for a in live) else None),
             "alerio_pnl": round(sum(a["pnl"] or 0 for a in live), 2),
             "service_pts": round(sum(r["service_pts"] or 0 for r in rows), 2),
             "flag_counts": dict(sorted(flags_total.items(), key=lambda x: -x[1])), "rows": rows,

@@ -597,7 +597,10 @@ class Monitor:
                 "alpha": {k: st.get(k) for k in ("day", "last_bar", "stream_age_s", "ratio", "done_reason")} if st else None,
                 "stream_connected": bool(self.stream and getattr(self.stream, "connected", False)),
                 "swing": {k: (self.swing.state() or {}).get(k) for k in ("seeded", "last_pass", "last_kind")} if self.swing else None,
-                "stocks": {k: (self.stocks.state() or {}).get(k) for k in ("last_daily_run", "last_sweep")} if self.stocks else None,
+                "stocks": {**{k: (self.stocks.state() or {}).get(k) for k in ("last_daily_run", "last_sweep")},
+                           "last_daily_at": ((self.stocks.state() or {}).get("last_daily") or {}).get("at"),
+                           "last_daily_posted": ((self.stocks.state() or {}).get("last_daily") or {}).get("posted")}
+                          if self.stocks else None,
                 "keep_awake": self.keep_awake.active, "autostart": self.autostart, "errors": len(self.errors)}
 
     def status(self) -> dict:

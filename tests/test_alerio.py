@@ -72,6 +72,14 @@ def test_audit_flags_what_went_wrong_on_oct_1():
     assert a["avg_chase_pts"] == 67.25
 
 
+def test_audit_survives_a_signal_without_entry_or_stop():
+    snap = _snap()
+    for sig in snap["signals"]:
+        sig["opt"] = sig["stop"] = None
+    a = audit(snap)                          # used to raise TypeError and break the dashboard's Alerio panel
+    assert a["rows"][0]["risk_pts"] is None and a["avg_chase_pts"] is None
+
+
 def test_mirror_route_matches_alerio_settings():
     r = mirror_route(_snap()).rules
     assert (r.sizing, r.contracts, r.entry_type, r.alert_override, r.follow_management, r.auto_close) == \
