@@ -79,6 +79,48 @@ before it joined (Tesla before Dec 2020). Ticker renames are folded into today's
 data confirms them (old ticker leaves the day the new one joins): FB->META, UTX->RTX, FISV->FI->FISV,
 SYMC->NLOK->GEN and 12 more. FMP stays as a fallback. Re-checked weekly.
 
+## 21.6 AIBG-format pitches (recommendation, trade plan, charts, deck)
+
+Every stock-desk pitch now reads like an AIBG Round 1 pitch, and goes further where the human
+pitches were vague: a dated entry, a stop, targets with their basis, a share count, and the
+questions the team should argue about. **The rule still decides.** Nothing here changes which
+trades fire or how big the book sizes them; the plan explains and sizes for the fund.
+
+**Order of a memo:** header line (rating, conviction, 12-month target, trade levels) → "views
+disagree" banner when the rule and the 12-month valuation point opposite ways → TL;DR →
+01 Company Overview → 02 Investment Thesis (core statement, bull/bear, valuation with every
+line's arithmetic, events and risks) → 03 Data (charts, the book's base rates) → 04
+Recommendation (rating, method, the trade plan table, untested refinements, why we're exiting
+for a SELL/TRIM, what would make this wrong, fund fit, questions, conviction breakdown) → market
+context, gates, sources, glossary, caveats.
+
+| Piece | Where | What it is |
+|---|---|---|
+| Rating | `pack.rec` | BUY / ADD / HOLD / TRIM / SELL from the book's order against that book's holding; the pitch desk maps LONG/WATCH/PASS to BUY/WATCH/AVOID |
+| Entry | `pack.plan.entry` | The tested entry is the **next open** (holidays skipped). Zone = close ± 0.5 ATR. "Don't chase", "gap below the stop" and "wait for earnings" are labelled *untested refinements* |
+| Targets | `pack.plan.targets` | Pullback: T1/T2 = this book's median / 75th-percentile winning exit in R. Mean reversion: T1 = the 5-day-average rule exit, T2 only if above it. Momentum: no price target, a month-end review date. Levels out of order → no targets, said so |
+| 12-month view | `pack.plan.investment` | Bear / base / bull earnings DCF (each recomputed and checked), peer comps, street target (reference), 25/50/25 probability-weighted target, total return with the dividend, implied growth |
+| Conviction | `pack.rec.conviction` | 50 ± listed inputs (gates, ML odds, valuation, regime, flags, earnings, sample size), clamped 0-100; High ≥ 70, Medium ≥ 45 |
+| Size | `pack.plan.risk` | risk_per_trade × conviction scale of the fund to the stop, capped at max_position_pct; momentum uses the book's weight; a $10k-account line |
+| Fit | `pack.plan.fit` | Sector weight before/after, 60-day correlation to holdings and SPY, beta, AI-infrastructure tag |
+| Charts | `pack.charts` | `charts.py`: price + EMA50/200 + entry zone/stop/T1/T2 + 12-month strip; valuation football field; peer table. PNGs next to the memo, inline on the dashboard, the price chart attached to each Discord pitch |
+| Write-up | `pack.writeup` | Optional (`ABG_PITCH_AI_MEMO=true` + Anthropic key): Claude rewrites the prose from the pack only; any number, ticker or date not in the pack, or hype words, drops that field (logged in `pack.writeup_log`) |
+| Deck | `abg pitch deck SYMBOL` | `deck.py` fills `abg/assets/aibg_pitch_template.pptx` (the Round 1 design, content removed) from the saved pack; also the "Download deck" button on a memo. Refuses to save with a `{{placeholder}}` left |
+| Scorecard | Stocks → Scorecard | The plan is frozen per pitch; T1/T2/stop/time and the 12-month target are marked from the next open, by book and by conviction bucket, tested vs the untested refinement |
+
+**Settings.** Pitch tunables live under `pitch:` in `configs/stocks.yaml` (every key commented).
+`.env`: `ABG_STOCKS_CHARTS` (default true), `ABG_STOCKS_POST_CHARTS` (default true),
+`ABG_PITCH_AI_MEMO` (default false). Optional installs: `pip install .[charts]` (matplotlib) and
+`pip install .[deck]` (python-pptx); without them the memo says so and nothing else breaks.
+
+**Not possible with the free data we have** (shown as "not in data", never guessed): revenue
+(TTM), free cash flow, net debt/EBITDA, revenue segments, market share or patents (the moat box).
+Earnings dates come from Finnhub when a key is set, otherwise "not in data". The DCF discounts
+EPS as an owner-earnings proxy because no provider gives cash-flow statements.
+
+**Samples:** `docs/samples/` — a pullback BUY, a mean-reversion BUY, a SELL, the charts, and the
+deck for the first. They use the synthetic test panel and invented company facts.
+
 ## 21.3 Rules that still hold
 
 Paper only (`ABG_STOCKS_TAG=PAPER` on every post); webhooks only in `.env`; one live poster per channel;

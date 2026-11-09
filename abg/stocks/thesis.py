@@ -65,9 +65,17 @@ def _regime_words(regime: str) -> str:
 
 
 # --------------------------------------------------------------------------- per-book narrative
+def _exit_words(c) -> str:
+    return (c.reason or "exit rule").replace("_", " ")
+
+
 def _what_happened(c, f: dict) -> str:
     """One or two sentences naming the rule and the numbers behind it."""
     s = c.symbol
+    if not c.is_entry and c.action == "SELL":
+        return (f"The {BOOK_LABEL.get(c.book, c.book).lower()} book's exit fired on {s}: {_exit_words(c)}, "
+                f"at the close of {_px(f.get('close') or c.price)}. The rule closes the position at the next "
+                f"open; this is the trade ending on its own terms, not a new view on the company.")
     if c.book == "trend_pullback":
         return (f"{s} is in an established uptrend — the close of {_px(f.get('close'))} is above its "
                 f"200-day EMA of {_px(f.get('ema200'))}, and the 50-day EMA ({_px(f.get('ema50'))}) is "
@@ -257,7 +265,10 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
                       (ctx.get("held_shares") or {}).get(c.symbol))
     base = P.base_rates(ctx.get("trades"), c.book, ctx.get("period"), min_n=int(pc["min_base_trades"]))
     try:
-        tgt = P.trade_targets(c, base, ctx.get("bars"), as_of)
+        tgt = P.trade_targets(c, base, ctx.get("bars"), as_of) if c.is_entry else \
+            {"book": c.book, "entry_ref": c.price, "stop": None, "t1": None, "t2": None, "t1_kind": None,
+             "t2_kind": None, "t1_basis": None, "t2_basis": None, "review_date": None, "structural": {},
+             "notes": []}
     except ValueError as e:                     # levels out of order: a data fault, so no targets, said so
         log.warning("targets for %s failed their check (%s)", c.symbol, e)
         tgt = {"book": c.book, "entry_ref": c.price, "stop": c.stop, "t1": None, "t2": None, "t1_kind": None,
@@ -312,14 +323,23 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
         one = f"{'Sell' if rating == 'SELL' else 'Trim'} {c.symbol} at {nxt:%A}'s open: {c.reason.replace('_', ' ')}."
     else:
         one = f"{rating.title()} {c.symbol}."
-    core = (f"{name}: {_why_short(c)} The {BOOK_LABEL.get(c.book, c.book).lower()} book is built to "
-            f"{BOOK_EDGE.get(c.book, '')}; this is that setup, not a forecast about the company.")
+    if rating in ("SELL", "TRIM"):
+        core = (f"{name}: {_why_short(c)} The book is built to {BOOK_EDGE.get(c.book, '')}; the trade it opened "
+                f"is over by its own rules. This is the exit, not a view on the company.")
+    else:
+        core = (f"{name}: {_why_short(c)} The {BOOK_LABEL.get(c.book, c.book).lower()} book is built to "
+                f"{BOOK_EDGE.get(c.book, '')}; this is that setup, not a forecast about the company.")
     conflict = None
     if horizons_disagree:
         conflict = (f"The rule says {rating}, while the 12-month probability-weighted target is {pw_up:+.1%} "
                     f"from here. Conviction is cut for it; treat this as a trade, sized as one.")
-    qs = P.questions(inv, tgt, conv, earnings if earnings_in_hold else None, fund, horizons_disagree, rating)
     exit_rev = P.exit_review(c, state.positions, base) if rating in ("SELL", "TRIM") else None
+    if rating in ("SELL", "TRIM"):
+        qs = P.exit_questions(c, exit_rev, base)
+        wrong = P.exit_wrong_if(c)
+    else:
+        qs = P.questions(inv, tgt, conv, earnings if earnings_in_hold else None, fund, horizons_disagree, rating)
+        wrong = P.wrong_if(c, exits)
     overview = {
         "market_cap": (fund or {}).get("market_cap"), "sector": (fund or {}).get("sector"),
         "industry": (fund or {}).get("industry"), "revenue_ttm": None,
@@ -343,7 +363,7 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
                 "method": {"book": c.book, "label": BOOK_LABEL.get(c.book, c.book),
                            "edge": BOOK_EDGE.get(c.book, ""), "style": style}},
         "plan": {"entry": entry, "targets": tgt, "investment": inv, "risk": risk, "fit": fit,
-                 "wrong_if": P.wrong_if(c, exits), "questions": qs, "base_rates": base,
+                 "wrong_if": wrong, "questions": qs, "base_rates": base,
                  "earnings_in_hold": earnings_in_hold, "horizons_disagree": horizons_disagree,
                  "exit_review": exit_rev,
                  "max_hold": (cfg.get("books") or {}).get(c.book, {}).get("max_hold"),
@@ -356,6 +376,8 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
 
 def _why_short(c) -> str:
     f = c.facts or {}
+    if c.action == "SELL":
+        return f"The {BOOK_LABEL.get(c.book, c.book).lower()} book's exit fired ({_exit_words(c)})."
     return {
         "trend_pullback": "A pullback in an established uptrend just ended.",
         "mean_reversion": "A sharp sell-off in a long-term uptrend has it deeply oversold.",
@@ -401,8 +423,10 @@ def render_md(pack: dict, note: str | None = None) -> str:
 
     head = f"{rating} {p['symbol']}" + (f" — {name}" if name != p["symbol"] else "")
     bits = [head, rec.get("action_line") or ""]
-    if conv:
+    if conv and rating not in ("SELL", "TRIM"):
         bits.append(f"{conv['bucket']} conviction ({conv['score']})")
+    elif rating in ("SELL", "TRIM"):
+        bits.append("rule exit")
     if inv.get("prob_weighted") is not None:
         bits.append(f"12-mo target {_px(inv['prob_weighted'])} ({_pct(inv['prob_upside'])}"
                     + (f", total return {_pct(inv['total_return'])}" if inv.get("total_return") is not None else "") + ")")
@@ -437,7 +461,7 @@ def render_md(pack: dict, note: str | None = None) -> str:
           f"{_v(ov.get('pe_ntm'), lambda x: f'{x:.1f}x')} | {_v(ov.get('pe_ltm'), lambda x: f'{x:.1f}x')} |", ""]
     L += ["**What they do**", "", w.get("what_they_do") or (ov.get("description") or P.NOT_IN_DATA), ""]
     sentences = [x.strip().rstrip(".") + "." for x in re.split(r"(?<=\.)\s+(?=[A-Z])", p["what_happened"]) if x.strip()]
-    why = w.get("why_now") or (sentences[1:3] or sentences[:1]) + [f"Headline: {n['title']}" for n in (p.get("news") or [])[:1]]
+    why = w.get("why_now") or sentences[:3] + [f"Headline: {n['title']}" for n in (p.get("news") or [])[:1]]
     L += ["**Why now**", ""] + [f"- {x}" for x in (why if isinstance(why, list) else [why])] + [""]
     L += ["**Competitive moat**", "", w.get("moat") or P.NOT_IN_DATA, ""]
     mets = ov.get("metrics") or {}
@@ -533,15 +557,17 @@ def render_md(pack: dict, note: str | None = None) -> str:
 
     # 04 recommendation
     L += ["## 04 Recommendation", "", f"### {rating} — {rec.get('action_line', '')}"
-          + (f" · {conv['bucket']} conviction ({conv['score']}/100)" if conv else ""), "",
+          + (f" · {conv['bucket']} conviction ({conv['score']}/100)" if conv and rating not in ("SELL", "TRIM")
+             else " · rule exit" if rating in ("SELL", "TRIM") else ""), "",
           f"**Method:** {rec.get('method', {}).get('label', p['book_label'])} — {rec.get('method', {}).get('style', '')}.", "",
           "### The trade plan", "", "| | |", "|---|---|",
-          f"| Action | **{rating}** {ent.get('tested', 'at the next open')} (tested entry) |",
+          f"| Action | **{rating}** {ent.get('tested', 'at the next open')} "
+          f"({'tested exit' if rating in ('SELL', 'TRIM') else 'tested entry'}) |",
           f"| Reference price | {_px(p['price'])} ({ent.get('reference_kind', 'last close')}) |"]
     if ent.get("zone"):
         L.append(f"| Entry zone | {_px(ent['zone'][0])} – {_px(ent['zone'][1])} (close ± {cfgp.get('entry_zone_atr', 0.5):g} ATR) |")
     if p.get("stop") is not None:
-        L.append(f"| Initial stop | {_px(p['stop'])} ({_pct(risk.get('stop_pct'))}, {_n(p['stop_atr'])}× ATR of {_n(p['atr'])}) |")
+        L.append(f"| Initial stop | {_px(p['stop'])} ({_pct(risk.get('stop_pct'))}, {_n(p['stop_atr'])}× ATR of {_px(p['atr'])}) |")
     for k in ("t1", "t2"):
         if tgt.get(k):
             L.append(f"| {k.upper()} | {_px(tgt[k])} ({_pct(tgt[k] / p['price'] - 1)}) — {tgt[f'{k}_kind']}: {tgt[f'{k}_basis']} |")
@@ -599,13 +625,19 @@ def render_md(pack: dict, note: str | None = None) -> str:
               f"- Beta: {_n(fit['beta'], 2)}" + (f" ({fit['beta_source']})" if fit.get("beta_source") else ""),
               f"- Already held: {'yes' if fit['already_held'] else 'no'} · AI-infrastructure name: "
               f"{'yes' if fit['ai_infrastructure'] else 'no'} (the fund holds {len(fit['ai_names_held'])} today)"]
+    elif rating in ("SELL", "TRIM"):
+        L.append("An exit frees the capital; fit is a question for the next entry, not this one.")
     else:
         L.append(P.NOT_IN_DATA)
     L += ["", "### Questions for the team", ""]
     for i, q in enumerate(w.get("questions") or pl.get("questions") or [], 1):
         L.append(f"{i}. {q}")
-    L += ["", f"**Conviction {conv.get('score', '—')}** = " + " ".join(
-        f"{'+' if b['points'] >= 0 and i else ''}{b['points']:g} ({b['input']})" for i, b in enumerate(conv.get("breakdown") or [])), ""]
+    if rating not in ("SELL", "TRIM"):
+        L += ["", f"**Conviction {conv.get('score', '—')}** = " + " ".join(
+            f"{'+' if b['points'] >= 0 and i else ''}{b['points']:g} ({b['input']})"
+            for i, b in enumerate(conv.get("breakdown") or [])), ""]
+    else:
+        L.append("")
 
     # bottom matter
     bullets = [
@@ -667,7 +699,7 @@ def embed(pack: dict, note: str = "Full write-up on the dashboard (Stocks tab)."
     conv = rec.get("conviction") or {}
     rating = rec.get("rating") or p["action"]
     title = f"{rating} {p['symbol']} — {BOOK_SHORT.get(p['book'], p['book_label'])}"
-    if conv:
+    if conv and rating not in ("SELL", "TRIM"):
         title += f" · {conv['bucket']} conviction"
     desc = rec.get("one_liner") or p["what_happened"]
     if rec.get("conflict"):

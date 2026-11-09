@@ -513,6 +513,30 @@ def questions(inv: dict, tgt: dict, conv: dict, earnings: str | None, fund: dict
     return q[:3]
 
 
+def exit_questions(c, ex: dict | None, base: dict) -> list[str]:
+    """For a SELL / TRIM: what the team should learn from the trade, not whether to buy it."""
+    q = []
+    if ex and ex.get("r") is not None:
+        q.append(f"The trade closes at {ex['r']:+.2f}R after {ex.get('days_held') or '?'} session(s). "
+                 "Was anything about this name different from the book's usual setup?")
+    if base.get("n"):
+        q.append(f"This book's replayed expectancy is {base.get('expectancy_R') or 0:+.3f}R per trade over "
+                 f"{base['n']} trades. Is that still worth the capital it takes?")
+    q.append("If the same setup fires again on this name, does the team want it, or should it be excluded?")
+    return q[:3]
+
+
+def exit_wrong_if(c) -> list[str]:
+    """What would make an exit the wrong call - stated as something the scorecard can check."""
+    out = []
+    atr = _f(c.atr) or _f((c.facts or {}).get("atr14"))
+    if c.price and atr:
+        out.append(f"It keeps going without us: a close above ${c.price + atr:,.2f} (today + 1 ATR) "
+                   "within a week would say the exit was early")
+    out.append("The exit is the rule's, and the rule is what was tested: second-guessing it is an untested change")
+    return out
+
+
 def wrong_if(c, exits: list[str]) -> list[str]:
     """Exits rewritten as conditions, led by the thesis-level one."""
     f = c.facts or {}
@@ -530,8 +554,12 @@ def wrong_if(c, exits: list[str]) -> list[str]:
     anchors = {"trend_pullback": ("50-day EMA",), "mean_reversion": ("200-day average",),
                "xs_momentum": ("next month-end",), "dual_momentum": ("benchmark drops below",)}.get(c.book, ())
     out = [lead[0].upper() + lead[1:]] if lead else []
+    # profit-taking exits are the plan working, not the thesis failing
+    profit = ("take it", "has been paid", "RSI goes above", "RSI-14 goes above")
     for e in exits:
         if not e or any(a in e and ("below" in e or "month-end" in a) for a in anchors):
+            continue
+        if any(k in e for k in profit):
             continue
         e2 = e[0].upper() + e[1:]
         if e2 not in out:
