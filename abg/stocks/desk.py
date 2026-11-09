@@ -200,6 +200,17 @@ class StockDesk:
             news = []
         return fund, peers, news, provider
 
+    async def _writeups(self, packs: list[dict]) -> None:
+        """Claude's write-up for the pitches that will be posted in detail (it costs tokens per call).
+        Only fields that pass the validator are used; the rest stay template text."""
+        from . import writeup as W
+        cap = int(getattr(self.s, "stocks_post_max", 5) or 5)
+        top = sorted((p for p in packs if (p.get("rec") or {}).get("rating") in ("BUY", "ADD")
+                      and p["book"] != "dual_momentum"),
+                     key=lambda p: -((p.get("rec") or {}).get("conviction") or {}).get("score", 0))[:cap]
+        for p in top:
+            W.apply(p, await W.generate(self.s, self.engine.http, p))
+
     def _pitch_context(self, ls: LiveSignals, state) -> dict:
         """What every pitch's plan needs from the replay and the paper book (docs/21.6)."""
         r = ls.result or {}
@@ -273,6 +284,8 @@ class StockDesk:
                     packs.append(T.build_pack(c, state, self.cfg, fund=None, peers=[], news=news or [],
                                               provider=provider, ctx={**ctx, "earnings": None}))
 
+            if getattr(self.s, "pitch_ai_memo", False) and getattr(self.s, "anthropic_api_key", None):
+                await self._writeups(packs)
             for p in packs:
                 if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum":
                     try:

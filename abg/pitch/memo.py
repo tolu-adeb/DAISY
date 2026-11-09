@@ -67,6 +67,11 @@ def build_pack(sym: str, price: float, fund: dict, screen_row: dict, n_screened:
     pack["fundamentals"]["target_mean_price"] = (fund.get("extra") or {}).get("target_mean_price")
     pack["verdict"] = verdict(val.get("upside"), screen_row.get("rank"), n_screened)
     pack["risks"] = risks(pack)
+    # one rating vocabulary across both desks (docs/21.6): LONG -> BUY, WATCH -> WATCH, PASS -> AVOID
+    from abg.stocks.pitch_plan import ACTION_LINE, VERDICT_TO_RATING
+    r = VERDICT_TO_RATING.get(pack["verdict"], "WATCH")
+    pack["rec"] = {"rating": r, "action_line": ACTION_LINE.get(r, ""),
+                   "basis": "pitch desk: factor screen + valuation (no tested trading rule behind this name)"}
     return pack
 
 
@@ -144,21 +149,30 @@ def embed(pack: dict, dashboard_note: str = "full memo on the dashboard (Pitch D
 
 
 def ai_note(settings, pack: dict) -> str | None:
-    """Optional 4-6 sentence write-up from Claude via Strands, given only the data pack."""
+    """Optional analyst write-up from Claude (ABG_PITCH_AI_MEMO), using the fund's pitch prompt and the
+    same validator as the stock desk: any field that quotes a number, ticker or date not in the pack is
+    dropped. Returns the accepted fields as a short note, or None."""
     if not getattr(settings, "anthropic_api_key", None):
         return None
     try:
-        from strands import Agent
+        import asyncio
+        import httpx
 
-        from abg.agents.graph import build_model
-        model, _ = build_model(settings)
-        agent = Agent(model=model, callback_handler=None, system_prompt=(
-            "You are an equity analyst writing a short pitch summary. Use ONLY the numbers in the JSON data pack you are "
-            "given; never add outside facts, prices or estimates. 4-6 plain sentences: the thesis, what the valuation "
-            "implies, the biggest risk, and what would change your mind. Say clearly it is research, not advice."))
-        slim = {k: pack[k] for k in ("symbol", "name", "sector", "price", "fundamentals", "screen", "valuation",
-                                     "verdict", "risks")}
-        slim["headlines"] = [n.get("title") for n in pack.get("news", [])]
-        return str(agent(json.dumps(slim, default=str)[:12000])).strip()[:1500]
+        from abg.stocks import writeup as W
+
+        class _Http:                                    # a minimal client for this one synchronous call
+            async def request(self, method, url, *, provider, timeout=None, headers=None, json=None):
+                async with httpx.AsyncClient(timeout=timeout or 120) as c:
+                    r = await c.request(method, url, headers=headers, json=json)
+                    r.raise_for_status()
+                    return r
+        res = asyncio.run(W.generate(settings, _Http(), pack))
+        f = res.get("fields") or {}
+        if not f:
+            return None
+        parts = [f.get("core_thesis"), f.get("valuation_view"),
+                 f"Bull: {f['bull_case']}" if f.get("bull_case") else None,
+                 f"Bear: {f['bear_case']}" if f.get("bear_case") else None]
+        return " ".join(x for x in parts if x)[:1500] or None
     except Exception:
         return None
