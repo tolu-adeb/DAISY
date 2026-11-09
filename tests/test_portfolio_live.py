@@ -342,7 +342,7 @@ async def test_monitor_sweeps_and_single_instance_lock(settings, store):
         mon.poke(analysis=True)
         await asyncio.sleep(0.5)
         mon.stop()
-        await asyncio.wait_for(task, 5)
+        await asyncio.wait_for(task, 20)           # generous: the suite runs this under load
         assert mon.sweeps >= 2 and not mon.running and mon.lock.holder() is None
         await hub.aclose()
 

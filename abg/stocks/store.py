@@ -109,6 +109,8 @@ class BarStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
+        # the market tier rewrites thousands of names a day; without a cap the WAL file grew to gigabytes
+        self._db.execute("PRAGMA journal_size_limit=67108864")
         self._db.executescript(SCHEMA)
         self._db.commit()
 
@@ -118,7 +120,20 @@ class BarStore:
 
     def close(self) -> None:
         with self._lock:
+            try:
+                self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
             self._db.close()
+
+    def checkpoint(self) -> tuple | None:
+        """Fold the WAL back into the database and shrink it (after big writes). Busy readers just make it a
+        no-op until next time; never raises."""
+        with self._lock:
+            try:
+                return tuple(self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
+            except sqlite3.Error:
+                return None
 
     # ------------------------------------------------------------------ writing
     def upsert(self, symbol: str, df: pd.DataFrame, provider: str | None = None,

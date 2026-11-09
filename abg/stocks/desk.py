@@ -123,6 +123,7 @@ class StockDesk:
     # ------------------------------------------------------------------ data upkeep
     async def backfill(self, symbols: list[str] | None = None, period: str | None = None) -> dict:
         rep = await self.sweeper.backfill(symbols, period)
+        await asyncio.to_thread(self.store.checkpoint)
         log.info("stocks backfill: %s", rep.to_dict())
         return rep.to_dict()
 
@@ -331,6 +332,7 @@ class StockDesk:
             st["last_daily"] = self.last_daily
             st["last_daily_day"] = state.date
             self._save("state.json", st)
+            await asyncio.to_thread(self.store.checkpoint)
             self._save("today.json", {"state": _state_dict(state),
                                       "candidates": [_public(p) for p in packs]})
             self._broadcast("stocks_daily", self.last_daily)

@@ -376,11 +376,13 @@ class Monitor:
                          self.stocks, self.swing, self.pitch):
                 if comp is not None:
                     comp.stop()
-            for t in self._aux_tasks:
-                try:
-                    await asyncio.wait_for(t, 5)
-                except BaseException:
+            # one shared 5 s grace for every component (it used to be 5 s each, one after another)
+            if self._aux_tasks:
+                _done, pending = await asyncio.wait(self._aux_tasks, timeout=5)
+                for t in pending:
                     t.cancel()
+                if pending:
+                    await asyncio.wait(pending, timeout=2)
             self._aux_tasks = []
             if self.ext is not None:
                 await self.ext.drain(10)

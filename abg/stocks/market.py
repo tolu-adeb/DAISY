@@ -213,6 +213,7 @@ class MarketFeed:
             tier.sort()
         bars = await asyncio.to_thread(self.load, long, tier)
         self.u.save_market(self.store, tier)
+        await asyncio.to_thread(self.store.checkpoint)
         return {"sync": rep.to_dict(), "common_stocks": len(common), "liquid": len(names),
                 "market_tier": len(tier), "bars_loaded": bars, "reloaded": True,
                 "sessions_stored": len(self.days.days())}

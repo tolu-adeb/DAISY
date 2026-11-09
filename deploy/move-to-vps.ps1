@@ -41,7 +41,7 @@ $ny = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, "Eastern
 $after = $ny.Date.AddHours(16).AddMinutes(25)
 if (-not $Now -and $ny.DayOfWeek -ne 'Saturday' -and $ny.DayOfWeek -ne 'Sunday' -and $ny -lt $after -and $ny.Hour -ge 7) {
   $wait = [int]($after - $ny).TotalSeconds
-  Write-Host ("Market day: waiting until 16:25 ET ({0:N0} min) so the swing desk's after-close pass runs here first. Ctrl+C to stop; -Now to skip." -f ($wait / 60))
+  Write-Host ("Market day: waiting until 16:25 ET ({0:N0} min). Ctrl+C to stop; -Now moves straight away (the server then runs today's stock-desk pass)." -f ($wait / 60))
   Start-Sleep -Seconds $wait
 } else { Write-Host "ok to move now ($($ny.ToString('ddd HH:mm')) ET)" }
 
