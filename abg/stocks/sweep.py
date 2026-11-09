@@ -174,12 +174,40 @@ class Sweeper:
         return rep
 
     # ------------------------------------------------------------------ index list
-    async def refresh_index(self, name: str = "sp500") -> dict:
-        """Load the real constituent list from FMP (needs ABG_FMP_API_KEY) into the store.
+    async def refresh_index(self, name: str = "sp500", source: str = "auto") -> dict:
+        """Load the real index list into the store.
 
-        Tries FMP's current ``/stable`` API first, then the legacy ``/api/v3`` path older keys still use.
-        Some FMP plans don't include constituent lists; the error says so and the desk stays on the seed.
+        ``auto`` tries, in order:
+          1. the GitHub dataset (S&P 500 only; no key) - also loads dated membership, so backtests stop
+             buying stocks before they joined the index (see index_sources)
+          2. FMP's constituent endpoint (needs ABG_FMP_API_KEY and a plan that includes it) - current
+             list only
         """
+        errors: list[str] = []
+        if name == "sp500" and source in ("auto", "github"):
+            try:
+                from .index_sources import SOURCE_NAME, fetch_sp500_history
+                h = await fetch_sp500_history(self.engine.http)
+                n = self.u.save_index(self.store, name, h.current, source=SOURCE_NAME, as_of=h.as_of)
+                rows = self.store.replace_membership(h.membership_rows())
+                return {"index": name, "symbols": n, "source": SOURCE_NAME, "as_of": h.as_of,
+                        "membership_rows": rows, "renames_merged": len(h.renamed), "sectors": 0}
+            except Exception as e:                       # fall through to FMP
+                errors.append(f"github: {type(e).__name__}: {str(e)[:120]}")
+                if source == "github":
+                    raise RuntimeError(errors[-1]) from None
+        if source in ("auto", "fmp"):
+            try:
+                out = await self._refresh_index_fmp(name)
+                if errors:
+                    out["fallback_from"] = errors
+                return out
+            except Exception as e:
+                errors.append(f"fmp: {str(e)[:160]}")
+        raise RuntimeError("could not load the index list - " + "; ".join(errors))
+
+    async def _refresh_index_fmp(self, name: str) -> dict:
+        """FMP's constituent list (current members only). Tries the /stable API, then legacy /api/v3."""
         paths = {"sp500": ("sp500-constituent", "sp500_constituent"),
                  "nasdaq100": ("nasdaq-constituent", "nasdaq_constituent"),
                  "dowjones": ("dowjones-constituent", "dowjones_constituent")}.get(name)
@@ -187,8 +215,7 @@ class Sweeper:
             raise ValueError(f"unknown index {name!r} (sp500 | nasdaq100 | dowjones)")
         key = getattr(self.s, "fmp_api_key", None)
         if not key:
-            raise RuntimeError("an FMP API key is needed to refresh the index list "
-                               "(set ABG_FMP_API_KEY in .env), or pass a symbol file instead")
+            raise RuntimeError("no FMP key (ABG_FMP_API_KEY)")
         urls = [f"https://financialmodelingprep.com/stable/{paths[0]}",
                 f"https://financialmodelingprep.com/api/v3/{paths[1]}"]
         rows, last_err = None, None
@@ -207,7 +234,7 @@ class Sweeper:
             last_err = "empty response"
         if not rows:
             raise RuntimeError(f"FMP did not return the {name} list ({last_err}); "
-                               f"your plan may not include constituents - load a symbol file instead")
+                               f"your plan may not include constituents")
         syms = [str(x.get("symbol", "")).upper().strip().replace(".", "-") for x in rows if x.get("symbol")]
         sectors = {str(x["symbol"]).upper().strip().replace(".", "-"): x.get("sector") or ""
                    for x in rows if x.get("symbol")}
@@ -216,7 +243,8 @@ class Sweeper:
         if sectors:
             merged = {**self.store.sectors(), **{k: v for k, v in sectors.items() if v}}
             self.store.set_sectors(merged)
-        return {"index": name, "symbols": n, "sectors": len([v for v in sectors.values() if v])}
+        return {"index": name, "symbols": n, "source": "fmp",
+                "sectors": len([v for v in sectors.values() if v])}
 
     # ------------------------------------------------------------------ status
     def status(self) -> dict:

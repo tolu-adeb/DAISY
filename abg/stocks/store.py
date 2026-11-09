@@ -201,6 +201,16 @@ class BarStore:
             self._db.commit()
         return len(rows)
 
+    def replace_membership(self, rows: list[tuple[str, str, str | None]]) -> int:
+        """Swap in a complete membership history in one transaction (a refresh, not an append)."""
+        with self._lock:
+            self._db.execute("DELETE FROM membership")
+            self._db.executemany(
+                "INSERT OR REPLACE INTO membership (symbol, start, end) VALUES (?,?,?)",
+                [(s.upper().strip(), _day(a), _day(b) if b else None) for s, a, b in rows])
+            self._db.commit()
+        return len(rows)
+
     def kv_set(self, k: str, v: str) -> None:
         with self._lock:
             self._db.execute("INSERT INTO kv (k, v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
@@ -315,10 +325,13 @@ class BarStore:
             a = pd.Timestamp(r["start"])
             b = pd.Timestamp(r["end"]) if r["end"] else cal[-1]
             elig.loc[(cal >= a) & (cal <= b), t] = True
-        # the benchmark and the ETFs the books trade are never index members; keep them eligible
-        never = [t for t in close.columns if not elig[t].any()]
-        for t in never:
-            elig[t] = True
+        # The benchmark, the ETFs and any name the index has never held have no membership rows at all:
+        # keep those eligible. A stock that *was* a member, just not inside this window (dropped in
+        # 2012, or not added until 2024), stays ineligible - that is the whole point of membership.
+        listed = {r["symbol"] for r in rows}
+        for t in close.columns:
+            if t not in listed:
+                elig[t] = True
         return elig & close.notna()
 
     def _sentiment_frame(self, cal: pd.DatetimeIndex, cols) -> pd.DataFrame | None:

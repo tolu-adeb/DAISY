@@ -206,12 +206,20 @@ def test_walk_forward_stitches_out_of_sample_years(tmp_path):
 
 # --------------------------------------------------------------------------- first start
 class IndexEngine(NoDataEngine):
-    """FMP answers on the legacy path only; history is served for anything asked."""
-    def __init__(self, syms, fail_all=False):
+    """GitHub serves ``github_csv`` (or fails when it is None); FMP answers on the legacy path only;
+    history is served for anything asked."""
+    def __init__(self, syms, fail_all=False, github_csv=None):
         self.syms, self.fail_all, self.urls, self.asked = syms, fail_all, [], []
+        self.github_csv = github_csv
         outer = self
 
         class HTTP:
+            async def get_text(self, url, provider, timeout=None, **kw):
+                outer.urls.append(url)
+                if outer.fail_all or outer.github_csv is None:
+                    raise RuntimeError("github unreachable")
+                return outer.github_csv
+
             async def get_json(self, url, provider, params=None, **kw):
                 outer.urls.append(url)
                 assert "apikey" in (params or {})
@@ -244,12 +252,78 @@ def _fresh_desk(tmp_path, engine, fmp=True):
     return d
 
 
-def test_first_start_loads_the_index_then_fills_missing_history(tmp_path):
+def history_csv(n=470, renames=True):
+    """A small S&P-shaped history: n members, a rename, a stock that leaves and returns, a dotted class."""
+    base = [f"T{i:03d}" for i in range(n - 4)]
+    snaps = [("2015-01-02", base + ["FB", "AAL", "BRK.B", "OLD"]),
+             ("2018-03-01", base + ["FB", "BRK.B", "OLD", "NEW1"]),             # AAL leaves, NEW1 joins
+             ("2020-12-21", base + ["FB", "BRK.B", "NEW1", "TSLA"]),            # OLD leaves, TSLA joins
+             ("2022-06-09", base + (["META"] if renames else ["FB"]) + ["BRK.B", "NEW1", "TSLA"]),
+             ("2024-01-02", base + (["META"] if renames else ["FB"]) + ["BRK.B", "TSLA", "AAL"])]  # AAL back, NEW1 out
+    snaps += [(f"2024-0{m}-01", snaps[-1][1]) for m in range(2, 9)]               # padding: >= 10 snapshots
+    return "date,tickers\n" + "".join(f'{d},"{",".join(m)}"\n' for d, m in snaps)
+
+
+def test_parse_history_membership_renames_and_reentries():
+    from abg.stocks.index_sources import parse_history
+    h = parse_history(history_csv())
+    assert h.as_of == "2024-08-01" and len(h.current) == 470
+    assert h.stints["META"] == [("2015-01-02", None)]               # FB's years folded into today's ticker
+    assert "FB" not in h.stints and ("FB", "META") in h.renamed
+    assert h.stints["AAL"] == [("2015-01-02", "2018-03-01"), ("2024-01-02", None)]   # left and came back
+    assert h.stints["TSLA"] == [("2020-12-21", None)]               # not eligible before it joined
+    assert h.stints["OLD"] == [("2015-01-02", "2020-12-21")]
+    assert "BRK-B" in h.current and "BRK.B" not in h.stints        # dot -> dash, like the providers
+    assert all(any(b is None for _, b in h.stints[t]) for t in h.current)
+
+
+def test_parse_history_rejects_what_is_not_the_dataset():
+    from abg.stocks.index_sources import parse_history
+    with pytest.raises(ValueError, match="header"):
+        parse_history("symbol,name\nAAPL,Apple\n")
+    with pytest.raises(ValueError, match="snapshots"):
+        parse_history('date,tickers\n2024-01-02,"A,B"\n')
+    with pytest.raises(ValueError, match="members"):
+        parse_history(history_csv(n=40))                            # 40 names is not an S&P 500 list
+
+
+def test_an_unconfirmed_rename_is_left_alone():
+    from abg.stocks.index_sources import parse_history
+    h = parse_history(history_csv(renames=False))                  # FB never becomes META in this data
+    assert "FB" in h.stints and "META" not in h.stints and not h.renamed
+
+
+def test_first_start_loads_the_index_from_github_without_any_key(tmp_path):
+    eng = IndexEngine([], github_csv=history_csv())
+    d = _fresh_desk(tmp_path, eng, fmp=False)
+    d.s.stocks_autofill = False
+    out = asyncio.run(d.first_start())
+    assert out["index"]["source"] == "github:fja05680/sp500" and out["index"]["symbols"] == 470
+    assert out["index"]["membership_rows"] >= 470 and not d.u.is_seed()
+    assert not any("financialmodelingprep" in u for u in eng.urls)  # FMP never needed
+    # membership now drives eligibility: TSLA can't be bought before it joined
+    st = d.store
+    idx = pd.bdate_range("2019-01-02", periods=600)
+    flat = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1e6}, index=idx)
+    for t in ("SPY", "TSLA", "AAL"):
+        st.upsert(t, flat)
+    p = st.panel(["TSLA", "AAL"], benchmark="SPY", min_bars=250, warn=False)
+    assert not p.eligible["TSLA"].loc[:"2020-12-18"].any() and p.eligible["TSLA"].loc["2020-12-21":].all()
+    assert not p.eligible["AAL"].loc["2019-01-02":"2021-06-01"].any()   # between its two stints
+    assert p.eligible["SPY"].all()                                     # ETFs are never members: always eligible
+    # the weekly re-check doesn't refetch the next day
+    eng.urls.clear()
+    assert asyncio.run(d.load_index_if_seed()) is None and eng.urls == []
+    d.store.close()
+
+
+def test_first_start_falls_back_to_fmp_then_fills_missing_history(tmp_path):
     syms = [f"N{i:02d}" for i in range(30)]
-    eng = IndexEngine(syms)
+    eng = IndexEngine(syms)                                            # GitHub unreachable
     d = _fresh_desk(tmp_path, eng)
     out = asyncio.run(d.first_start())
     assert out["index"]["symbols"] == 30 and not d.u.is_seed()
+    assert out["index"]["source"] == "fmp" and out["index"]["fallback_from"]
     assert any("/stable/" in u for u in eng.urls) and any("/api/v3/" in u for u in eng.urls)   # fell back
     assert d.store.sectors()["N01"] == "Technology"
     assert set(syms) <= set(eng.asked)                         # the new names were backfilled
@@ -272,11 +346,13 @@ def test_first_start_survives_fmp_failing(tmp_path):
     d.store.close()
 
 
-def test_first_start_without_an_fmp_key_stays_on_the_seed(tmp_path):
-    eng = IndexEngine(["A"] * 30)
+def test_first_start_with_no_source_reachable_stays_on_the_seed(tmp_path):
+    eng = IndexEngine(["A"] * 30)                                      # GitHub down, no FMP key
     d = _fresh_desk(tmp_path, eng, fmp=False)
     d.s.stocks_autofill = False
-    assert asyncio.run(d.first_start())["index"] is None and eng.urls == []
+    out = asyncio.run(d.first_start())
+    assert "error" in out["index"] and "github" in out["index"]["error"] and d.u.is_seed()
+    assert not any("financialmodelingprep" in u for u in eng.urls)
     d.store.close()
 
 

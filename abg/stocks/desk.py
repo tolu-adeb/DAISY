@@ -170,6 +170,9 @@ class StockDesk:
             f = res.value
             fund = dict(f.__dict__) if hasattr(f, "__dict__") else dict(f)
             provider = getattr(res.provenance, "provider", None)
+            sec = fund.get("sector")
+            if sec and self.store.sectors().get(symbol) != sec:
+                self.store.set_sectors({**self.store.sectors(), symbol: sec})
         except Exception as e:
             log.debug("stocks: no fundamentals for %s (%s)", symbol, e)
         try:
@@ -185,6 +188,7 @@ class StockDesk:
 
     async def daily(self, post: bool = True, enrich: int | None = None) -> dict:
         """The main event: today's signals, written up, posted and recorded."""
+        await self.load_index_if_seed()            # weekly re-check; never fatal
         async with self._lock:
             t0 = time.time()
             ls = self._signals()
@@ -477,22 +481,30 @@ class StockDesk:
             return True
         return (now - prev) >= timedelta(minutes=every)
 
-    async def load_index_if_seed(self) -> dict | None:
-        """On a seed universe with an FMP key, load the real S&P 500 once. Failure is logged, not fatal:
-        the seed still produces signals, it is just survivorship-biased."""
-        if not self.u.is_seed() or not getattr(self.s, "fmp_api_key", None):
+    INDEX_RECHECK_DAYS = 7
+
+    async def load_index_if_seed(self, force: bool = False) -> dict | None:
+        """Load the real S&P 500 (GitHub dataset first, no key needed; FMP as a fallback) when the
+        desk is still on the seed list, and re-check it weekly so additions and removals flow in.
+        Failure is logged, not fatal: the current list (or the seed) keeps producing signals."""
+        import time as _t
+        last = float(self.store.kv_get("index_checked") or 0)
+        due = force or self.u.is_seed() or (_t.time() - last) > self.INDEX_RECHECK_DAYS * 86400
+        if not due:
             return None
         try:
             out = await self.sweeper.refresh_index("sp500")
+            self.store.kv_set("index_checked", str(int(_t.time())))
             self.cfg = build_config(self.s, self.u)          # Book A and the non-stock list follow the new list
-            log.info("stocks: loaded the S&P 500 list (%s symbols)", out.get("symbols"))
+            log.info("stocks: S&P 500 list from %s (%s symbols, %s membership rows)", out.get("source"),
+                     out.get("symbols"), out.get("membership_rows"))
             return out
         except asyncio.CancelledError:
             raise
         except Exception as e:
             self.errors.append({"ts": time.time(), "where": "index list",
                                 "error": f"{type(e).__name__}: {e}"[:300]})
-            log.warning("stocks: could not load the S&P 500 list, staying on the seed (%s)", e)
+            log.warning("stocks: could not load the S&P 500 list (%s); keeping the current one", e)
             return {"error": str(e)[:200]}
 
     def missing(self) -> list[str]:
