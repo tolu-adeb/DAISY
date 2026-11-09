@@ -204,16 +204,23 @@ async def system(request: Request):
     dd = Path(s.data_dir).expanduser()
     files = {}
     for name in ("alpha.sqlite3", "mnq_proxy_5m.csv", "qqq_daily.csv", "lab/lab.sqlite3", "swing/state/book.json",
-                 "pitch/pitches.json", "health.json", "uptime.json"):
+                 "pitch/pitches.json", "stocks.sqlite3", "stocks/today.json", "stocks/ledger.jsonl",
+                 "health.json", "uptime.json"):
         f = dd / name
         files[name] = {"exists": f.exists(), "age_h": round((_t.time() - f.stat().st_mtime) / 3600, 1) if f.exists() else None,
                        "kb": round(f.stat().st_size / 1024) if f.exists() else None}
-    feats = {"MNQ bot": s.alpha_enabled, "R&D desk": s.rd_enabled, "forward lab": s.fwd_enabled, "swing desk": s.swing_enabled,
+    alpha_retired = bool(getattr(s, "alpha_retired", True))
+    stocks_on = bool(getattr(s, "stocks_enabled", False))
+    feats = {"stock desk": stocks_on,
+             "MNQ bot" + (" (retired)" if alpha_retired else ""): bool(s.alpha_enabled and not alpha_retired),
+             "R&D desk": s.rd_enabled, "forward lab": s.fwd_enabled,
+             "swing desk (retired)": bool(s.swing_enabled and not stocks_on),
              "pitch desk": getattr(s, "pitch_enabled", False), "external signals": s.ext_enabled,
              "Alerio shadow": bool(s.alerio_watch and s.alerio_cookie)}
     keys = {"Finnhub (real-time)": bool(s.finnhub_api_key), "Polygon": bool(s.polygon_api_key),
             "Twelve Data": bool(s.twelvedata_api_key), "FMP": bool(s.fmp_api_key), "Anthropic (agents)": bool(s.anthropic_api_key),
             "MNQ Discord": bool(s.alpha_webhook_url or s.alpha_channel_id), "R&D Discord": bool(s.rd_webhook_url),
+            "Stocks Discord": bool(getattr(s, "stocks_webhook_url", None)),
             "Swing Discord": bool(s.swing_webhook_url), "Pitch Discord": bool(getattr(s, "pitch_webhook_url", None)),
             "Healthcheck": bool(s.healthcheck_url)}
     st = m.status()

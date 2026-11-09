@@ -76,8 +76,9 @@ def universe(index: str = typer.Option(None, "--index", help="sp500 | nasdaq100 
         # read everything off the store before _run closes it
         need = int(getattr(d.s, "stocks_min_bars", 250))
         cov = d.store.coverage()
-        short = [(s, (cov[s].bars if s in cov else 0), (cov[s].error if s in cov else "no bars"))
-                 for s in d.u.core() if s not in cov or cov[s].bars < need]
+        st_ = d.u.stored
+        short = [(s, (cov[st_(s)].bars if st_(s) in cov else 0), (cov[st_(s)].error if st_(s) in cov else "no bars"))
+                 for s in d.u.core() if st_(s) not in cov or cov[st_(s)].bars < need]
         return d.u.describe(), d.store.stats(), d.sweeper.status(), short, need
     u, stats, sw, short, need = _run(go)
 

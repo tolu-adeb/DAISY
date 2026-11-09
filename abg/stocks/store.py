@@ -258,8 +258,9 @@ class BarStore:
         fewer than ``min_bars`` bars are dropped: the books need 200-plus bars before any indicator is
         valid, and a short series only produces NaN candidates.
         """
+        from .universe import GAUGE_ALIAS            # ^VIX is stored as VIX: ask for what is stored
         bench = benchmark.upper().strip()
-        want = {s.upper().strip() for s in symbols} | {bench}
+        want = {GAUGE_ALIAS.get(s.upper().strip(), s.upper().strip()) for s in symbols} | {bench}
         have = self.coverage()
         use = sorted(s for s in want if s in have and have[s].bars >= min_bars)
         if bench not in use:
@@ -302,7 +303,8 @@ class BarStore:
                 warnings.warn(
                     "No point-in-time membership in the store: every symbol is eligible on every day. "
                     "If the universe is today's index members, backtests over the past carry "
-                    "survivorship bias. `abg stocks membership --from-fmp` loads it when FMP is keyed.",
+                    "survivorship bias. Load dated index membership into the store's membership table "
+                    "(BarStore.set_membership) before trusting a backtest.",
                     stacklevel=3)
             return close.notna()
         elig = pd.DataFrame(False, index=cal, columns=close.columns)

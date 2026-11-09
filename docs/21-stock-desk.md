@@ -16,26 +16,40 @@ run live on the terminal's own bar store, pitching stocks to Discord with a writ
 | Thesis | `abg/stocks/thesis.py` | Markdown memo + Discord embed + daily digest. Four questions: what happened, why it pays, what we risk, what makes it wrong |
 | Desk | `abg/stocks/desk.py` | Daily pass 16:20 ET weekdays, intraday sweep + near-stop watch, ledger of every candidate, pitch record, scorecard vs SPY |
 | API / CLI | `abg/stocks/routes.py`, `abg/stocks/cli.py` | `/api/stocks/*` (10 endpoints), `abg stocks universe|backfill|sweep|signals|memo|score|rules|backtest` |
-| Research | `abg/stocks/research.py` | Ablations (§10.2 exp. 1-6), anchored walk-forward with trial registry, early-warning flag study, pass-bar verdict. **Written, not yet wired into the R&D desk** |
+| Research | `abg/stocks/research.py` | Ablations (§10.2 exp. 1-6), anchored walk-forward with trial registry, early-warning flag study, pass-bar verdict. Run by the R&D desk Saturdays 09:00 ET, posted to the R&D channel; `GET/POST /api/stocks/research` |
 | Monitor | `abg/live/monitor.py` | Starts the stock desk when `ABG_STOCKS_ENABLED=true`; refuses to also start the retired swing desk |
-| Tests | `tests/test_stocks.py` (21), `tests/test_tradebook_core.py` (9) | Full suite 331 passed, 3 skipped |
+| MNQ bot | `abg/config.py` `alpha_retired=True` | Retired in code: the monitor never starts it while retired, whatever `ABG_ALPHA_ENABLED` says. Code and trade history kept; `ABG_ALPHA_RETIRED=false` brings it back |
+| R&D desk | `abg/agents/desk.py` | MNQ digests and lab jobs only run while the MNQ bot is unretired; the stock study runs instead |
+| Dashboard | `abg/api/static/stocks.js`, `index.html` | Stocks tab (Today, Thesis, Scorecard, Universe & data); R&D → Stock research; Swing tab removed from the nav; MNQ tab marked retired |
+| First start | `StockDesk.first_start` | Loads the real S&P 500 from FMP when on the seed list (stable API, falls back to v3), then fills any missing history - resumes an interrupted backfill on the next start |
+| Tests | `tests/test_stocks.py` (21), `tests/test_stocks_rd.py` (17), `tests/test_tradebook_core.py` (9) | Full suite 348 passed, 3 skipped |
 
-## 21.2 Still to do (pick up here)
+## 21.2 Done on Nov 9, and what is left for you
 
-1. **Retire the MNQ bot in code**: add `alpha_retired: bool = True`; monitor skips `AlphaBot` unless
-   `ABG_ALPHA_RETIRED=false` (the PC's `.env` has `ABG_ALPHA_ENABLED=true`, so a default flip is not enough).
-   Keep `abg/alpha/` and its data; MNQ dashboard tab becomes read-only history.
-2. **R&D desk** (`abg/agents/desk.py`): gate the MNQ digests/lab refresh on `not alpha_retired`; add a
-   Saturday job that runs `research.run_study` in a worker thread, saves to `<data_dir>/stocks/research/`,
-   posts `research.embed` to `ABG_RD_WEBHOOK_URL`. A research smoke run is still needed (the first attempt,
-   before the speed fix, timed out).
-3. **Dashboard**: a Stocks tab (`abg/api/static/stocks.js` + `view-stocks` in `index.html`) showing today's
-   candidates, memos, regime/flags, Hedge weights, scorecard; remove the Swing tab; R&D tab shows the
-   research report.
-4. Tests for research + the retire switch; full suite; commit.
-5. On the PC: put the **rotated** webhook in `.env` as `ABG_STOCKS_WEBHOOK_URL`, set `ABG_STOCKS_ENABLED=true`,
-   run `abg stocks universe --index sp500` then `abg stocks backfill`, then `abg stocks signals` (no post)
-   to check before the first real post.
+Done overnight: MNQ retire switch, R&D desk rework, the Stocks dashboard tab, S&P 500 on first start,
+resumable backfill, and these bugs found along the way:
+
+- `refresh_index` called an `HttpClient.get` that does not exist, and an FMP path new keys can't use
+- `^VIX`/`^VIX3M` were stored as `VIX`/`VIX3M` but looked up with the caret, so the VIX stress flags
+  could never fire and the coverage table showed them empty
+- the scorecard "marked" a pitch against its own signal-day close, reporting "beat SPY 0%" for trades
+  that had not had a session yet; a pitch now counts only once a newer bar exists
+- a memo showed risk as "+0.43% of the book"; the research verdict printed an R multiple as a percent
+- the autofill only ran on an empty store, so a backfill cut off halfway never resumed
+- a warning pointed at an `abg stocks membership` command that does not exist
+- research reports carried `date` objects and failed to serialise
+
+Left for you (needs your PC or a decision):
+
+1. Restart the monitor (close and reopen `Start Monitor.bat`) so the `.env` switch-over applies:
+   stock desk on, swing desk and MNQ bot off. First start loads the S&P 500 list and backfills ~10 years
+   of daily bars in the background (rate-limited; expect it to take a while).
+2. Check `Stocks → Today` after the next close. Nothing posts to Discord until you add
+   `ABG_STOCKS_WEBHOOK_URL` (rotate the one shared in chat first).
+3. If FMP refuses the constituent list on your plan, load a list with
+   `abg stocks universe --file sp500.txt`.
+4. Point-in-time membership is still not loaded, so backtests and the weekly study carry survivorship
+   bias until it is (`BarStore.set_membership`).
 
 ## 21.3 Rules that still hold
 

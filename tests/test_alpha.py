@@ -344,7 +344,7 @@ async def test_bot_threads_replies_and_stores(settings):
 def test_api_alpha_endpoint(monkeypatch, tmp_path):
     for k, v in {"ABG_ALLOW_SYNTHETIC": "true", "ABG_PROVIDER_ORDER": "synthetic", "ABG_CACHE_DIR": str(tmp_path / "c"),
                  "ABG_DATA_DIR": str(tmp_path / "d"), "ABG_MONITOR_ON_SERVE": "false", "ABG_NOTIFY_DESKTOP": "false",
-                 "ABG_ALPHA_ENABLED": "true"}.items():
+                 "ABG_ALPHA_ENABLED": "true", "ABG_ALPHA_RETIRED": "false"}.items():   # docs/21: opt back in
         monkeypatch.setenv(k, v)
     from fastapi.testclient import TestClient
     from abg.api.server import app

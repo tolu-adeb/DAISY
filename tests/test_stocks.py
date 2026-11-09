@@ -511,16 +511,29 @@ def test_daily_pass_is_idempotent_for_one_session(tmp_path):
     d.store.close()
 
 
-def test_scorecard_marks_pitches_against_the_benchmark(tmp_path):
+def test_scorecard_marks_pitches_only_after_a_session_has_passed(tmp_path):
     d = _desk(tmp_path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         asyncio.run(d.daily(post=False))
+    n = len(d.pitches())
     sc = d.scorecard()
-    assert sc["all"]["n"] == len(d.pitches())
+    # signals come from the last close: nothing has happened to them yet, so nothing is "marked"
+    assert sc["all"]["n"] == n and sc["all"]["marked"] == 0 and sc["all"]["beat_spy"] is None
+
+    # one more session: every pitched name and the benchmark get a bar a percent higher / flat
+    last = d.store.frame("SPY").index[-1]
+    nxt = last + pd.offsets.BDay(1)
+    for sym in {p["symbol"] for p in d.pitches()} | {"SPY"}:
+        f = d.store.frame(sym)
+        c = float(f["close"].iloc[-1]) * (1.0 if sym == "SPY" else 1.01)
+        d.store.upsert(sym, pd.DataFrame({"open": c, "high": c, "low": c, "close": c, "volume": 1e6}, index=[nxt]))
+    sc = d.scorecard()
+    assert sc["all"]["marked"] == n
     for r in sc["pitches"]:
-        assert r["ret"] is not None and r["spy_ret"] is not None
+        assert r["ret"] == pytest.approx(0.01, abs=1e-4) and r["spy_ret"] == pytest.approx(0.0, abs=1e-9)
         assert r["excess"] == pytest.approx(r["ret"] - r["spy_ret"], abs=1e-6)
+    assert sc["all"]["beat_spy"] == 1.0
     assert set(sc["by_book"]) <= set(enabled_books(d.cfg))
     d.store.close()
 

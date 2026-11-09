@@ -11,6 +11,7 @@
     POST /api/stocks/universe        {index: "sp500"} from FMP, or {symbols: [...]} / {extra: [...]}
     GET  /api/stocks/ledger          the last N candidates, taken or not
     GET  /api/stocks/rules           the active rule set (no secrets)
+    GET  /api/stocks/research        the latest weekly study; POST starts one ({scope: quick|full})
 
 Everything works on demand even with ABG_STOCKS_ENABLED=false; the switch controls the schedule and
 Discord posting.  ``POST /daily`` defaults to post=false from the API so a page click can never fire
@@ -129,7 +130,7 @@ async def universe(request: Request):
     d = _desk(request)
     cov = d.store.coverage()
     core = d.u.core()
-    rows = [{"symbol": s, "bars": (c.bars if (c := cov.get(s)) else 0),
+    rows = [{"symbol": s, "bars": (c.bars if (c := cov.get(d.u.stored(s))) else 0),
              "last_day": c.last_day if c else None, "age_h": round(c.age_h, 1) if c and c.age_h else None,
              "provider": c.provider if c else None, "error": c.error if c else None,
              "delisted": bool(c.delisted) if c else False}
@@ -168,3 +169,34 @@ async def set_universe(request: Request, body: dict = Body(...)):
 async def ledger(request: Request, limit: int = 200):
     limit = max(1, min(int(limit), 5000))
     return jsonable({"rows": _desk(request).ledger_tail(limit)})
+
+
+@router.get("/research")
+async def research_latest(request: Request):
+    """The newest saved study (report + markdown), and whether one is running."""
+    d = _desk(request)
+    return jsonable({"busy": d.research_busy, "report": d.last_research(), "markdown": d.research_md(),
+                     "schedule": getattr(d.s, "stocks_research", "weekly")})
+
+
+@router.post("/research")
+async def research_run(request: Request, body: dict = Body(default={})):
+    """Start a study in the background (it takes minutes). Never posts: the R&D desk does that on Saturdays.
+
+    {scope: "quick"} = ablations only over 5 years; "full" (default) = ablations, walk-forward and
+    early-warning over ABG_STOCKS_RESEARCH_YEARS.
+    """
+    import asyncio
+    d = _desk(request)
+    if d.research_busy:
+        raise HTTPException(409, f"a study is already running ({d.research_busy})")
+    quick = str(body.get("scope") or "full").lower() == "quick"
+    kw = {"years": 5, "do_wf": False, "do_ew": False} if quick else {}
+
+    async def go():
+        try:
+            await d.research(post_url=None, **kw)
+        except Exception:                      # recorded on the desk's error list by research()
+            pass
+    d._research_task = asyncio.create_task(go())   # keep a reference so it isn't garbage-collected
+    return {"started": True, "scope": "quick" if quick else "full"}

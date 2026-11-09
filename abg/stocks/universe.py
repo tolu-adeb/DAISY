@@ -91,6 +91,11 @@ class Universe:
         """Everything the daily pass needs: the books' own ETFs plus the single-stock index."""
         return _dedup(self.etfs + self.gauges + self.stocks)
 
+    @staticmethod
+    def stored(symbol: str) -> str:
+        """The name a symbol is kept under in the bar store (gauges drop their caret)."""
+        return GAUGE_ALIAS.get(symbol, symbol)
+
     def wide(self) -> list[str]:
         """Core plus anything else being followed, for the paged sweep."""
         return _dedup(self.core() + self.extra)

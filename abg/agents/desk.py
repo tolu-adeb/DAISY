@@ -1,4 +1,8 @@
-"""The R&D desk inside the monitor: scheduled digests and the weekly research run (docs/17).
+"""The R&D desk inside the monitor: scheduled digests and the weekly research run (docs/17, docs/21).
+
+Since docs/21 the MNQ bot is retired, so its digests and lab jobs below only run with
+ABG_ALPHA_RETIRED=false. What runs instead: Saturday 09:00 ET, the stock desk's study (ablations,
+walk-forward, early-warning flags) posted to ABG_RD_WEBHOOK_URL - findings are proposals only.
 
     weekdays  ABG_RD_DAILY_TIME (12:20 ET)   daily digest  -> Discord (ABG_RD_WEBHOOK_URL) + the R&D tab
     Friday    16:30 ET                       weekly digest (with a 1-month regime watch)
@@ -61,9 +65,19 @@ class RDDesk:
         self.state_path.write_text(json.dumps(st))
         return True
 
+    def _mnq(self) -> bool:
+        """The MNQ digests and lab only make sense while the MNQ bot is live (docs/21: retired)."""
+        return not bool(getattr(self.s, "alpha_retired", True))
+
+    def _stocks(self):
+        return getattr(self.m, "stocks", None)
+
     def status(self) -> dict:
+        st = self._stocks()
         return {"webhook": bool(self.s.rd_webhook_url), "daily": self.s.rd_daily, "weekly": self.s.rd_weekly,
                 "monthly": self.s.rd_monthly, "auto_run": self.s.lab_auto_run, "api_key": bool(self.s.anthropic_api_key),
+                "mnq": self._mnq(), "stocks_research": getattr(self.s, "stocks_research", "weekly"),
+                "stocks_desk": st is not None,
                 "busy": self.busy, "last": self.last, "errors": self.errors[-3:]}
 
     def stop(self) -> None:
@@ -74,15 +88,19 @@ class RDDesk:
         from ..live.market_hours import is_trading_day
         s, mins, out = self.s, now.hour * 60 + now.minute, []
         wk = f"{now.isocalendar()[0]}-W{now.isocalendar()[1]:02d}"
-        if s.rd_daily and is_trading_day(now.date()) and mins >= _hm(s.rd_daily_time):
+        mnq = self._mnq()
+        if mnq and s.rd_daily and is_trading_day(now.date()) and mins >= _hm(s.rd_daily_time):
             out.append(("daily", f"rd:daily:{now.date()}", {"ref": now.date()}))
-        if s.rd_weekly and now.weekday() == 4 and mins >= 16 * 60 + 30:
+        if mnq and s.rd_weekly and now.weekday() == 4 and mins >= 16 * 60 + 30:
             out.append(("weekly", f"rd:weekly:{wk}", {"ref": now.date()}))
-        if s.rd_monthly and now.date() == _first_weekday(now.date()) and now.hour >= 8:
+        if mnq and s.rd_monthly and now.date() == _first_weekday(now.date()) and now.hour >= 8:
             prev = now.date().replace(day=1) - timedelta(days=1)
             out.append(("monthly", f"rd:monthly:{prev:%Y-%m}", {"ref": prev}))
-        if now.weekday() == 5 and now.hour >= 9:
+        if mnq and now.weekday() == 5 and now.hour >= 9:
             out.append(("research", f"rd:research:{wk}", {}))
+        if (str(getattr(s, "stocks_research", "weekly") or "off").lower() == "weekly"
+                and self._stocks() is not None and now.weekday() == 5 and now.hour >= 9):
+            out.append(("stocks_research", f"rd:stocks_research:{wk}", {}))
         return out
 
     async def run(self) -> None:
@@ -95,6 +113,8 @@ class RDDesk:
                     self.busy = job
                     if job == "research":
                         await self.weekly_research()
+                    elif job == "stocks_research":
+                        await self.stocks_research(post=True)
                     else:
                         await self.digest(job, kw["ref"], post=True)
                     self.last[job] = now.isoformat(timespec="minutes")
@@ -121,6 +141,16 @@ class RDDesk:
         save_digest(self.s, d, delivered)
         d["delivered"] = delivered
         return d
+
+    async def stocks_research(self, post: bool = False) -> dict:
+        """The stock desk's weekly study, posted to the R&D channel. Proposals only."""
+        st = self._stocks()
+        if st is None:
+            return {"skipped": "the stock desk is not running (ABG_STOCKS_ENABLED)"}
+        url = self.s.rd_webhook_url if post else None
+        rep = await st.research(post_url=url)
+        return {"at": rep.get("at"), "verdict": (rep.get("verdict") or {}).get("overall"),
+                "delivered": rep.get("delivered"), "skipped": rep.get("skipped")}
 
     async def weekly_research(self) -> dict:
         out: dict = {}

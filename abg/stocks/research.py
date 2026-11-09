@@ -68,6 +68,14 @@ def _clean(x):
         return None if not math.isfinite(v) else round(v, 6)
     if isinstance(x, np.integer):
         return int(x)
+    if isinstance(x, np.bool_):
+        return bool(x)
+    if x is pd.NaT:                                                   # NaT is a datetime subclass: check first
+        return None
+    if isinstance(x, (pd.Timestamp, datetime)):
+        return x.isoformat()
+    if hasattr(x, "isoformat") and type(x).__name__ == "date":        # datetime.date
+        return x.isoformat()
     return x
 
 
@@ -369,13 +377,20 @@ def render_md(rep: dict) -> str:
     v = rep.get("verdict") or {}
     d = rep.get("data") or {}
     L = ["# Stock desk — research report", "",
-         f"*{rep.get('at')} · bars {d.get('first_day')} to {d.get('last_day')} · {d.get('symbols')} symbols · "
+         f"*{str(rep.get('at') or '')[:16].replace('T', ' ')} ET · bars {d.get('first_day')} to {d.get('last_day')} · {d.get('symbols')} symbols · "
          f"{rep.get('runs')} runs in {rep.get('seconds')}s*", "",
          f"## Verdict: **{v.get('overall', '—')}**", ""]
     for name, c in (v.get("checks") or {}).items():
         mark = "x" if c["pass"] else " " if c["pass"] is False else "?"
         val = c.get("value")
-        shown = "—" if val is None else (f"{val:.2f}" if "Sharpe" in name else f"{val * 100:.1f}%")
+        if val is None:
+            shown = "—"
+        elif "Sharpe" in name:
+            shown = f"{val:.2f}"
+        elif "avg R" in name:                    # an R multiple, not a percentage
+            shown = f"{val:+.3f}R"
+        else:
+            shown = f"{val * 100:.1f}%"
         L.append(f"- [{mark}] {name} — {shown}")
     L += ["", "Pass bars were fixed before any result was seen (Stocks Rule Book §10.4).", ""]
     if rep.get("findings"):
@@ -435,3 +450,54 @@ def embed(rep: dict) -> dict:
             "color": color, "fields": fields,
             "footer": {"text": "Full report on the dashboard (R&D tab). Nothing here changes a live setting."},
             "timestamp": rep.get("at")}
+
+
+# --------------------------------------------------------------------------- running it for the desk
+def parse_grid(raw: str | None) -> dict | None:
+    """``"books.trend_pullback.rsi_pullback=35|40|45;books.xs_momentum.top_n=10|20"`` -> grid dict.
+
+    Empty means "use DEFAULT_GRID". Values are parsed as YAML scalars, so numbers stay numbers.
+    """
+    if not raw or not str(raw).strip():
+        return None
+    import yaml
+    grid: dict[str, list] = {}
+    for part in str(raw).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"grid entry {part!r} needs key=v1|v2")
+        k, vals = part.split("=", 1)
+        k = k.strip()
+        if not k or any(ch.isspace() for ch in k):
+            raise ValueError(f"bad grid key {k!r}")
+        grid[k] = [yaml.safe_load(v.strip()) for v in vals.split("|") if v.strip()]
+        if not grid[k]:
+            raise ValueError(f"grid key {k} has no values")
+    n = 1
+    for v in grid.values():
+        n *= len(v)
+    if n > 24:
+        raise ValueError(f"grid has {n} combinations; keep it at 24 or fewer - every one is a trial "
+                         f"the out-of-sample result has to be judged against")
+    return grid
+
+
+def run_for_desk(cfg: dict, store, universe, out_dir, years: int = 10, grid: dict | None = None,
+                 do_wf: bool = True, do_ablation: bool = True, do_ew: bool = True) -> dict:
+    """The weekly study on the desk's own bar store. Blocking: call it in a worker thread."""
+    import warnings
+    c = copy.deepcopy(cfg)
+    c["non_stock_tickers"] = sorted(set(c.get("non_stock_tickers", [])) | set(universe.non_stock()))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        panel = store.panel(universe.core(), benchmark=c["benchmark"],
+                            start=c.get("panel_start"), min_bars=int(c.get("min_bars", 250)), warn=False)
+    last = panel.dates[-1]
+    want = last - pd.DateOffset(years=max(1, int(years)))
+    floor = pd.Timestamp(c.get("start") or panel.dates[0])
+    # leave a year of warm-up in front of the study window for the 200-day averages and 252-day vols
+    warm = panel.dates[0] + pd.DateOffset(years=1)
+    c["start"] = str(max(want, floor, warm).date())
+    return run_study(c, panel, out_dir=out_dir, grid=grid, do_wf=do_wf, do_ablation=do_ablation, do_ew=do_ew)

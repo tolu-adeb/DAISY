@@ -8,7 +8,7 @@ window.store = { get(k, d) { try { const v = localStorage.getItem(k); return v =
 window.usd = (x) => (x == null ? "—" : (x < 0 ? "-$" : "+$") + Math.abs(x).toLocaleString(undefined, { maximumFractionDigits: 0 }));
 window.stat = (label, value, sub, cls) => `<div class="stat ${cls || ""}"><span class="l">${label}</span><span class="v">${value}</span><span class="s">${sub || "&nbsp;"}</span></div>`;
 window.SESSION = { info: null, at: 0 };
-window.LOADERS = { mnq() {}, swing() {}, rd() {}, pitch() {}, system() {} };
+window.LOADERS = { mnq() {}, swing() {}, rd() {}, pitch() {}, system() {}, stocks() {} };
 // the spin-off's api() took {json: body}; DAISY's takes fetch options
 window.deskApi = (path, opts) => {
   opts = Object.assign({}, opts || {});
@@ -22,7 +22,7 @@ window.deskApi = (path, opts) => {
 };
 window.deskToast = (msg) => toast(msg);
 
-const DESK_DEFAULT = { mnq: "live", swing: "book", rd: "findings", pitch: "screen", system: "overview" };
+const DESK_DEFAULT = { mnq: "live", swing: "book", rd: "findings", pitch: "screen", system: "overview", stocks: "today" };
 
 function deskRoute(sec, sub) {
   const view = document.getElementById("view-" + sec);
@@ -65,6 +65,12 @@ function deskRoute(sec, sub) {
       if (["signal", "t1", "final", "stopped", "breakeven", "closed", "failed"].includes(d.type)) toast(`MNQ: ${d.type}`);
     });
     es.addEventListener("swing", (e) => { let d; try { d = JSON.parse(e.data); } catch { return; } if (window.onSwingEvent) onSwingEvent(d); });
+    es.addEventListener("stocks_daily", (e) => { let d; try { d = JSON.parse(e.data); } catch { return; }
+      toast(`Stock desk: ${d.opens} to open, ${d.closes} to close`); if (window.stocksRefresh) stocksRefresh(); });
+    es.addEventListener("stocks_watch", (e) => { let d; try { d = JSON.parse(e.data); } catch { return; }
+      const n = (d.near_stop || []).length; if (n) toast(`Stock desk: ${n} position(s) near their stop`); });
+    es.addEventListener("stocks_research", (e) => { let d; try { d = JSON.parse(e.data); } catch { return; }
+      toast(`Stock research: ${d.verdict}`); if (window.stocksResearchRefresh) stocksResearchRefresh(); });
     es.addEventListener("pitch", (e) => { let d; try { d = JSON.parse(e.data); } catch { return; }
       toast(`Pitch: ${d.symbol} ${d.verdict}`); if (visible("pitch") && window.loadPitch) loadPitch(); });
   });

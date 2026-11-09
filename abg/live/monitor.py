@@ -198,7 +198,11 @@ class Monitor:
                 self.errors.append({"ts": time.time(), "where": "ext init", "error": str(e)[:300]})
         # MNQ alpha bot (docs/14)
         self.alpha = None
-        if self.s.alpha_enabled:
+        if self.s.alpha_enabled and getattr(self.s, "alpha_retired", True):
+            # docs/21: retired. It needed a 92% win rate to break even and its refit never adopted;
+            # the stock desk is the live signal source now. Kept importable, never started here.
+            log.info("MNQ bot is retired (ABG_ALPHA_RETIRED); not starting it")
+        elif self.s.alpha_enabled:
             try:
                 from ..alpha.bot import AlphaBot
                 self.alpha = AlphaBot(engine, self.s, hub)
@@ -613,7 +617,8 @@ class Monitor:
                           "commands": self.gateway.status() if self.gateway else {"enabled": False},
                           "scheduler": self.scheduler.status() if self.scheduler else None}
                          if self.ext is not None else None),
-            "alpha": self.alpha.status() if self.alpha is not None else {"enabled": False},
+            "alpha": self.alpha.status() if self.alpha is not None else
+                     {"enabled": False, "retired": bool(getattr(self.s, "alpha_retired", True))},
             "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
             "rd": self.rd.status() if self.rd is not None else {"enabled": False},
             "forward": self.forward.status() if self.forward is not None else {"enabled": False},

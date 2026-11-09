@@ -95,7 +95,8 @@ class _Mon:
 
 
 def test_desk_schedule_and_once_per_period(settings):
-    s = settings.model_copy(update={"rd_daily_time": "12:20"})
+    # the MNQ digests only run while the MNQ bot is live; it is retired by default (docs/21)
+    s = settings.model_copy(update={"rd_daily_time": "12:20", "alpha_retired": False})
     desk = RDDesk(_Mon(s))
     keys = lambda t: [k for _, k, _ in desk.due(t)]
     assert keys(datetime(2026, 10, 22, 12, 0, tzinfo=NY)) == []                           # before the bot is flat

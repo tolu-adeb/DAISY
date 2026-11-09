@@ -28,8 +28,8 @@
     <button class="tab" data-view="portfolio" role="tab">Portfolio <span id="sig-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="signals" role="tab">Signals <span id="ext-badge" class="count" hidden>0</span></button>
     <button class="tab" data-view="markets" role="tab">Markets</button>
-    <button class="tab" data-view="mnq" role="tab">MNQ Bot</button>
-    <button class="tab" data-view="swing" role="tab">Swing Desk <span class="count" id="nav-swing-count" hidden></span></button>
+    <button class="tab" data-view="stocks" role="tab">Stocks</button>
+    <button class="tab" data-view="mnq" role="tab" title="Retired (docs/21): read-only history">MNQ Bot <span class="muted small">retired</span></button>
     <button class="tab" data-view="pitch" role="tab">Pitch Desk</button>
     <button class="tab" data-view="rd" role="tab">R&amp;D</button>
     <button class="tab" data-view="compare" role="tab">Compare</button>
@@ -200,7 +200,7 @@
 </main>
 
 <main id="view-rd" class="view" hidden>
-  <nav class="subnav desk-sub" aria-label="R&amp;D"><a data-sub="findings" href="#rd/findings">Findings &amp; Strategy Lab</a><a data-sub="forward" href="#rd/forward">Forward lab</a></nav>
+  <nav class="subnav desk-sub" aria-label="R&amp;D"><a data-sub="findings" href="#rd/findings">Findings &amp; Strategy Lab</a><a data-sub="forward" href="#rd/forward">Forward lab</a><a data-sub="stocks" href="#rd/stocks">Stock research</a></nav>
   <div data-panel="rd/findings">
   <section class="row kpis5" id="rd-kpis"></section>
   <section class="card monitor-bar" id="rd-desk"></section>
@@ -221,6 +221,30 @@
       <div class="card"><div class="card-head"><h2>Daily runs</h2></div><div id="fw-runs" class="scroll"></div></div>
     </section>
     <section class="deskbar" id="fw-desk"></section>
+  </div>
+  <div data-panel="rd/stocks" class="desk desk-in" hidden>
+    <section class="deskbar" id="rs-bar"><span class="muted">Loading…</span></section>
+    <section class="card memo"><div class="card-head"><h2>Latest study</h2><span class="muted">pass bars fixed before any result (Stocks Rule Book §10.4)</span></div><div id="rs-report"></div></section>
+  </div>
+</main>
+
+<main id="view-stocks" class="view desk" hidden>
+  <nav class="subnav" aria-label="Stock desk"><a data-sub="today" href="#stocks/today">Today</a><a data-sub="memo" href="#stocks/memo">Thesis</a><a data-sub="scorecard" href="#stocks/scorecard">Scorecard</a><a data-sub="universe" href="#stocks/universe">Universe &amp; data</a></nav>
+  <div data-panel="stocks/today" hidden>
+    <section class="strip" id="sk-kpis"></section>
+    <section class="deskbar" id="sk-desk"><span class="muted">Loading…</span></section>
+    <section class="card"><div class="card-head"><h2>Market and capital</h2></div><div id="sk-context"></div></section>
+    <section class="card"><div class="card-head"><h2>What the books want at the next open</h2></div><div id="sk-list" class="scroll"></div></section>
+  </div>
+  <div data-panel="stocks/memo" hidden><section class="card memo"><div class="card-head"><h2>Thesis</h2><span class="muted" id="sk-memo-note"></span></div><div id="sk-memo"><p class="muted">Pick a name on the Today tab or the Scorecard.</p></div></section></div>
+  <div data-panel="stocks/scorecard" hidden>
+    <section class="strip" id="sk-score-kpis"></section>
+    <section class="card"><div class="card-head"><h2>Every pitch vs the benchmark</h2><span class="muted">paper only, from each signal-day close</span></div><div id="sk-score" class="scroll"></div></section>
+  </div>
+  <div data-panel="stocks/universe" hidden>
+    <section class="strip" id="sk-uni-kpis"></section>
+    <section class="deskbar" id="sk-uni-bar"></section>
+    <section class="card"><div class="card-head"><h2>Bar store coverage</h2><span class="muted">shortest history first</span></div><div id="sk-uni" class="scroll"></div></section>
   </div>
 </main>
 
@@ -248,6 +272,7 @@
 </main>
 
 <main id="view-swing" class="view desk" hidden>
+  <span class="count" id="nav-swing-count" hidden></span><!-- swing desk retired (docs/21): no nav entry -->
   <nav class="subnav" aria-label="Swing desk"><a data-sub="book" href="#swing/book">Book</a><a data-sub="add" href="#swing/add">Add idea</a><a data-sub="ideas" href="#swing/ideas">All ideas</a><a data-sub="wide" href="#swing/wide">Wide scan</a><a data-sub="record" href="#swing/record">Track record</a><a data-sub="research" href="#swing/research">Research</a></nav>
   <div data-panel="swing/book" hidden>
   <section class="gate" id="sw-gate"></section>
@@ -396,5 +421,6 @@
 <script src="/static/forward.js"></script>
 <script src="/static/pitch.js"></script>
 <script src="/static/system.js"></script>
+<script src="/static/stocks.js"></script>
 </body>
 </html>

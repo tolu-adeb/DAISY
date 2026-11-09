@@ -220,6 +220,12 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------------- MNQ alpha bot (docs/14)
     alpha_enabled: bool = False                 # run the MNQ signal bot inside the monitor
+    alpha_retired: bool = True                  # docs/21: retired - the monitor won't start it even if
+                                                # alpha_enabled is true. Code and trade history are kept;
+                                                # set ABG_ALPHA_RETIRED=false to bring it back deliberately.
+    stocks_research: str = "weekly"             # off | weekly: Saturday 09:00 ET stock-desk study (R&D desk)
+    stocks_research_grid: str = ""              # "dotted.key=v1|v2;other.key=v1|v2"; empty = the built-in grid
+    stocks_research_years: int = 10             # history the study replays (ablations + walk-forward)
     alpha_symbol: str = "MNQ=F"                 # futures bars for levels / direct feed
     alpha_feed: str = "proxy"                   # proxy (real-time QQQ x ratio) | direct (poll futures bars)
     alpha_proxy_symbol: str = "QQQ"

@@ -175,18 +175,39 @@ class Sweeper:
 
     # ------------------------------------------------------------------ index list
     async def refresh_index(self, name: str = "sp500") -> dict:
-        """Load the real constituent list from FMP (needs an FMP key) into the store."""
-        path = {"sp500": "sp500_constituent", "nasdaq100": "nasdaq_constituent",
-                "dowjones": "dowjones_constituent"}.get(name)
-        if path is None:
+        """Load the real constituent list from FMP (needs ABG_FMP_API_KEY) into the store.
+
+        Tries FMP's current ``/stable`` API first, then the legacy ``/api/v3`` path older keys still use.
+        Some FMP plans don't include constituent lists; the error says so and the desk stays on the seed.
+        """
+        paths = {"sp500": ("sp500-constituent", "sp500_constituent"),
+                 "nasdaq100": ("nasdaq-constituent", "nasdaq_constituent"),
+                 "dowjones": ("dowjones-constituent", "dowjones_constituent")}.get(name)
+        if paths is None:
             raise ValueError(f"unknown index {name!r} (sp500 | nasdaq100 | dowjones)")
         key = getattr(self.s, "fmp_api_key", None)
         if not key:
             raise RuntimeError("an FMP API key is needed to refresh the index list "
                                "(set ABG_FMP_API_KEY in .env), or pass a symbol file instead")
-        url = f"https://financialmodelingprep.com/api/v3/{path}"
-        r = await self.engine.http.get(url, params={"apikey": key})
-        rows = r.json() if hasattr(r, "json") else r
+        urls = [f"https://financialmodelingprep.com/stable/{paths[0]}",
+                f"https://financialmodelingprep.com/api/v3/{paths[1]}"]
+        rows, last_err = None, None
+        for url in urls:
+            try:
+                d = await self.engine.http.get_json(url, provider="fmp", params={"apikey": key})
+            except Exception as e:                       # the key never appears in the message we keep
+                last_err = f"{type(e).__name__}"
+                continue
+            if isinstance(d, dict) and d.get("Error Message"):
+                last_err = str(d["Error Message"])[:160]
+                continue
+            if isinstance(d, list) and d:
+                rows = d
+                break
+            last_err = "empty response"
+        if not rows:
+            raise RuntimeError(f"FMP did not return the {name} list ({last_err}); "
+                               f"your plan may not include constituents - load a symbol file instead")
         syms = [str(x.get("symbol", "")).upper().strip().replace(".", "-") for x in rows if x.get("symbol")]
         sectors = {str(x["symbol"]).upper().strip().replace(".", "-"): x.get("sector") or ""
                    for x in rows if x.get("symbol")}
@@ -195,7 +216,7 @@ class Sweeper:
         if sectors:
             merged = {**self.store.sectors(), **{k: v for k, v in sectors.items() if v}}
             self.store.set_sectors(merged)
-        return {"index": name, "symbols": n, "sectors": len(sectors)}
+        return {"index": name, "symbols": n, "sectors": len([v for v in sectors.values() if v])}
 
     # ------------------------------------------------------------------ status
     def status(self) -> dict:

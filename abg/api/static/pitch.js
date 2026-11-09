@@ -123,4 +123,5 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 LOADERS.pitch = (sub) => { if (sub !== "memo" || !PT.data) loadPitch(); };
 window.loadPitch = loadPitch;
+window.deskMd = md;          // shared with the Stocks tab (escapes first, http(s) links only)
 })();

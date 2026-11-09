@@ -66,6 +66,7 @@ class StockDesk:
         self.last_daily: dict | None = None
         self.last_sweep: dict | None = None
         self.last_state = None
+        self.research_busy: str | None = None
 
     # ------------------------------------------------------------------ storage
     def _p(self, name: str) -> Path:
@@ -275,6 +276,8 @@ class StockDesk:
                 continue
             if not a or not sa or a != a or sa != sa:
                 continue
+            if str(px.index[-1].date()) <= r["as_of"]:
+                continue        # no session since the signal yet: unmarked, not "flat and lost to SPY"
             r["last"] = round(b, 4)
             r["ret"] = round(b / float(a) - 1, 5)
             r["spy_ret"] = round(sb / float(sa) - 1, 5)
@@ -284,11 +287,11 @@ class StockDesk:
         if changed:
             self._save("pitches.json", rows)
 
-        def agg(rs):
-            rs = [r for r in rs if r.get("excess") is not None]
+        def agg(rows_):
+            rs = [r for r in rows_ if r.get("excess") is not None]
             if not rs:
-                return {"n": 0, "marked": 0, "avg_excess": None, "beat_spy": None, "avg_ret": None}
-            return {"n": len(rs), "marked": len(rs),
+                return {"n": len(rows_), "marked": 0, "avg_excess": None, "beat_spy": None, "avg_ret": None}
+            return {"n": len(rows_), "marked": len(rs),
                     "avg_excess": round(sum(r["excess"] for r in rs) / len(rs), 5),
                     "avg_ret": round(sum(r["ret"] for r in rs) / len(rs), 5),
                     "beat_spy": round(sum(1 for r in rs if r["excess"] > 0) / len(rs), 4)}
@@ -296,6 +299,76 @@ class StockDesk:
         books = sorted({r["book"] for r in rows})
         return {"all": agg(rows), "by_book": {b: agg([r for r in rows if r["book"] == b]) for b in books},
                 "pitches": sorted(rows, key=lambda r: r["as_of"], reverse=True)[:200]}
+
+    # ------------------------------------------------------------------ research (R&D desk, docs/21)
+    def research_dir(self) -> Path:
+        d = self._p("research")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def last_research(self) -> dict | None:
+        """The newest saved study, or None. Cheap: one small JSON read."""
+        p = self.research_dir() / "latest.json"
+        try:
+            ptr = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        except (OSError, ValueError):
+            return None
+        if not ptr:
+            return None
+        try:
+            rep = json.loads((self.research_dir() / ptr["dir"] / "report.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            return None
+        rep["dir"] = ptr["dir"]
+        return rep
+
+    def research_md(self) -> str | None:
+        rep = self.last_research()
+        if not rep:
+            return None
+        p = self.research_dir() / rep["dir"] / "report.md"
+        try:
+            return p.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    async def research(self, post_url: str | None = None, years: int | None = None, grid: dict | None = None,
+                       do_wf: bool = True, do_ablation: bool = True, do_ew: bool = True) -> dict:
+        """The weekly study (ablations, walk-forward, early warning) on this desk's bar store.
+
+        Runs in a worker thread so the monitor's loop is never blocked, and under the desk lock so a
+        daily pass and a study never read the store at the same time. ``post_url`` is the R&D channel;
+        the study never posts to the pitch channel. Findings are proposals: nothing here changes a rule.
+        """
+        from . import research as R
+        if self.research_busy:
+            return {"skipped": f"a study is already running ({self.research_busy})"}
+        if years is None:
+            years = int(getattr(self.s, "stocks_research_years", 10) or 10)
+        if grid is None:
+            grid = R.parse_grid(getattr(self.s, "stocks_research_grid", "") or "")
+        stamp = datetime.now(NY).strftime("%Y-%m-%d_%H%M")
+        out = self.research_dir() / stamp
+        async with self._lock:
+            self.research_busy = stamp
+            try:
+                rep = await asyncio.to_thread(R.run_for_desk, self.cfg, self.store, self.u, out, years, grid,
+                                              do_wf, do_ablation, do_ew)
+            except Exception as e:
+                self.errors.append({"ts": time.time(), "where": "research",
+                                    "error": f"{type(e).__name__}: {e}"[:300]})
+                raise
+            finally:
+                self.research_busy = None
+        self._save("research/latest.json", {"dir": stamp, "at": rep.get("at"),
+                                            "verdict": (rep.get("verdict") or {}).get("overall")})
+        delivered = "dashboard"
+        if post_url:
+            delivered = await self._post_to(post_url, [R.embed(rep)], username="Stock desk R&D")
+        rep["delivered"] = delivered
+        self._broadcast("stocks_research", {"at": rep.get("at"), "verdict": (rep.get("verdict") or {}).get("overall"),
+                                            "delivered": delivered})
+        return rep
 
     # ------------------------------------------------------------------ intraday
     async def intraday(self) -> dict:
@@ -326,10 +399,13 @@ class StockDesk:
                 or getattr(self.s, "pitch_webhook_url", None) or None)
 
     async def _post(self, embeds: list[dict], content: str | None = None) -> str:
-        url = self._webhook()
+        return await self._post_to(self._webhook(), embeds, content=content)
+
+    async def _post_to(self, url: str | None, embeds: list[dict], content: str | None = None,
+                       username: str = "Stock Desk") -> str:
         if not url:
             return "dashboard"
-        body = {"username": "Stock Desk", "allowed_mentions": {"parse": []},
+        body = {"username": username, "allowed_mentions": {"parse": []},
                 "embeds": embeds[:MAX_EMBEDS_PER_POST]}
         if content:
             body["content"] = content[:1900]
@@ -401,20 +477,59 @@ class StockDesk:
             return True
         return (now - prev) >= timedelta(minutes=every)
 
-    async def run(self) -> None:
-        self._stop.clear()
-        self.running = True
+    async def load_index_if_seed(self) -> dict | None:
+        """On a seed universe with an FMP key, load the real S&P 500 once. Failure is logged, not fatal:
+        the seed still produces signals, it is just survivorship-biased."""
+        if not self.u.is_seed() or not getattr(self.s, "fmp_api_key", None):
+            return None
+        try:
+            out = await self.sweeper.refresh_index("sp500")
+            self.cfg = build_config(self.s, self.u)          # Book A and the non-stock list follow the new list
+            log.info("stocks: loaded the S&P 500 list (%s symbols)", out.get("symbols"))
+            return out
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.errors.append({"ts": time.time(), "where": "index list",
+                                "error": f"{type(e).__name__}: {e}"[:300]})
+            log.warning("stocks: could not load the S&P 500 list, staying on the seed (%s)", e)
+            return {"error": str(e)[:200]}
+
+    def missing(self) -> list[str]:
+        """Core symbols still short of history (and not parked as delisted)."""
+        need = int(getattr(self.s, "stocks_min_bars", 250))
+        cov = self.store.coverage()
+        out = []
+        for sym in self.u.core():
+            c = cov.get(self.sweeper.u_alias(sym))
+            if c is None or (c.bars < need and not c.delisted):
+                out.append(sym)
+        return out
+
+    async def first_start(self) -> dict:
+        """What run() does before its loop: real index list, then fill any missing history.
+
+        Called on every start, and cheap when there is nothing to do, so a backfill that was cut off
+        (the PC slept, the monitor restarted) simply carries on where it stopped."""
+        out: dict = {"index": await self.load_index_if_seed()}
         if getattr(self.s, "stocks_autofill", True):
             try:
-                stats = self.store.stats()
-                if (stats.get("symbols") or 0) < 5:
-                    log.info("stocks: store is empty, backfilling %d symbols", len(self.u.core()))
-                    await self.backfill()
+                todo = self.missing()
+                out["missing"] = len(todo)
+                if todo:
+                    log.info("stocks: backfilling %d symbol(s) short of history", len(todo))
+                    out["backfill"] = await self.backfill(todo)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 self.errors.append({"ts": time.time(), "where": "autofill",
                                     "error": f"{type(e).__name__}: {e}"[:300]})
+        return out
+
+    async def run(self) -> None:
+        self._stop.clear()
+        self.running = True
+        await self.first_start()
         try:
             while not self._stop.is_set():
                 now = datetime.now(NY)
@@ -460,6 +575,9 @@ class StockDesk:
             "sweep": self.sweeper.status(),
             "last_daily": self.last_daily or self._load("state.json", {}).get("last_daily"),
             "pitches": len(self.pitches()),
+            "research": {"schedule": getattr(self.s, "stocks_research", "weekly"), "busy": self.research_busy,
+                         "last": (lambda r: {"at": r.get("at"), "verdict": (r.get("verdict") or {}).get("overall")}
+                                  if r else None)(self.last_research())},
             "errors": list(self.errors)[-5:],
         }
 

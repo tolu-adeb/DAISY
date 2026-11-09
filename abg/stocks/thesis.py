@@ -280,7 +280,7 @@ def render_md(pack: dict, note: str | None = None) -> str:
                  + (f" — {_pct0(p['weight'])} of the book" if p.get("weight") else "") + " |")
     if p.get("r_dollars"):
         L.append(f"| Risked to the stop | {_money(p['r_dollars'])}"
-                 + (f" — {_pct(p['risk_pct'], 2)} of the book" if p.get("risk_pct") else "") + " |")
+                 + (f" — {_pct0(p['risk_pct'], 2)} of the book" if p.get("risk_pct") else "") + " |")
     if p.get("max_hold"):
         L.append(f"| Max hold | {p['max_hold']} trading days |")
     if p.get("ml_prob") is not None:
