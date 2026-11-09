@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from abg.utils import jsonable
 
+from . import board as B
 from . import pitch_plan as P
 from . import thesis as T
 from .config import build_config, describe as describe_cfg
@@ -319,7 +320,10 @@ class StockDesk:
 
             self._append_ledger([_ledger_row(p, state) for p in packs])
             self._record_pitches(packs, state)
-            sent = await self._post_daily(packs, state) if post else "not posted"
+            board = B.pick_board(packs, size=max(1, int(getattr(self.s, "stocks_board_size", 5) or 5)),
+                                 chase_atr=float(P.pitch_cfg(self.cfg)["chase_atr"]))
+            self._save("board.json", board)
+            sent = await self._post_daily(packs, state, board) if post else "not posted"
 
             self.last_daily = {
                 "at": datetime.now(NY).isoformat(timespec="seconds"), "as_of": state.date,
@@ -539,7 +543,7 @@ class StockDesk:
         try:
             if files:
                 body["attachments"] = [{"id": i, "filename": Path(f).name} for i, f in enumerate(files)]
-                multipart = {f"files[{i}]": (Path(f).name, Path(f).read_bytes(), "image/png")
+                multipart = {f"files[{i}]": (Path(f).name, Path(f).read_bytes(), _mime(Path(f)))
                              for i, f in enumerate(files)}
                 resp = await self.engine.http.raw.post(target, data={"payload_json": json.dumps(body)},
                                                        files=multipart, timeout=60)
@@ -553,15 +557,19 @@ class StockDesk:
             log.warning("stocks: Discord post failed (%s)", type(e).__name__)
             return "post failed"
 
-    async def _post_daily(self, packs: list[dict], state) -> str:
+    async def _post_daily(self, packs: list[dict], state, board: dict | None = None) -> str:
         cap = int(getattr(self.s, "stocks_post_max", 5))
         tag = (getattr(self.s, "stocks_tag", "") or "").strip()
         digest = T.digest_embed(packs, state, self.cfg)
         if tag:
             digest["title"] = f"[{tag}] {digest['title']}"
-        detail = [p for p in packs
-                  if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
-        detail.sort(key=lambda p: (p.get("rank") or 99))
+        if board is not None:                       # the day's top picks by conviction (docs/21.7)
+            by_id = {p["id"]: p for p in packs}
+            detail = [by_id[b["id"]] for b in board["picks"] if b["id"] in by_id]
+        else:
+            detail = [p for p in packs
+                      if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
+            detail.sort(key=lambda p: (p.get("rank") or 99))
         embeds, files = [digest], []
         for p in detail[:max(0, cap)]:
             e = T.embed(p)
@@ -571,9 +579,84 @@ class StockDesk:
                 files.append(self._p("memos") / png)
             embeds.append(e)
         res = await self._post_to(self._webhook(), embeds, files=files)
+        if res == "posted" and board is not None and board["picks"]:
+            await self._post_decks(board, [b["id"] for b in board["picks"]], "after the close")
         closes = [p for p in packs if p["action"] == "SELL"]
         if closes and res == "posted" and len(embeds) >= MAX_EMBEDS_PER_POST:
             await self._post([T.embed(p) for p in closes[:MAX_EMBEDS_PER_POST]])
+        return res
+
+    # ------------------------------------------------------------------ the day's top picks (docs/21.7)
+    def board(self) -> dict | None:
+        return self._load("board.json", None)
+
+    def _decks(self, ids: list[str]) -> list[Path]:
+        """The AIBG deck for each pitch id (built once, next to its memo). Missing python-pptx -> []."""
+        from . import deck as DK
+        if not getattr(self.s, "stocks_post_decks", True) or not DK.available():
+            return []
+        out = []
+        for pid in ids:
+            path = self._p("memos") / f"{pid}.pptx"
+            if not path.exists():
+                try:
+                    self.deck(pid, path)
+                except Exception as e:              # a deck is a convenience: never lose the post over it
+                    log.info("stocks: deck for %s failed (%s)", pid, type(e).__name__)
+                    continue
+            out.append(path)
+        return out
+
+    async def _post_decks(self, board: dict, ids: list[str], when: str) -> str:
+        decks = await asyncio.to_thread(self._decks, ids[:10])
+        if not decks:
+            return "no decks"
+        names = ", ".join(b["symbol"] for b in board["picks"] + board.get("reserves", []) if b["id"] in set(ids))
+        res = await self._post_to(self._webhook(), [], content=f"Pitch decks ({when}): {names}", files=decks)
+        if res == "posted":
+            board["decks_sent"] = sorted(set(board.get("decks_sent") or []) | {d.stem for d in decks})
+        return res
+
+    async def _quotes(self, symbols: list[str]) -> dict[str, dict]:
+        async def one(sym):
+            try:
+                q = (await self.engine.quote(sym, use_cache=False)).value
+                return sym, {"price": q.price, "open": q.open, "day_high": q.day_high, "day_low": q.day_low}
+            except Exception:
+                return sym, None
+        return {k: v for k, v in await asyncio.gather(*(one(x) for x in symbols)) if v}
+
+    def _board_slot(self, now: datetime) -> str | None:
+        from abg.live.market_hours import is_trading_day
+        board = self.board()
+        if not B.is_fresh(board, now.date()):
+            return None
+        slots = [x for x in str(getattr(self.s, "stocks_board_times", "09:00,12:00,15:00") or "").split(",") if x.strip()]
+        return B.due_slot(now, slots, list((board.get("posts") or {}).keys()), is_trading_day(now.date()))
+
+    async def board_post(self, slot: str, now: datetime | None = None) -> str:
+        """The 9:00 open post (today's picks, with decks) or a check-in (live status, swaps, decks for new picks)."""
+        now = now or datetime.now(NY)
+        board = self.board()
+        if not B.is_fresh(board, now.date()):
+            return "no board for today"
+        tag = (getattr(self.s, "stocks_tag", "") or "").strip()
+        swapped: list[str] = []
+        if slot <= "09:29":
+            kind = "open"
+        else:
+            kind = "check"
+            syms = [p["symbol"] for p in board["picks"] + (board.get("reserves") or [])]
+            board, swapped = B.check_in(board, await self._quotes(syms))
+        board.setdefault("posts", {})[slot] = {"at": now.isoformat(timespec="seconds"), "result": "pending"}
+        self._save("board.json", board)                     # mark first: a failed post is not retried in a loop
+        res = await self._post_to(self._webhook(), [B.board_embed(board, kind, now, tag)])
+        ids = [p["id"] for p in board["picks"]] if kind == "open" else swapped
+        if res == "posted" and ids:
+            await self._post_decks(board, ids, f"{slot} ET")
+        board["posts"][slot]["result"] = res
+        self._save("board.json", board)
+        self._broadcast("stocks_board", {"slot": slot, "posted": res, "picks": [p["symbol"] for p in board["picks"]]})
         return res
 
     def _broadcast(self, kind: str, payload: dict) -> None:
@@ -736,6 +819,8 @@ class StockDesk:
                         else:
                             await self._sleep(600)                       # Polygon not out yet: check in 10 min
                             continue
+                    elif (slot := self._board_slot(now)) is not None:
+                        await self.board_post(slot, now)
                     elif self._sweep_due(now):
                         await self.intraday()
                 except asyncio.CancelledError:
@@ -829,6 +914,11 @@ class StockDesk:
 
 
 # --------------------------------------------------------------------------- helpers
+def _mime(path: Path) -> str:
+    return {".png": "image/png", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".pdf": "application/pdf"}.get(path.suffix.lower(), "application/octet-stream")
+
+
 def _public(p: dict) -> dict:
     """A pack trimmed for the dashboard and the API: no provider internals, no raw frames."""
     keep = ("id", "as_of", "symbol", "name", "sector", "action", "book", "book_label", "edge",

@@ -345,6 +345,9 @@ class Settings(BaseSettings):
     stocks_post_max: int = 5                       # detailed pitch embeds per post; the rest are in the digest
     stocks_charts: bool = True                     # price / valuation / peer PNGs next to each memo (needs matplotlib)
     stocks_post_charts: bool = True                # attach the price chart to each detailed Discord pitch
+    stocks_board_size: int = 5                     # top picks posted after the close and checked during the day
+    stocks_board_times: str = "09:00,12:00,15:00"  # ET, trading days: the open post and the check-ins (docs/21.7)
+    stocks_post_decks: bool = True                 # attach the AIBG deck for each new pick (needs python-pptx)
     stocks_books: str = ""                         # comma list to limit which books run (a,b,c,d,e or their names)
     stocks_benchmark: str = "SPY"
     stocks_initial_equity: float = 100_000.0       # the paper book the sizing rules work against

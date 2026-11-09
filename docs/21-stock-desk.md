@@ -121,6 +121,22 @@ EPS as an owner-earnings proxy because no provider gives cash-flow statements.
 **Samples:** `docs/samples/` — a pullback BUY, a mean-reversion BUY, a SELL, the charts, and the
 deck for the first. They use the synthetic test panel and invented company facts.
 
+## 21.7 The day's top picks on Discord (after the close, 9:00, 12:00, 15:00 ET)
+
+| When (ET, trading days) | What is posted |
+|---|---|
+| After the close (16:20, later if Polygon is late) | The digest, the **top 5 buys by conviction** (single-stock books) as full pitches with price charts, then a message with their 5 AIBG decks |
+| 9:00 | "Today's top 5 — buy at the 9:30 open": entry, zone, stop, T1/T2, size, plus the 5 decks again |
+| 12:00 and 15:00 | Check-in on the same picks from live quotes: in the zone / above it / below it / reached T1 / stopped / skipped (opened above the don't-chase line or below the stop). A pick that drops out is replaced by the next-best reserve still in play, marked *new*, and only its deck is sent |
+
+Picks are never made midday: the signals come from the close and the tested entry is the open, so the
+check-ins track the morning's list. The board lives in `<data_dir>/stocks/board.json` (picks, reserves,
+what was dropped, which posts went out). A slot posts once, within 45 minutes of its time; a restart
+inside that window still posts it, later than that it is skipped.
+
+`.env`: `ABG_STOCKS_BOARD_SIZE` (5), `ABG_STOCKS_BOARD_TIMES` ("09:00,12:00,15:00"), `ABG_STOCKS_POST_DECKS`
+(true; needs python-pptx, which `[all]` installs on the server).
+
 ## 21.3 Rules that still hold
 
 Paper only (`ABG_STOCKS_TAG=PAPER` on every post); webhooks only in `.env`; one live poster per channel;
