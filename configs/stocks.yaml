@@ -143,3 +143,40 @@ books:
     rebound_days: 10
     rebalance_days: 5
     min_change: 0.02
+
+# ---------------------------------------------------------------------------------------------------
+# Pitch write-ups (docs/21.6). None of these change which trades fire or how the books size them:
+# they shape how each signal is explained and planned for the fund. Every number is computed in code.
+pitch:
+  entry_zone_atr: 0.5         # entry zone shown around the last close, in ATRs (the tested entry is the open)
+  chase_atr: 1.0              # untested refinement: skip a long that opens this many ATRs above the close
+  earnings_days: 10           # earnings this close to the entry offer a "wait for the print" alternative
+  min_rr: 1.5                 # reward:risk to T1 below this is flagged in the plan
+  risk_per_trade: 0.005       # share of the fund risked to the stop, before the conviction scale
+  max_position_pct: 0.10      # hard cap on one position as a share of the fund (analysts propose 5-12%)
+  fund_equity: null           # the fund's size in $ for share counts; null = the paper book's equity
+  size_scale: {High: 1.0, Medium: 0.75, Low: 0.5}   # risk multiplier per conviction bucket
+  scenario_weights: {bear: 0.25, base: 0.50, bull: 0.25}   # probability-weighted 12-month target
+  valuation_agree_upside: 0.15  # 12-month upside at/above this counts as valuation agreeing with a buy
+  horizon_months: 12
+  buckets: {High: 70, Medium: 45}   # conviction score cut-offs (below Medium = Low)
+  min_base_trades: 30         # base rates from fewer replayed trades are flagged as a small sample
+  conviction:                 # points added to a start of 50, clamped to 0..100; every hit is listed in the pitch
+    start: 50
+    gates_all: 10             # every check the rule made passed
+    gates_missing: -15
+    ml_above: 10              # walk-forward model odds at/above its threshold (only when the ML gate is on)
+    ml_below: -10
+    valuation_agrees: 10
+    valuation_disagrees: -8   # buying with negative 12-month upside
+    horizons_disagree: -7     # trade view and probability-weighted 12-month view point opposite ways
+    regime: {bull_trend: 5, bull_chop: 0, risk_off: -10, crisis: -15, warmup: -5}
+    flag_each: -3             # per early-warning flag on ...
+    flags_max: -12            # ... down to this
+    earnings_in_hold: -10
+    no_fundamentals: -5
+    small_sample: -5
+  glossary: true              # glossary at the bottom of every memo
+  ai_infrastructure: [NVDA, AVGO, AMD, TSM, ASML, MU, ARM, MRVL, ANET, AMAT, LRCX, KLAC, CDNS, SNPS, SMCI,
+                      DELL, HPE, VRT, ETN, PWR, GEV, CEG, VST, NEE, TLN, EQIX, DLR, ORCL, MSFT, AMZN, GOOGL,
+                      GOOG, META, CRWV, NBIS, COHR, CIEN, GLW]   # the fund's AI focus; a tag, not a signal

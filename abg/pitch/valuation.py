@@ -62,7 +62,13 @@ def implied_growth(price: float, cf0: float, r: float, tg: float = 0.025, years:
 def scenarios(cf0: float, g: float, r: float, tg: float = 0.025) -> dict:
     """Bear / base / bull: growth x0.5 / x1 / x1.5 (bear also loses 3 points), discount rate +1% / 0 / -0.5%."""
     cases = {"bear": (g * 0.5 - 0.03, r + 0.01), "base": (g, r), "bull": (g * 1.5, max(tg + 0.01, r - 0.005))}
-    return {k: {"growth": round(gg, 4), "rate": round(rr, 4), "value": dcf(cf0, gg, rr, tg)} for k, (gg, rr) in cases.items()}
+    # round the inputs first and value from the rounded ones, so the arithmetic a pitch prints
+    # ("EPS growing 9.1%, discounted at 10.4%") reproduces the value exactly
+    out = {}
+    for k, (gg, rr) in cases.items():
+        gg, rr = round(gg, 4), round(rr, 4)
+        out[k] = {"growth": gg, "rate": rr, "value": dcf(cf0, gg, rr, tg)}
+    return out
 
 
 def comps(target: dict, peers: list[dict]) -> dict:

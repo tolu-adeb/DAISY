@@ -200,6 +200,42 @@ class StockDesk:
             news = []
         return fund, peers, news, provider
 
+    def _pitch_context(self, ls: LiveSignals, state) -> dict:
+        """What every pitch's plan needs from the replay and the paper book (docs/21.6)."""
+        r = ls.result or {}
+        eq = r.get("equity")
+        period = (str(eq.index[0].date()), str(eq.index[-1].date())) if eq is not None and len(eq) else None
+        held_value, held_shares, held_by_book = {}, {}, {}
+        for book, pos in (state.positions or {}).items():
+            for sym, d in pos.items():
+                held_by_book.setdefault(book, {})[sym] = float(d.get("shares") or 0)
+                held_shares[sym] = held_shares.get(sym, 0.0) + float(d.get("shares") or 0)
+                held_value[sym] = held_value.get(sym, 0.0) + float(d.get("shares") or 0) * float(d.get("price") or 0)
+        tp = (self.cfg.get("books") or {}).get("trend_pullback", {})
+        ml = tp.get("ml") or {}
+        return {"trades": r.get("trades"), "period": period, "store": self.store,
+                "holdings": sorted(held_shares), "held_value": held_value, "held_shares": held_shares,
+                "held_by_book": held_by_book,
+                "sectors": self.store.sectors(),
+                "ml_threshold": float(ml.get("threshold", 0.55)) if ml.get("enabled") else None}
+
+    async def _earnings(self, symbols: list[str]) -> dict[str, str]:
+        """Next earnings date per symbol from Finnhub's calendar (two calls for ~45 days). Empty on any
+        failure or without a key: a missing date is shown as not in data, never guessed."""
+        if not symbols or not getattr(self.s, "finnhub_api_key", None):
+            return {}
+        try:
+            from abg.swing.wide import Sources
+            today = datetime.now(NY).date()
+            cal = await Sources(self.s, self.engine.http).earnings(today, today + timedelta(days=45))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.info("stocks: earnings calendar unavailable (%s)", type(e).__name__)
+            return {}
+        want = set(symbols)
+        return {s: ds[0] for s, ds in cal.items() if s in want and ds}
+
     async def daily(self, post: bool = True, enrich: int | None = None) -> dict:
         """The main event: today's signals, written up, posted and recorded."""
         await self.load_index_if_seed()            # weekly re-check; never fatal
@@ -217,13 +253,25 @@ class StockDesk:
             worth.sort(key=lambda c: (c.rank or 99))
             enrich_set = {c.symbol for c in worth[:max(0, n_enrich)]}
 
+            base_ctx = self._pitch_context(ls, state)
+            entry_syms = sorted({c.symbol for c in cands if c.is_entry})
+            earnings = await self._earnings(entry_syms)
             packs: list[dict] = []
             for c in cands:
                 fund = peers = news = provider = None
                 if c.symbol in enrich_set:
                     fund, peers, news, provider = await self._enrich(c.symbol)
-                packs.append(T.build_pack(c, state, self.cfg, fund=fund, peers=peers or [],
-                                          news=news or [], provider=provider))
+                ctx = {**base_ctx, "bars": self.store.frame(c.symbol) if c.is_entry else None,
+                       "earnings": earnings.get(c.symbol), "fund_provider": provider}
+                try:
+                    packs.append(T.build_pack(c, state, self.cfg, fund=fund, peers=peers or [],
+                                              news=news or [], provider=provider, ctx=ctx))
+                except ValueError as e:
+                    # a units mismatch or out-of-order levels is a data fault: say so, keep the signal
+                    self.errors.append({"ts": time.time(), "where": f"pitch {c.symbol}", "error": str(e)[:300]})
+                    log.warning("stocks: plan for %s failed its checks (%s); pitching without it", c.symbol, e)
+                    packs.append(T.build_pack(c, state, self.cfg, fund=None, peers=[], news=news or [],
+                                              provider=provider, ctx={**ctx, "earnings": None}))
 
             for p in packs:
                 if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum":
