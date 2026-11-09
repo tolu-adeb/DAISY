@@ -34,9 +34,10 @@ fast = ["scipy>=1.10"]
 parquet = ["pyarrow>=14"]
 desktop = ["plyer>=2.1"]
 charts = ["matplotlib>=3.7"]
+deck = ["python-pptx>=0.6.21", "pillow>=9"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 agents = ["strands-agents[anthropic]>=1.62,<2", "strands-agents-evals>=1.7,<2", "mcp>=1.10"]
-all = ["yfinance>=0.2.50", "scipy>=1.10", "pyarrow>=14", "plyer>=2.1", "matplotlib>=3.7", "pytest>=8", "pytest-asyncio>=0.23"]
+all = ["yfinance>=0.2.50", "scipy>=1.10", "pyarrow>=14", "plyer>=2.1", "matplotlib>=3.7", "python-pptx>=0.6.21", "pillow>=9", "pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 abg = "abg.cli:app"
@@ -49,7 +50,7 @@ abg = "abg.cli:app"
 include = ["abg*"]
 
 [tool.setuptools.package-data]
-abg = ["api/static/*", "api/static/vendor/*", "agents/sops/*.md"]
+abg = ["api/static/*", "api/static/vendor/*", "agents/sops/*.md", "assets/*.pptx"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

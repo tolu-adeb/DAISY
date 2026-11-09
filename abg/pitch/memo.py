@@ -96,7 +96,11 @@ def render_md(pack: dict, note: str | None = None) -> str:
     sc, cm = v.get("scenarios") or {}, v.get("comps") or {}
     L = [f"# {pack['symbol']} - {pack['name']}: {pack['verdict']}",
          f"*{pack['made_at'][:16].replace('T', ' ')} ET - price {_px(pack['price'])} - sector {pack.get('sector') or 'n/a'}*",
-         "", "Research only, not advice. Paper scorecard vs SPY tracks every pitch.", "", "## Thesis"]
+         "", "Research only, not advice. Paper scorecard vs SPY tracks every pitch.", ""]
+    rec = pack.get("rec") or {}
+    if rec.get("rating"):
+        L += [f"**Rating: {rec['rating']} — {rec.get('action_line', '')}** ({rec.get('basis', '')}).", ""]
+    L += ["## Thesis"]
     L += [f"- {t}" for t in thesis(pack)]
     if note:
         L += ["", "## Analyst write-up (Claude, from the data pack only)", note]

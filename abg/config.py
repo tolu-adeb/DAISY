@@ -351,6 +351,8 @@ class Settings(BaseSettings):
     stocks_config: str | None = None               # path to the rule file (default: configs/stocks.yaml)
     stocks_daily_time: str = "16:20"               # ET, weekdays: the after-close pass that produces the pitches
     stocks_post_max: int = 5                       # detailed pitch embeds per post; the rest are in the digest
+    stocks_charts: bool = True                     # price / valuation / peer PNGs next to each memo (needs matplotlib)
+    stocks_post_charts: bool = True                # attach the price chart to each detailed Discord pitch
     stocks_books: str = ""                         # comma list to limit which books run (a,b,c,d,e or their names)
     stocks_benchmark: str = "SPY"
     stocks_initial_equity: float = 100_000.0       # the paper book the sizing rules work against

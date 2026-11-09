@@ -91,7 +91,8 @@ async function showMemo(id) {
   $("#sk-memo-note").textContent = id;
   try {
     const r = await api(`/api/stocks/memo/${encodeURIComponent(id)}`);
-    $("#sk-memo").innerHTML = md(r.markdown);
+    $("#sk-memo").innerHTML = `<p><a class="btn small" href="/api/stocks/deck/${encodeURIComponent(id)}" download
+      title="The AIBG 5-slide PowerPoint, built from this pitch's numbers and charts">Download deck (.pptx)</a></p>` + md(r.markdown);
   } catch (e) {
     // Book A rebalances and closes get a digest line, not a full write-up
     $("#sk-memo").innerHTML = c ? `<h2>${esc(c.action)} ${esc(c.symbol)}</h2><p>${esc(c.what_happened)}</p>
@@ -113,12 +114,35 @@ function renderScore(sc) {
   $("#sk-score").innerHTML = (books.length ? `<table><thead><tr><th>Book</th><th class="n">Pitches</th><th class="n">Avg return</th>
       <th class="n">vs benchmark</th><th class="n">Beat it</th></tr></thead><tbody>${books.map(([b, v]) => `<tr><td>${esc(SHORT[b] || b)}</td>
       <td class="n">${v.n}</td><td class="n">${sg(v.avg_ret)}</td><td class="n">${sg(v.avg_excess)}</td><td class="n">${v.beat_spy == null ? "—" : p0(v.beat_spy)}</td></tr>`).join("")}</tbody></table>` : "")
-    + (rows.length ? `<h3>Every pitch</h3><table><thead><tr><th>Signal</th><th>Ticker</th><th>Book</th><th class="n">Entry</th><th class="n">Last</th>
-      <th class="n">Return</th><th class="n">Benchmark</th><th class="n">vs bench</th><th></th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td>${esc(r.as_of)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(SHORT[r.book] || r.book)}</td>
-        <td class="n">${px(r.price)}</td><td class="n">${px(r.last)}</td><td class="n">${sg(r.ret)}</td><td class="n">${sg(r.spy_ret)}</td>
-        <td class="n">${sg(r.excess)}</td><td><button class="btn small" data-skmemo="${esc(r.id)}">Thesis</button></td></tr>`).join("")}</tbody></table>`
+    + planTable(sc && sc.plan)
+    + (rows.length ? `<h3>Every pitch</h3><table><thead><tr><th>Signal</th><th>Ticker</th><th>Book</th><th>Rating</th><th class="n">Entry</th><th class="n">Last</th>
+      <th class="n">Return</th><th class="n">vs bench</th><th>Plan so far</th><th class="n">R now</th><th></th></tr></thead><tbody>
+      ${rows.map((r) => { const pl = r.plan || {}, m = r.plan_mark || {}; return `<tr><td>${esc(r.as_of)}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(SHORT[r.book] || r.book)}</td>
+        <td>${esc(pl.rating || r.action)}${pl.bucket ? ` <span class="muted">${esc(pl.bucket)}</span>` : ""}</td>
+        <td class="n">${px(m.entry_open || r.price)}</td><td class="n">${px(r.last)}</td><td class="n">${sg(r.ret)}</td>
+        <td class="n">${sg(r.excess)}</td><td>${esc(m.outcome || "—")}${m.chase_skip ? ' <span class="muted" title="untested refinement would have skipped it">(chase skip)</span>' : ""}</td>
+        <td class="n">${m.r_now == null ? "—" : (m.r_now > 0 ? "+" : "") + fmt(m.r_now, 2) + "R"}</td>
+        <td><button class="btn small" data-skmemo="${esc(r.id)}">Thesis</button></td></tr>`; }).join("")}</tbody></table>`
       : '<p class="muted">No pitches yet.</p>');
+}
+
+// the plan's levels, marked: did T1 come before the stop, by book and by conviction, tested vs refined
+function planTable(pl) {
+  if (!pl || !pl.all || !pl.all.n) return "";
+  const r = (x) => (x == null ? "—" : p0(x));
+  const row = (label, v) => `<tr><td>${label}</td><td class="n">${v.n}</td><td class="n">${v.resolved}</td><td class="n">${r(v.t1_rate)}</td>
+    <td class="n">${r(v.t2_rate)}</td><td class="n">${r(v.stop_first_rate)}</td><td class="n">${r(v.time_rate)}</td>
+    <td class="n">${v.avg_r_now == null ? "—" : fmt(v.avg_r_now, 2) + "R"}</td>
+    <td class="n">${v.twelve_done ? r(v.beat_weighted_rate) + ` <span class="muted">(${v.twelve_done})</span>` : "—"}</td>
+    <td class="n">${v.vs_spy ? sg(v.vs_spy.avg_excess) : "—"}</td></tr>`;
+  const rows = [row("<b>All (tested: next open)</b>", { ...pl.tested }),
+    row(`Refined <span class="muted" title="${esc(pl.refined.label || "")}">(untested)</span>`, pl.refined)]
+    .concat(Object.entries(pl.by_bucket || {}).map(([b, v]) => row(`${esc(b)} conviction`, v)))
+    .concat(Object.entries(pl.by_book || {}).map(([b, v]) => row(esc(SHORT[b] || b), v)));
+  return `<h3>The plan, marked</h3><p class="muted">Entry at the next open. A day that touches both the stop and T1 counts as the stop. 12-month column: share that reached the probability-weighted target by the horizon (count in brackets).</p>
+    <table><thead><tr><th></th><th class="n">Pitches</th><th class="n">Resolved</th><th class="n">T1 hit</th><th class="n">T2 hit</th>
+    <th class="n">Stop first</th><th class="n">Timed out</th><th class="n">Avg R</th><th class="n">12-mo target</th><th class="n">vs bench</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
 }
 
 // ------------------------------------------------------------------ universe

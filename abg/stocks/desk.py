@@ -26,6 +26,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from abg.utils import jsonable
+
+from . import pitch_plan as P
 from . import thesis as T
 from .config import build_config, describe as describe_cfg
 from .live import LiveSignals
@@ -200,6 +203,18 @@ class StockDesk:
             news = []
         return fund, peers, news, provider
 
+    def _charts(self, packs: list[dict]) -> None:
+        """Price, valuation and peer charts next to each memo (pack["charts"]); never fatal."""
+        from . import charts as CH
+        if not packs or not CH.available():
+            return
+        out = self._p("memos")
+        for p in packs:
+            try:
+                p["charts"] = CH.render_all(p, self.store.frame(p["symbol"]), out)
+            except Exception as e:                  # a chart is decoration: log, keep the pitch
+                log.info("stocks: charts for %s failed (%s)", p["symbol"], type(e).__name__)
+
     async def _writeups(self, packs: list[dict]) -> None:
         """Claude's write-up for the pitches that will be posted in detail (it costs tokens per call).
         Only fields that pass the validator are used; the rest stay template text."""
@@ -286,12 +301,18 @@ class StockDesk:
 
             if getattr(self.s, "pitch_ai_memo", False) and getattr(self.s, "anthropic_api_key", None):
                 await self._writeups(packs)
+            memo_packs = [p for p in packs if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
+            if getattr(self.s, "stocks_charts", True):
+                await asyncio.to_thread(self._charts, memo_packs)
             for p in packs:
                 if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum":
                     try:
                         self._p("memos").mkdir(parents=True, exist_ok=True)
                         (self._p("memos") / f"{p['id']}.md").write_text(
                             T.render_md(p), encoding="utf-8")
+                        # the whole pack, so a deck (abg pitch deck) can be built later from the same numbers
+                        (self._p("memos") / f"{p['id']}.json").write_text(
+                            json.dumps(jsonable(p), default=str), encoding="utf-8")
                     except OSError as e:
                         log.warning("stocks: could not write memo %s (%s)", p["id"], e)
 
@@ -332,6 +353,7 @@ class StockDesk:
                          "ml_prob": p.get("ml_prob"), "regime": state.regime, "crisis": state.crisis,
                          "fair_value": (p.get("valuation") or {}).get("fair_value"),
                          "upside": (p.get("valuation") or {}).get("upside"),
+                         "plan": P.plan_record(p, P.pitch_cfg(self.cfg)), "plan_mark": None,
                          "marked": None, "last": None, "ret": None, "spy_ret": None, "excess": None})
         self._save("pitches.json", rows[-500:])
 
@@ -362,6 +384,11 @@ class StockDesk:
             r["spy_ret"] = round(sb / float(sa) - 1, 5)
             r["excess"] = round(r["ret"] - r["spy_ret"], 5)
             r["marked"] = str(px.index[-1].date())
+            if r.get("plan"):
+                try:
+                    r["plan_mark"] = P.mark_plan(r["plan"], r["as_of"], px, spy)
+                except Exception as e:                # a bad row must not stop the scorecard
+                    log.info("stocks: plan mark for %s failed (%s)", r.get("id"), e)
             changed = True
         if changed:
             self._save("pitches.json", rows)
@@ -376,7 +403,23 @@ class StockDesk:
                     "beat_spy": round(sum(1 for r in rs if r["excess"] > 0) / len(rs), 4)}
 
         books = sorted({r["book"] for r in rows})
+        planned = [r for r in rows if r.get("plan")]
+        buckets = [b for b in ("High", "Medium", "Low") if any((r["plan"] or {}).get("bucket") == b for r in planned)]
+        # tested = every pitch, entered at the next open; refined = the untested "don't chase" and
+        # "gap below the stop" skips applied, kept apart so the refinement earns its place or doesn't
+        refined = [r for r in planned if not ((r.get("plan_mark") or {}).get("chase_skip")
+                                              or (r.get("plan_mark") or {}).get("gap_skip"))]
         return {"all": agg(rows), "by_book": {b: agg([r for r in rows if r["book"] == b]) for b in books},
+                "plan": {"all": P.plan_stats(planned),
+                         "by_book": {b: P.plan_stats([r for r in planned if r["book"] == b]) for b in books
+                                     if any(r["book"] == b for r in planned)},
+                         "by_bucket": {b: {**P.plan_stats([r for r in planned if r["plan"].get("bucket") == b]),
+                                           **{"vs_spy": agg([r for r in planned if r["plan"].get("bucket") == b])}}
+                                       for b in buckets},
+                         "tested": {**P.plan_stats(planned), "vs_spy": agg(planned)},
+                         "refined": {**P.plan_stats(refined), "vs_spy": agg(refined),
+                                     "label": "untested refinement: skip if it opens 1 ATR above the close "
+                                              "or below the stop"}},
                 "pitches": sorted(rows, key=lambda r: r["as_of"], reverse=True)[:200]}
 
     # ------------------------------------------------------------------ research (R&D desk, docs/21)
@@ -481,16 +524,27 @@ class StockDesk:
         return await self._post_to(self._webhook(), embeds, content=content)
 
     async def _post_to(self, url: str | None, embeds: list[dict], content: str | None = None,
-                       username: str = "Stock Desk") -> str:
+                       username: str = "Stock Desk", files: list[Path] | None = None) -> str:
+        """Post embeds (and optional PNGs, referenced from an embed as ``attachment://<name>``)."""
         if not url:
             return "dashboard"
         body = {"username": username, "allowed_mentions": {"parse": []},
                 "embeds": embeds[:MAX_EMBEDS_PER_POST]}
         if content:
             body["content"] = content[:1900]
+        target = url + ("&" if "?" in url else "?") + "wait=true"
+        files = [f for f in (files or []) if f and Path(f).is_file()][:10]
         try:
-            await self.engine.http.request("POST", url + ("&" if "?" in url else "?") + "wait=true",
-                                           provider="discord", json=body)
+            if files:
+                body["attachments"] = [{"id": i, "filename": Path(f).name} for i, f in enumerate(files)]
+                multipart = {f"files[{i}]": (Path(f).name, Path(f).read_bytes(), "image/png")
+                             for i, f in enumerate(files)}
+                resp = await self.engine.http.raw.post(target, data={"payload_json": json.dumps(body)},
+                                                       files=multipart, timeout=60)
+                if resp.status_code >= 400:          # status only: the URL carries the webhook token
+                    raise RuntimeError(f"HTTP {resp.status_code}")
+            else:
+                await self.engine.http.request("POST", target, provider="discord", json=body)
             return "posted"
         except Exception as e:
             self.errors.append({"ts": time.time(), "where": "discord", "error": type(e).__name__})
@@ -506,8 +560,15 @@ class StockDesk:
         detail = [p for p in packs
                   if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
         detail.sort(key=lambda p: (p.get("rank") or 99))
-        embeds = [digest] + [T.embed(p) for p in detail[:max(0, cap)]]
-        res = await self._post(embeds)
+        embeds, files = [digest], []
+        for p in detail[:max(0, cap)]:
+            e = T.embed(p)
+            png = (p.get("charts") or {}).get("price")
+            if png and (self._p("memos") / png).is_file() and getattr(self.s, "stocks_post_charts", True):
+                e["image"] = {"url": f"attachment://{png}"}
+                files.append(self._p("memos") / png)
+            embeds.append(e)
+        res = await self._post_to(self._webhook(), embeds, files=files)
         closes = [p for p in packs if p["action"] == "SELL"]
         if closes and res == "posted" and len(embeds) >= MAX_EMBEDS_PER_POST:
             await self._post([T.embed(p) for p in closes[:MAX_EMBEDS_PER_POST]])
@@ -727,6 +788,35 @@ class StockDesk:
     def today(self) -> dict:
         """What the dashboard shows: the last daily pass, straight from disk so a page load is cheap."""
         return self._load("today.json", {"state": None, "candidates": []})
+
+    def pack(self, key: str) -> dict | None:
+        """A saved pitch pack by id, or the newest one for a ticker."""
+        d = self.dir / "memos"
+        if not d.exists():
+            return None
+        exact = d / f"{Path(key).name}.json"
+        if exact.exists():
+            path = exact
+        else:
+            sym = key.strip().upper()
+            hits = sorted(d.glob(f"*-{sym}.json"))
+            if not hits:
+                return None
+            path = hits[-1]                          # ids start with the date, so the last is the newest
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def deck(self, key: str, out: Path | None = None) -> Path:
+        """The AIBG 5-slide deck for a saved pitch (id or ticker), next to its memo."""
+        from . import deck as DK
+        if not DK.available():
+            raise RuntimeError("python-pptx is not installed: pip install .[deck]")
+        p = self.pack(key)
+        if p is None:
+            raise FileNotFoundError(f"no saved pitch for {key!r} (packs are saved by the daily pass)")
+        return DK.build_deck(p, out or (self.dir / "memos" / f"{p['id']}.pptx"), charts_dir=self.dir / "memos")
 
     def memo(self, pitch_id: str) -> str | None:
         p = self.dir / "memos" / f"{Path(pitch_id).name}.md"

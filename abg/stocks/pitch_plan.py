@@ -199,17 +199,27 @@ def trade_targets(c, base: dict, bars: pd.DataFrame | None, as_of: date) -> dict
                             "50-day EMA, the trailing stop or time. T1/T2 are where its past winners exited.")
     elif c.book == "mean_reversion":
         sma5 = _f(f.get("sma5"))
-        if sma5:
+        if sma5 and entry and sma5 > entry:
             out["t1"], out["t1_kind"] = round(sma5, 4), "rule exit"
             out["t1_basis"] = f"the book exits when the close gets back above the 5-day average, today ${sma5:.2f}"
-            if entry and sma5 <= entry:
-                out["notes"].append("The 5-day average is already at or below the entry, so the rule exit "
-                                    "could trigger on the first close.")
+        elif sma5:
+            out["notes"].append(f"The 5-day average (${sma5:.2f}) is already at or below the entry, so the rule "
+                                "exit could trigger on the first close above it; T1 falls back to past winners.")
+            m = _f(base.get("median_win_R"))
+            if r_unit and m:
+                out["t1"], out["t1_kind"] = round(entry + m * r_unit, 4), "reference level"
+                out["t1_basis"] = (f"median winning exit of this book's replayed trades = {m:.2f}R; "
+                                   f"{m:.2f} x ${r_unit:.2f} + ${entry:.2f}")
         m = _f(base.get("p75_win_R"))
         if r_unit and m:
-            out["t2"], out["t2_kind"] = round(entry + m * r_unit, 4), "reference level"
-            out["t2_basis"] = (f"75th-percentile winning exit of this book's replayed trades = {m:.2f}R; "
-                               f"{m:.2f} x ${r_unit:.2f} + ${entry:.2f}")
+            t2 = round(entry + m * r_unit, 4)
+            if out["t1"] is None or t2 > out["t1"]:
+                out["t2"], out["t2_kind"] = t2, "reference level"
+                out["t2_basis"] = (f"75th-percentile winning exit of this book's replayed trades = {m:.2f}R; "
+                                   f"{m:.2f} x ${r_unit:.2f} + ${entry:.2f}")
+            else:
+                out["notes"].append(f"No stretch target: past winners' 75th-percentile exit (${t2:.2f}) is "
+                                    "below the rule exit, so the rule exit is the target.")
     elif c.book in ("xs_momentum", "dual_momentum"):
         out["review_date"] = next_month_end_session(as_of).isoformat()
         out["notes"].append("A monthly-rebalanced book has no price trigger: it holds while the name stays in "
@@ -224,6 +234,9 @@ def trade_targets(c, base: dict, bars: pd.DataFrame | None, as_of: date) -> dict
             out["notes"].append(f"The 20-day high (${hi20:.2f}) sits below T1: expect resistance before it.")
         elif out["t1"] and hi52 and entry and entry < hi52 < out["t1"]:
             out["notes"].append(f"The 52-week high (${hi52:.2f}) sits below T1: expect resistance before it.")
+    if out["t1"] and out["t2"] and out["t2"] <= out["t1"]:
+        out["notes"].append(f"T2 (${out['t2']:.2f}) was not above T1, so it is dropped.")
+        out["t2"] = out["t2_kind"] = out["t2_basis"] = None
     if entry and stop and out["t1"] and not (out["t1"] > entry > stop):
         raise ValueError(f"{c.symbol}: levels out of order for a long (stop {stop}, entry {entry}, T1 {out['t1']})")
     return out
@@ -547,3 +560,115 @@ def exit_review(c, positions: dict, base: dict) -> dict | None:
                              + ("a normal outcome for this book." if abs(r - ref) <= max(0.5, abs(ref)) else
                                 "an outlier for this book - worth a look at what was different."))
     return out
+
+
+# --------------------------------------------------------------------------- scorecard (Part 10)
+def plan_record(pack: dict, pcfg: dict) -> dict | None:
+    """The plan as pitched, frozen, so the scorecard can mark the levels and not just the close."""
+    pl, rec = pack.get("plan") or {}, pack.get("rec") or {}
+    if not pl:
+        return None
+    ent, tgt, inv = pl.get("entry") or {}, pl.get("targets") or {}, pl.get("investment") or {}
+    cases = inv.get("cases") or {}
+    atr, price = _f(pack.get("atr")), _f(pack.get("price"))
+    return {
+        "rating": rec.get("rating"),
+        "conviction": (rec.get("conviction") or {}).get("score"),
+        "bucket": (rec.get("conviction") or {}).get("bucket"),
+        "entry_date": ent.get("date"), "entry_ref": ent.get("reference"), "zone": ent.get("zone"),
+        "chase_above": _r(price + float(pcfg["chase_atr"]) * atr, 4) if price and atr else None,
+        "stop": _f(pack.get("stop")), "t1": tgt.get("t1"), "t2": tgt.get("t2"),
+        "t1_kind": tgt.get("t1_kind"), "review_date": tgt.get("review_date"),
+        "max_hold": pl.get("max_hold"),
+        "horizon": inv.get("horizon") if inv.get("available") else None,
+        "bear": (cases.get("bear") or {}).get("value"), "base": (cases.get("base") or {}).get("value"),
+        "bull": (cases.get("bull") or {}).get("value"), "prob_weighted": inv.get("prob_weighted"),
+        "horizons_disagree": pl.get("horizons_disagree"),
+        "refinements": [x.get("rule") for x in ent.get("refinements") or []],
+    }
+
+
+def mark_plan(plan: dict, as_of: str, px: pd.DataFrame, bench: pd.DataFrame | None = None) -> dict | None:
+    """Walk the bars after the signal: tested entry at the next open, then the first of stop / T1 within
+    the book's max hold (a day that touches both counts as the stop: conservative), T2 after T1, and the
+    12-month view at its horizon. ``None`` until there is a session after the signal."""
+    if px is None or px.empty or not plan:
+        return None
+    after = px[px.index > pd.Timestamp(as_of)]
+    if after.empty:
+        return None
+    first = after.iloc[0]
+    entry = _f(first.get("open")) or _f(first.get("close"))
+    if not entry:
+        return None
+    stop, t1, t2 = _f(plan.get("stop")), _f(plan.get("t1")), _f(plan.get("t2"))
+    hold = int(plan.get("max_hold") or 0)
+    window = after.iloc[:hold] if hold else after
+    out = {"entry_open": _r(entry, 4), "entry_date": str(after.index[0].date()),
+           "chase_skip": bool(plan.get("chase_above") and entry > float(plan["chase_above"])),
+           "gap_skip": bool(stop and entry <= stop),
+           "t1_hit": None, "t2_hit": None, "stop_hit": None, "outcome": "open", "days": None,
+           "r_now": None, "twelve": None}
+    done = False
+    for i, (ts, bar) in enumerate(window.iterrows()):
+        hi, lo = _f(bar.get("high")) or _f(bar.get("close")), _f(bar.get("low")) or _f(bar.get("close"))
+        day = str(ts.date())
+        if stop and lo is not None and lo <= stop:
+            out["stop_hit"] = day
+            out["outcome"] = "T1 then stop" if out["t1_hit"] else "stop"
+            out["days"] = i + 1
+            done = True
+            break
+        if t1 and hi is not None and hi >= t1 and not out["t1_hit"]:
+            out["t1_hit"], out["outcome"], out["days"] = day, "T1", i + 1
+        if t2 and hi is not None and hi >= t2 and out["t1_hit"]:
+            out["t2_hit"], out["outcome"], out["days"] = day, "T2", i + 1
+            done = True
+            break
+    if not done and hold and len(after) >= hold and out["outcome"] == "open":
+        out["outcome"], out["days"] = "time", hold
+    last = _f(after["close"].iloc[-1])
+    if stop and entry > stop:
+        r_unit = entry - stop
+        if out["stop_hit"]:
+            out["r_now"] = -1.0                       # out at the stop (a gap through it would be worse)
+        elif out["outcome"] == "T2" and t2:
+            out["r_now"] = _r((t2 - entry) / r_unit, 3)
+        elif out["outcome"] == "time":
+            out["r_now"] = _r((_f(window["close"].iloc[-1]) - entry) / r_unit, 3)
+        elif last:
+            out["r_now"] = _r((last - entry) / r_unit, 3)
+    hz = plan.get("horizon")
+    if hz and plan.get("prob_weighted"):
+        reached = str(after.index[-1].date()) >= hz
+        at = _f(after["close"].asof(pd.Timestamp(hz))) if reached else last
+        tw = {"done": reached, "ret": _r(at / entry - 1, 5) if at else None,
+              "vs_weighted": _r(at / float(plan["prob_weighted"]) - 1, 5) if at else None,
+              "beat_weighted": bool(at and at >= float(plan["prob_weighted"])) if reached else None,
+              "in_bear_bull": (bool(plan.get("bear") and plan.get("bull") and
+                                    float(plan["bear"]) <= at <= float(plan["bull"])) if reached and at else None)}
+        if bench is not None and not bench.empty:
+            b_after = bench[bench.index > pd.Timestamp(as_of)]
+            if not b_after.empty and _f(b_after["open"].iloc[0] if "open" in b_after else b_after["close"].iloc[0]):
+                b0 = _f(b_after["open"].iloc[0] if "open" in b_after else b_after["close"].iloc[0])
+                b1 = _f(b_after["close"].asof(pd.Timestamp(hz))) if reached else _f(b_after["close"].iloc[-1])
+                tw["spy_ret"] = _r(b1 / b0 - 1, 5) if b1 else None
+        out["twelve"] = tw
+    return out
+
+
+def plan_stats(rows: list[dict]) -> dict:
+    """Hit rates for a set of marked pitches. Resolved = stop, T1, T2, T1 then stop, or time."""
+    m = [r.get("plan_mark") for r in rows if r.get("plan_mark")]
+    res = [x for x in m if x["outcome"] != "open"]
+    t1 = [x for x in res if x["t1_hit"]]
+    tw = [x["twelve"] for x in m if x.get("twelve") and x["twelve"].get("done")]
+    rr = [x["r_now"] for x in m if x.get("r_now") is not None]
+    return {"n": len(rows), "marked": len(m), "resolved": len(res),
+            "t1_rate": _r(len(t1) / len(res), 4) if res else None,
+            "t2_rate": _r(sum(1 for x in res if x["t2_hit"]) / len(res), 4) if res else None,
+            "stop_first_rate": _r(sum(1 for x in res if x["outcome"] == "stop") / len(res), 4) if res else None,
+            "time_rate": _r(sum(1 for x in res if x["outcome"] == "time") / len(res), 4) if res else None,
+            "avg_r_now": _r(sum(rr) / len(rr), 3) if rr else None,
+            "twelve_done": len(tw),
+            "beat_weighted_rate": _r(sum(1 for x in tw if x.get("beat_weighted")) / len(tw), 4) if tw else None}

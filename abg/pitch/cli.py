@@ -4,6 +4,7 @@
     abg pitch make SYMBOL [--ai]    write a memo (saved to <data_dir>/pitch/memos; never posts)
     abg pitch list                  every pitch with its scorecard vs SPY
     abg pitch score                 mark every pitch against SPY now
+    abg pitch deck SYMBOL|ID        the AIBG 5-slide deck for the stock desk's latest pitch on SYMBOL
 """
 from __future__ import annotations
 
@@ -54,6 +55,25 @@ def make(symbol: str, ai: bool = typer.Option(False, "--ai/--no-ai", help="Claud
     """Write a memo for SYMBOL (saved; never posted from the CLI)."""
     r = _run(lambda d: d.make(symbol, post=False, ai=ai))
     console.print(r["memo"])
+
+
+@pitch_app.command("deck")
+def deck(key: str = typer.Argument(..., help="ticker (newest pitch) or a pitch id like 2026-11-06-trend_pullback-NVDA"),
+         out: str = typer.Option(None, "--out", help="where to save the .pptx (default: next to the memo)")):
+    """Fill the AIBG pitch template from a stock-desk pitch (numbers and charts from its saved pack)."""
+    from pathlib import Path
+    from abg.config import Settings
+    from abg.stocks.desk import StockDesk
+    s = Settings()
+    d = StockDesk(s, engine=None)
+    try:
+        path = d.deck(key, Path(out) if out else None)
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    finally:
+        d.store.close()
+    console.print(f"Deck saved: {path}")
 
 
 @pitch_app.command("list")

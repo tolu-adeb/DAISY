@@ -4,6 +4,8 @@
     GET  /api/stocks/today           the last daily pass (cheap: read straight from disk)
     POST /api/stocks/daily           run the daily pass now  {post?: false}
     GET  /api/stocks/memo/{id}       one pitch's full write-up (markdown)
+    GET  /api/stocks/chart/{name}    a pitch chart (PNG next to the memo)
+    GET  /api/stocks/deck/{id}       the pitch as the AIBG 5-slide PowerPoint (needs python-pptx)
     POST /api/stocks/score           mark every pitch against the benchmark now
     POST /api/stocks/sweep           run one paged refresh pass  {page?: int}
     POST /api/stocks/backfill        fill missing history  {symbols?: [..], period?: "10y"}
@@ -100,6 +102,39 @@ async def memo(request: Request, pid: str):
     if md is None:
         raise HTTPException(404, "no such write-up")
     return {"id": pid, "markdown": md}
+
+
+@router.get("/chart/{name}")
+async def chart(request: Request, name: str):
+    """A pitch chart PNG saved next to its memo (names only, no paths)."""
+    import re
+    from fastapi.responses import FileResponse
+    if not re.fullmatch(r"[\w.-]+\.png", name) or ".." in name:
+        raise HTTPException(400, "bad chart name")
+    path = _desk(request).dir / "memos" / name
+    if not path.is_file():
+        raise HTTPException(404, "no such chart")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
+@router.get("/deck/{key}")
+async def deck(request: Request, key: str):
+    """Build (or rebuild) the AIBG 5-slide deck for a saved pitch and download it."""
+    import asyncio
+    import re
+    from fastapi.responses import FileResponse
+    if not re.fullmatch(r"[\w.-]+", key):
+        raise HTTPException(400, "bad pitch id")
+    try:
+        path = await asyncio.to_thread(_desk(request).deck, key)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(501, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return FileResponse(path, filename=path.name,
+                        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
 
 @router.post("/score")

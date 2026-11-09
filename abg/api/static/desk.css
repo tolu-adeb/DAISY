@@ -364,6 +364,9 @@ body.drawer-open { overflow: hidden; }
 .desk .memo h2, .desk .memo h3, .desk .memo h4 { margin: 14px 0 6px; }
 .desk .memo #pt-memo { max-width: 920px; }
 .desk .memo table { margin: 6px 0 10px; }
+.memo-chart { margin: 10px 0 14px; max-width: 920px; }
+.memo-chart img { width: 100%; height: auto; border-radius: 6px; background: #fff; }
+.memo-chart figcaption { font-size: 12px; color: var(--muted, #8a929b); margin-top: 4px; }
 .desk .spacer { flex: 1; }
 .desk [data-panel][hidden], .view [data-panel][hidden] { display: none; }
 @media (max-width: 760px) { .view .subnav { overflow-x: auto; flex-wrap: nowrap; } }

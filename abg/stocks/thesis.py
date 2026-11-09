@@ -230,6 +230,9 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
         "risks": _risks(c, state, cfg, val, fund),
         "caveats": _caveats(state, cfg),
         "valuation": val,
+        "peers": [{k: x.get(k) for k in ("symbol", "pe", "forward_pe", "eps")} for x in (peers or [])
+                  if isinstance(x, dict)],
+        "charts": {},
         "news": [{"title": (x.get("title") or "")[:160], "url": x.get("url"),
                   "published": x.get("published") or x.get("datetime")} for x in (news or [])[:4]],
         "context": {"regime": state.regime, "regime_words": _regime_words(state.regime),
@@ -253,8 +256,20 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
     rating = P.rating(c.action, c.shares, ((ctx.get("held_by_book") or {}).get(c.book) or {}).get(c.symbol),
                       (ctx.get("held_shares") or {}).get(c.symbol))
     base = P.base_rates(ctx.get("trades"), c.book, ctx.get("period"), min_n=int(pc["min_base_trades"]))
-    tgt = P.trade_targets(c, base, ctx.get("bars"), as_of)
-    inv = P.investment_view(val, c.price, fund, as_of, pc)
+    try:
+        tgt = P.trade_targets(c, base, ctx.get("bars"), as_of)
+    except ValueError as e:                     # levels out of order: a data fault, so no targets, said so
+        log.warning("targets for %s failed their check (%s)", c.symbol, e)
+        tgt = {"book": c.book, "entry_ref": c.price, "stop": c.stop, "t1": None, "t2": None, "t1_kind": None,
+               "t2_kind": None, "t1_basis": None, "t2_basis": None, "review_date": None, "structural": {},
+               "notes": [f"No targets: the levels failed the order check ({e})."], "error": str(e)}
+    try:
+        inv = P.investment_view(val, c.price, fund, as_of, pc)
+    except ValueError as e:                     # a units mismatch or a case that doesn't recompute
+        log.warning("valuation view for %s failed its check (%s)", c.symbol, e)
+        inv = P.investment_view(None, c.price, fund, as_of, pc)
+        inv["reason"] = f"not shown: the valuation failed its check ({e})"
+        inv["error"] = str(e)
     earnings = ctx.get("earnings")
     hold_days = c.book in ("trend_pullback", "mean_reversion") and (cfg.get("books") or {}).get(c.book, {}).get("max_hold")
     earnings_in_hold = bool(earnings and hold_days and
@@ -481,7 +496,8 @@ def render_md(pack: dict, note: str | None = None) -> str:
             L += ["", w["valuation_view"]]
         L += ["", "*Valuation is context. The rule above is what was tested and what decides the trade.*", ""]
     else:
-        L += ["### Valuation / price target", "", f"12-month targets: {P.NOT_IN_DATA} (no fundamentals for this name).", ""]
+        why = inv.get("reason") if inv.get("error") else f"{P.NOT_IN_DATA} (no fundamentals for this name)"
+        L += ["### Valuation / price target", "", f"12-month targets: {why}.", ""]
     L += ["### Current events and risks", ""]
     risks_w = w.get("risks")
     for r in (risks_w if isinstance(risks_w, list) and risks_w else p["risks"]):
@@ -495,11 +511,14 @@ def render_md(pack: dict, note: str | None = None) -> str:
     # 03 data
     L += ["## 03 Data & Supporting Analysis", ""]
     charts = p.get("charts") or {}
+    alt = {"price": "Price with the 50/200-day EMAs, the entry zone, stop, T1/T2 and the 12-month targets",
+           "valuation": "Valuation football field: 52-week range, DCF bear-bull, peer comps, street, weighted",
+           "peers": "Peer comps table"}
     if charts:
         for k, path in charts.items():
-            L.append(f"![{k}]({path})")
+            L += [f"![{alt.get(k, k)}]({path})", ""]
     else:
-        L.append("Charts: price with the 50/200-day EMAs and every level below; valuation football field; peers.")
+        L.append("Charts: none for this pitch (no bars, or matplotlib is not installed: `pip install .[charts]`).")
     base = pl.get("base_rates") or {}
     if base.get("n"):
         L += ["", f"**How this book has done** ({base['source']}, {base['period'][0]} to {base['period'][1]}, "

@@ -26,6 +26,10 @@ function md(text) {
     flush();
     const h = line.match(/^(#{1,3}) (.*)/);
     if (h) out.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`);
+    else if (/^!\[[^\]]*\]\([\w.-]+\.png\)$/.test(line.trim())) {   // a stock-desk chart saved next to the memo
+      const m = line.trim().match(/^!\[([^\]]*)\]\(([\w.-]+\.png)\)$/);
+      out.push(`<figure class="memo-chart"><img src="/api/stocks/chart/${encodeURIComponent(m[2])}" alt="${esc(m[1])}" loading="lazy"><figcaption>${esc(m[1])}</figcaption></figure>`);
+    }
     else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
   }
   flush();
