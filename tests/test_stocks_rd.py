@@ -366,3 +366,133 @@ def test_panel_finds_vix_stored_without_its_caret(tmp_path):
     p = st.panel(u.core(), benchmark="SPY", min_bars=250, warn=False)
     assert "VIX" in p.close.columns                           # the VIX stress flags can see it
     st.close()
+
+
+# --------------------------------------------------------------------------- the whole market (docs/21.4)
+class StubPolygon:
+    """Grouped daily for any session (or None for `unpublished` ones), and a common-stock list."""
+    def __init__(self, tickers, unpublished=(), fail_on=None):
+        self.tickers, self.unpublished, self.fail_on = tickers, set(unpublished), fail_on
+        self.calls, self.lists = [], 0
+
+    async def grouped(self, day):
+        self.calls.append(day)
+        if self.fail_on is not None and day == self.fail_on:
+            raise RuntimeError("polygon down (url with apiKey=SECRET would be here)")
+        if day in self.unpublished:
+            return None
+        k = (day - day.replace(month=1, day=1)).days
+        rows = []
+        for i, t in enumerate(self.tickers):
+            px = 20.0 + i + 0.01 * k
+            vol = 5e6 if not t.startswith("THIN") else 1e3            # THIN* never clears $20M a day
+            rows.append({"T": t, "o": px, "h": px * 1.01, "l": px * 0.99, "c": px, "v": vol})
+        return rows
+
+    async def common_stocks(self, types="CS"):
+        self.lists += 1
+        assert "ADRC" in types                                         # ADRs are stocks for this desk
+        names = [t for t in self.tickers if not t.startswith("ETF")]
+        return [{"ticker": t} for t in names] + [{"ticker": f"PAD{i}"} for i in range(1000)]
+
+    polygon_key = "SECRET"
+
+
+def _market_desk(tmp_path, tickers, sessions=70, **kw):
+    from abg.stocks.desk import StockDesk
+    s = DeskSettings(tmp_path)
+    s.polygon_api_key, s.stocks_market, s.stocks_market_sessions = "SECRET", True, sessions
+    s.stocks_market_max, s.swing_wide_polygon_per_min = 0, 1000
+    d = StockDesk(s, NoDataEngine())
+    d.market.src = StubPolygon(tickers, **kw)
+    return d
+
+
+def test_market_tier_is_liquid_common_stocks_outside_the_core(tmp_path):
+    tickers = ["AAPL", "MSFT", "BIGCO", "MIDCO", "ADR1", "THIN1", "ETFX", "BRK.B"]
+    d = _market_desk(tmp_path, tickers, sessions=65)
+    out = asyncio.run(d.market_refresh())
+    assert out["reloaded"] and out["sync"]["fetched"] >= 60
+    tier = set(d.u.market)
+    assert {"BIGCO", "MIDCO", "ADR1"} <= tier
+    assert "AAPL" not in tier and "MSFT" not in tier                  # already in the core: per-symbol history wins
+    assert "THIN1" not in tier                                        # never clears the books' $20M floor
+    assert "ETFX" not in tier                                         # not a common stock
+    assert "BRK-B" not in tier                                        # core name, after the dot -> dash fix
+    assert d.store.frame("BIGCO").shape[0] >= 60                      # bars are where the books read them
+    assert set(d.u.daily()) >= tier | set(d.u.core())
+    assert "SECRET" not in json.dumps(d.status(), default=str)
+    d.store.close()
+
+
+def test_market_sync_fetches_newest_first_and_resumes(tmp_path):
+    d = _market_desk(tmp_path, ["BIGCO", "MIDCO"], sessions=65)
+    rep = asyncio.run(d.market.sync(max_calls=5))
+    calls = list(d.market.src.calls)                                 # a copy: the stub keeps appending
+    assert len(calls) == 5 and calls == sorted(calls, reverse=True)  # recent sessions first
+    rep2 = asyncio.run(d.market.sync())
+    assert rep2.have == rep2.wanted and set(d.market.src.calls[5:]).isdisjoint(calls)   # carries on, no refetch
+    assert asyncio.run(d.market.sync()).fetched == []                 # nothing left to do
+    d.store.close()
+
+
+def test_market_refresh_skips_the_reload_when_nothing_new(tmp_path):
+    d = _market_desk(tmp_path, ["BIGCO", "MIDCO"], sessions=65)
+    assert asyncio.run(d.market_refresh())["reloaded"]
+    again = asyncio.run(d.market_refresh())
+    assert again["reloaded"] is False and again["market_tier"] == len(d.u.market)
+    assert asyncio.run(d.market_refresh(force=True))["reloaded"]
+    d.store.close()
+
+
+def test_market_sync_failure_never_leaks_the_key(tmp_path):
+    from abg.swing.wide import last_session
+    d = _market_desk(tmp_path, ["BIGCO"], sessions=65, fail_on=last_session())
+    rep = asyncio.run(d.market.sync())
+    assert rep.error and "SECRET" not in rep.error and "apiKey" not in rep.error
+    d.store.close()
+
+
+def test_daily_pass_waits_for_polygons_bar_until_the_cutoff(tmp_path):
+    from abg.swing.wide import last_session
+    d = _market_desk(tmp_path, ["BIGCO", "MIDCO"], sessions=65)
+    asyncio.run(d.market_refresh())
+    assert d.u.market
+    day = last_session()
+    at = lambda h, m: datetime(day.year, day.month, day.day, h, m, tzinfo=NY)   # noqa: E731
+    assert d._market_ready(at(16, 25))                                # the bar is already stored
+    d.market.days.day_path(day).unlink()                              # pretend Polygon hasn't published it
+    assert not d._market_ready(at(16, 25)) and not d._market_ready(at(21, 0))
+    assert d._market_ready(at(21, 30))                                # give up waiting and run
+    d.s.stocks_market = False
+    assert d._market_ready(at(16, 25))                                # no market tier: never waits
+    d.store.close()
+
+
+def test_market_tier_off_without_a_polygon_key(tmp_path):
+    from abg.stocks.desk import StockDesk
+    d = StockDesk(DeskSettings(tmp_path), NoDataEngine())
+    assert not d.market.enabled
+    assert "skipped" in asyncio.run(d.market_refresh())
+    assert d.u.daily() == d.u.core()
+    d.store.close()
+
+
+def test_market_tier_names_reach_the_books(tmp_path):
+    d = _desk(tmp_path, n_stocks=24, days=1400)
+    d.u.market = d.u.stocks[12:]                       # half the names now come from the market tier
+    d.u.stocks = d.u.stocks[:12]
+    d.s.stocks_market_replay_years = 2
+    d.s.stocks_replay_years = 5
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ls = d._signals()
+    cols = set(ls.panel.close.columns)
+    assert set(d.u.market) <= cols and set(d.u.stocks) <= cols
+    # thousands of names: the panel stops at the replay window plus warm-up, not the full history
+    assert ls.panel.dates[0] > pd.Timestamp(d.store.stats()["first_day"])
+    assert ls.panel.dates[0] >= ls.panel.dates[-1] - pd.DateOffset(years=2) - pd.Timedelta(days=430)
+    cands = ls.candidates()
+    single = [c for c in cands if c.book in ("xs_momentum", "trend_pullback", "mean_reversion")]
+    assert single and {c.symbol for c in single} & set(d.u.market)   # market names can be picked
+    d.store.close()

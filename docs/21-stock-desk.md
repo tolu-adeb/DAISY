@@ -46,10 +46,38 @@ Left for you (needs your PC or a decision):
    of daily bars in the background (rate-limited; expect it to take a while).
 2. Check `Stocks → Today` after the next close. Nothing posts to Discord until you add
    `ABG_STOCKS_WEBHOOK_URL` (rotate the one shared in chat first).
-3. If FMP refuses the constituent list on your plan, load a list with
-   `abg stocks universe --file sp500.txt`.
-4. Point-in-time membership is still not loaded, so backtests and the weekly study carry survivorship
-   bias until it is (`BarStore.set_membership`).
+3. The S&P 500 list now comes from GitHub with no key (21.5); FMP is only a fallback.
+4. Dated membership loads with the list (21.5). Delisted companies still have no price data on
+   free providers, so some survivorship bias remains.
+
+## 21.4 The whole US market (market tier)
+
+Per-symbol requests can't cover ~5,000 stocks on a free plan. Polygon's *grouped daily* call returns
+every US stock's bar for one session, so the market costs **one call per trading day**.
+
+- `abg/stocks/market.py`: syncs missing sessions newest-first into `<data_dir>/swing/wide/bars/` (the old
+  wide scanner's day files are reused: 221 sessions were already there), takes Polygon's list of common
+  stocks **and ADRs** (TSM, ASML, BABA, NVO, ARM would otherwise be lost; ETFs, warrants, units and
+  preferreds are excluded), keeps the names that clear the books' own floor ($5, median 20-day dollar
+  volume $20M) and loads their bars into the bar store. On your data about 2,670 tickers clear the floor
+  before the common-stock filter.
+- `Universe.daily()` = S&P 500 core + market tier. The research study stays on the core (it needs years
+  of history; Polygon's free plan keeps two).
+- With the market tier on, the live replay is 2 years (`ABG_STOCKS_MARKET_REPLAY_YEARS`) and the panel
+  starts at the replay window plus warm-up - ~2,500 names over 5 years would need ~1.5 GB of indicators.
+- The daily pass **waits for Polygon's bar** (rechecking every 10 min) until `ABG_STOCKS_MARKET_WAIT_UNTIL`
+  (21:30 ET): run before it is published, every non-S&P name would miss today's close and none could signal.
+- `abg stocks market [--max-calls N]` / `POST /api/stocks/market`. First fill tops up to 300 sessions at
+  5 calls a minute (~16 min from what was already stored).
+- Limit: the common-stock list is today's, so delisted non-S&P names are absent (survivorship, as before).
+
+## 21.5 Index list without FMP
+
+`abg/stocks/index_sources.py` reads the `fja05680/sp500` dataset (MIT, GitHub): every S&P 500 membership
+snapshot since 1996. It gives today's list *and* dated membership, so backtests no longer buy a stock
+before it joined (Tesla before Dec 2020). Ticker renames are folded into today's ticker only when the
+data confirms them (old ticker leaves the day the new one joins): FB->META, UTX->RTX, FISV->FI->FISV,
+SYMC->NLOK->GEN and 12 more. FMP stays as a fallback. Re-checked weekly.
 
 ## 21.3 Rules that still hold
 

@@ -144,7 +144,7 @@ class LiveSignals:
         bench = self.cfg["benchmark"]
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
-            self.panel = self.store.panel(self.u.core(), benchmark=bench,
+            self.panel = self.store.panel(self.u.daily(), benchmark=bench,
                                           start=start or self.cfg.get("panel_start"),
                                           min_bars=int(self.cfg.get("min_bars", 250)), warn=warn)
             self.warnings = [str(c.message) for c in caught]

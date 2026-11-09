@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 from . import thesis as T
 from .config import build_config, describe as describe_cfg
 from .live import LiveSignals
+from .market import MarketFeed
 from .store import BarStore
 from .sweep import Sweeper
 from .universe import Universe
@@ -59,6 +60,8 @@ class StockDesk:
                 log.debug("stocks: symbols_fn failed", exc_info=True)
         self.cfg = build_config(settings, self.u)
         self.sweeper = Sweeper(settings, engine, self.store, self.u)
+        self.market = MarketFeed(settings, engine.http, self.store, self.u)
+        self.last_market: dict | None = None
         self.errors: deque = deque(maxlen=20)
         self._stop = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -128,7 +131,16 @@ class StockDesk:
 
     # ------------------------------------------------------------------ signals
     def _signals(self) -> LiveSignals:
-        ls = LiveSignals(self.cfg, self.store, self.u).build(warn=True)
+        panel_start = None
+        if self.u.market:
+            # thousands of names: keep the panel to the replay window plus indicator warm-up, or the
+            # indicator tables alone run to gigabytes
+            import pandas as pd
+            last = self.store.stats().get("last_day")
+            if last:
+                yrs = int(getattr(self.s, "stocks_market_replay_years", 2) or 2)
+                panel_start = str((pd.Timestamp(last) - pd.DateOffset(years=yrs) - pd.Timedelta(days=420)).date())
+        ls = LiveSignals(self.cfg, self.store, self.u).build(start=panel_start, warn=True)
         ls.run(start=self._replay_start(ls))
         return ls
 
@@ -137,6 +149,8 @@ class StockDesk:
         and replaying from the rule file's 2007 start on every daily pass would cost minutes for nothing."""
         import pandas as pd
         years = int(getattr(self.s, "stocks_replay_years", 5) or 0)
+        if self.u.market:
+            years = min(years or 99, int(getattr(self.s, "stocks_market_replay_years", 2) or 2))
         if years <= 0 or ls.panel is None or not len(ls.panel.dates):
             return None
         want = ls.panel.dates[-1] - pd.DateOffset(years=years)
@@ -507,6 +521,47 @@ class StockDesk:
             log.warning("stocks: could not load the S&P 500 list (%s); keeping the current one", e)
             return {"error": str(e)[:200]}
 
+    def _floors(self) -> tuple[float, float]:
+        """The loosest price and dollar-volume floor any single-stock book uses - the market tier keeps
+        every name that could pass at least one of them."""
+        books = [p for n, p in (self.cfg.get("books") or {}).items()
+                 if n in ("xs_momentum", "trend_pullback", "mean_reversion") and p.get("enabled", True)]
+        if not books:
+            return 5.0, 20e6
+        return (min(float(p.get("min_price", 5.0)) for p in books),
+                min(float(p.get("min_adv_usd", 2e7)) for p in books))
+
+    async def market_refresh(self, max_calls: int | None = None, force: bool = False) -> dict:
+        """Whole-market bars (one Polygon call per session) -> the market tier of the universe."""
+        if not self.market.enabled:
+            return {"skipped": "no Polygon key or ABG_STOCKS_MARKET=false"}
+        mp, mdv = self._floors()
+        try:
+            out = await self.market.refresh(max_calls=max_calls, min_price=mp, min_dv=mdv, force=force)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.errors.append({"ts": time.time(), "where": "market",
+                                "error": f"{type(e).__name__}: {str(e)[:200]}"})
+            out = {"error": f"{type(e).__name__}"}
+        self.last_market = {"at": datetime.now(NY).isoformat(timespec="seconds"), **out}
+        return self.last_market
+
+    def _market_ready(self, now: datetime) -> bool:
+        """With the market tier on, wait for Polygon to publish today's whole-market bar - otherwise
+        every non-S&P name is missing today's close and none of them can signal. Give up waiting at
+        ABG_STOCKS_MARKET_WAIT_UNTIL and run on what there is."""
+        if not self.market.enabled or not self.u.market:
+            return True
+        if self.market.days.has(now.date()):
+            return True
+        raw = str(getattr(self.s, "stocks_market_wait_until", "21:30") or "21:30")
+        try:
+            hh, mm = (int(x) for x in raw.split(":"))
+        except ValueError:
+            hh, mm = 21, 30
+        return (now.hour, now.minute) >= (hh, mm)
+
     def missing(self) -> list[str]:
         """Core symbols still short of history (and not parked as delisted)."""
         need = int(getattr(self.s, "stocks_min_bars", 250))
@@ -536,6 +591,8 @@ class StockDesk:
             except Exception as e:
                 self.errors.append({"ts": time.time(), "where": "autofill",
                                     "error": f"{type(e).__name__}: {e}"[:300]})
+        if self.market.enabled:
+            out["market"] = await self.market_refresh()
         return out
 
     async def run(self) -> None:
@@ -547,8 +604,14 @@ class StockDesk:
                 now = datetime.now(NY)
                 try:
                     if self._daily_due(now):
-                        self._mark_daily_run(now)
-                        await self.daily(post=True)
+                        if self.market.enabled and self.u.market and not self.market.days.has(now.date()):
+                            await self.market_refresh(max_calls=3)       # today's bar, if it is out yet
+                        if self._market_ready(now):
+                            self._mark_daily_run(now)
+                            await self.daily(post=True)
+                        else:
+                            await self._sleep(600)                       # Polygon not out yet: check in 10 min
+                            continue
                     elif self._sweep_due(now):
                         await self.intraday()
                 except asyncio.CancelledError:
@@ -563,6 +626,12 @@ class StockDesk:
                     pass
         finally:
             self.running = False
+
+    async def _sleep(self, seconds: float) -> None:
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
 
     def stop(self) -> None:
         self._stop.set()
@@ -585,6 +654,7 @@ class StockDesk:
             "universe": self.u.describe(),
             "store": stats,
             "sweep": self.sweeper.status(),
+            "market": {**self.market.status(), "last": self.last_market},
             "last_daily": self.last_daily or self._load("state.json", {}).get("last_daily"),
             "pitches": len(self.pitches()),
             "research": {"schedule": getattr(self.s, "stocks_research", "weekly"), "busy": self.research_busy,

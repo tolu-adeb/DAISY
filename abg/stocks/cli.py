@@ -5,6 +5,7 @@
     abg stocks universe --file list.txt load a symbol list from disk
     abg stocks backfill                 fill missing daily history (run this first)
     abg stocks sweep [--page 60]        one paged refresh pass
+    abg stocks market [--max-calls N]   every US stock: whole-market bars from Polygon -> market tier
     abg stocks signals [--post]         today's candidates; --post sends them to Discord
     abg stocks memo ID                  print one pitch's full write-up
     abg stocks score                    mark every pitch against the benchmark
@@ -139,6 +140,27 @@ def sweep(page: int = typer.Option(None, "--page", help="symbols this pass")):
     console.print(f"[green]{r['ok']} ok[/], {r['failed']} failed, {r['skipped']} skipped - "
                   f"{r['bars']:,} bars in {r['seconds']}s; cursor now {r['cursor']}"
                   + (" (wrapped)" if r.get("wrapped") else ""))
+
+
+@stocks_app.command("market")
+def market(max_calls: int = typer.Option(None, "--max-calls", help="Polygon calls this run (5 a minute)"),
+           force: bool = typer.Option(False, "--force", help="rebuild the tier even if no new session arrived")):
+    """Every US common stock: sync whole-market bars from Polygon (one call per session) and rebuild
+    the market tier - the liquid names outside the S&P 500 that the daily pass also scans."""
+    r = _run(lambda d: d.market_refresh(max_calls=max_calls, force=force))
+    if r.get("skipped") or r.get("error"):
+        console.print(f"[yellow]{r.get('skipped') or r.get('error')}[/]")
+        return
+    sy = r.get("sync") or {}
+    console.print(f"sessions stored {r.get('sessions_stored')} of {sy.get('wanted')} wanted; fetched "
+                  f"{sy.get('fetched')} this run in {sy.get('seconds')}s"
+                  + (f" - stopped: {sy['error']}" if sy.get("error") else ""))
+    if r.get("reloaded"):
+        console.print(f"[green]{r['market_tier']} liquid US common stocks[/] outside the S&P 500 in the market tier "
+                      f"({r['common_stocks']} common stocks listed, {r['liquid']} pass the books' floor); "
+                      f"{r['bars_loaded']:,} bars loaded")
+    else:
+        console.print(f"no new session - the market tier stays at {r.get('market_tier')} names")
 
 
 # --------------------------------------------------------------------------- signals

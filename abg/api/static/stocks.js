@@ -128,7 +128,7 @@ async function loadUniverse() {
   ST.uni = r;
   const u = r.universe || {}, s = r.store || {}, w = r.sweep || {};
   $("#sk-uni-kpis").innerHTML = [
-    stat("Universe", u.core, `${u.stocks} stocks · ${u.etfs} ETFs · ${u.gauges} gauges`),
+    stat("Universe", fmt(u.daily || u.core, 0), `${u.stocks} index + ${u.market || 0} market · ${u.etfs} ETFs`),
     stat("Index", esc(u.index || "—"), u.seed ? "seed list: survivorship-biased" : `${esc(u.source || "")} ${esc(u.as_of || "")}`, u.seed ? "neg" : ""),
     stat("Bars stored", fmt(s.bars, 0), `${s.symbols || 0} symbols · to ${esc(s.last_day || "—")}`),
     stat("Short of history", (r.missing || []).length, (r.missing || []).length ? "backfill to fill them" : "all followed names ready"),

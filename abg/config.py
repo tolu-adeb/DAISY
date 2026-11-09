@@ -368,6 +368,12 @@ class Settings(BaseSettings):
     stocks_sweep_concurrency: int = 4
     stocks_sweep_period: str = "6mo"               # history asked for on a refresh pass
     stocks_sweep_pause: float = 0.0                # seconds between calls, for a strict rate limit
+    # the whole US market (docs/21.4): one Polygon "grouped daily" call per session covers every stock
+    stocks_market: bool = True                     # on whenever ABG_POLYGON_API_KEY is set
+    stocks_market_sessions: int = 300              # sessions kept (the free plan allows about two years)
+    stocks_market_max: int = 3000                  # most-liquid cap on the market tier (0 = no cap)
+    stocks_market_replay_years: int = 2            # live replay length when the market tier is on (memory)
+    stocks_market_wait_until: str = "21:30"        # ET: the daily pass waits for Polygon's bar until then
     # risk and allocation overrides (null = whatever configs/stocks.yaml says)
     stocks_allocation: str | None = None           # hedge | fixed
     stocks_vol_target: float | None = None

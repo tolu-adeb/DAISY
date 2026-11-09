@@ -12,6 +12,7 @@
     GET  /api/stocks/ledger          the last N candidates, taken or not
     GET  /api/stocks/rules           the active rule set (no secrets)
     GET  /api/stocks/research        the latest weekly study; POST starts one ({scope: quick|full})
+    POST /api/stocks/market          whole-market bars from Polygon -> the market tier  {max_calls?, force?}
 
 Everything works on demand even with ABG_STOCKS_ENABLED=false; the switch controls the schedule and
 Discord posting.  ``POST /daily`` defaults to post=false from the API so a page click can never fire
@@ -200,3 +201,18 @@ async def research_run(request: Request, body: dict = Body(default={})):
             pass
     d._research_task = asyncio.create_task(go())   # keep a reference so it isn't garbage-collected
     return {"started": True, "scope": "quick" if quick else "full"}
+
+
+@router.post("/market")
+async def market(request: Request, body: dict = Body(default={})):
+    """Sync whole-market bars from Polygon and rebuild the market tier.  {max_calls?: int, force?: bool}.
+    The first fill is up to ABG_STOCKS_MARKET_SESSIONS calls at 5 a minute - pass max_calls to keep a
+    click short; it carries on from where it stopped next time."""
+    d = _desk(request)
+    mc = body.get("max_calls")
+    if mc is not None:
+        try:
+            mc = max(0, min(int(mc), 1000))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "max_calls must be a number")
+    return jsonable(await d.market_refresh(max_calls=mc, force=bool(body.get("force"))))

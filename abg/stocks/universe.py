@@ -73,6 +73,7 @@ SEED = [
 
 KV_INDEX = "universe_index"       # JSON {"name":..., "as_of":..., "source":..., "symbols":[...]}
 KV_WIDE = "universe_wide"         # JSON [...] extra names to sweep beyond the index
+KV_MARKET = "universe_market"     # JSON [...] liquid US common stocks outside the index (market.py)
 
 
 @dataclass
@@ -85,6 +86,7 @@ class Universe:
     etfs: list[str] = field(default_factory=lambda: list(ETFS))
     gauges: list[str] = field(default_factory=lambda: list(GAUGES))
     extra: list[str] = field(default_factory=list)
+    market: list[str] = field(default_factory=list)   # every other liquid US common stock (Polygon tier)
 
     # ---- tiers
     def core(self) -> list[str]:
@@ -100,6 +102,11 @@ class Universe:
         """Core plus anything else being followed, for the paged sweep."""
         return _dedup(self.core() + self.extra)
 
+    def daily(self) -> list[str]:
+        """What the daily pass reads: the core plus the market tier. The market tier is refreshed by
+        one whole-market call per session, so the per-symbol sweep never touches it."""
+        return _dedup(self.core() + self.market)
+
     def non_stock(self) -> list[str]:
         """Symbols that must never enter a single-stock book's universe."""
         return _dedup(self.etfs + self.gauges + [GAUGE_ALIAS.get(g, g) for g in self.gauges])
@@ -110,7 +117,8 @@ class Universe:
     def describe(self) -> dict:
         return {"index": self.index_name, "as_of": self.as_of, "source": self.source,
                 "stocks": len(self.stocks), "etfs": len(self.etfs), "gauges": len(self.gauges),
-                "extra": len(self.extra), "core": len(self.core()), "wide": len(self.wide()),
+                "extra": len(self.extra), "market": len(self.market), "core": len(self.core()),
+                "wide": len(self.wide()), "daily": len(self.daily()),
                 "seed": self.is_seed()}
 
     # ---- persistence
@@ -129,6 +137,12 @@ class Universe:
                     u.source = d.get("source") or "store"
             except Exception as e:                      # a corrupt list must not stop the desk
                 log.warning("universe: stored index list unreadable (%s); using the seed", e)
+        raw = store.kv_get(KV_MARKET)
+        if raw:
+            try:
+                u.market = _dedup(s.upper().strip() for s in json.loads(raw) if s and s.strip())
+            except Exception:
+                u.market = []
         raw = store.kv_get(KV_WIDE)
         if raw:
             try:
@@ -144,6 +158,14 @@ class Universe:
         store.kv_set(KV_INDEX, json.dumps({"name": name, "as_of": as_of, "source": source, "symbols": syms}))
         self.stocks, self.index_name, self.source, self.as_of = syms, name, source, as_of
         return len(syms)
+
+    def save_market(self, store, symbols: list[str]) -> int:
+        keep = _dedup(s.upper().strip() for s in symbols if s and s.strip())
+        core = set(self.core())
+        keep = [s for s in keep if s not in core]
+        store.kv_set(KV_MARKET, json.dumps(keep))
+        self.market = keep
+        return len(keep)
 
     def save_extra(self, store, symbols: list[str]) -> int:
         keep = _dedup(s.upper().strip() for s in symbols if s and s.strip())
