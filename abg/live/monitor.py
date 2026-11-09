@@ -275,15 +275,6 @@ class Monitor:
                 log.exception("pitch desk disabled")
                 self.errors.append({"ts": time.time(), "where": "pitch init", "error": str(e)[:300]})
 
-        # Alerio copy-trading shadow (docs/15)
-        self.alerio = None
-        if self.s.alerio_watch and self.s.alerio_cookie:
-            try:
-                from ..routes.watch import AlerioWatcher
-                self.alerio = AlerioWatcher(self.s, hub)
-            except Exception as e:   # pragma: no cover
-                log.exception("alerio watcher disabled")
-                self.errors.append({"ts": time.time(), "where": "alerio init", "error": str(e)[:300]})
 
     # ------------------------------------------------------------------ control
     def poke(self, analysis: bool = False) -> None:
@@ -325,8 +316,6 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.scheduler.run()))
             if self.alpha is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.alpha.run()))
-            if self.alerio is not None:
-                self._aux_tasks.append(asyncio.ensure_future(self.alerio.run()))
             if self.rd is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.rd.run()))
             for comp in (self.forward, self.stocks, self.swing, self.pitch):
@@ -372,7 +361,7 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd, self.forward,
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.rd, self.forward,
                          self.stocks, self.swing, self.pitch):
                 if comp is not None:
                     comp.stop()
@@ -624,7 +613,6 @@ class Monitor:
                          if self.ext is not None else None),
             "alpha": self.alpha.status() if self.alpha is not None else
                      {"enabled": False, "retired": bool(getattr(self.s, "alpha_retired", True))},
-            "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
             "rd": self.rd.status() if self.rd is not None else {"enabled": False},
             "forward": self.forward.status() if self.forward is not None else {"enabled": False},
             "stocks": self.stocks.status() if self.stocks is not None else {"enabled": False},

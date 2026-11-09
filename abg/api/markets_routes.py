@@ -215,8 +215,7 @@ async def system(request: Request):
              "MNQ bot" + (" (retired)" if alpha_retired else ""): bool(s.alpha_enabled and not alpha_retired),
              "R&D desk": s.rd_enabled, "forward lab": s.fwd_enabled,
              "swing desk (retired)": bool(s.swing_enabled and not stocks_on),
-             "pitch desk": getattr(s, "pitch_enabled", False), "external signals": s.ext_enabled,
-             "Alerio shadow": bool(s.alerio_watch and s.alerio_cookie)}
+             "pitch desk": getattr(s, "pitch_enabled", False), "external signals": s.ext_enabled}
     keys = {"Finnhub (real-time)": bool(s.finnhub_api_key), "Polygon": bool(s.polygon_api_key),
             "Twelve Data": bool(s.twelvedata_api_key), "FMP": bool(s.fmp_api_key), "Anthropic (agents)": bool(s.anthropic_api_key),
             "MNQ Discord": bool(s.alpha_webhook_url or s.alpha_channel_id), "R&D Discord": bool(s.rd_webhook_url),
