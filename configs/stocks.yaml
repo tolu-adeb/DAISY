@@ -1,0 +1,145 @@
+# Stocks Rule Book — default parameters. Every value here is documented in the rule book.
+# Tune only on training years (see walk-forward); never on the holdout.
+
+start: 2007-01-03          # first trading day of the backtest (indicators warm up on earlier data)
+end: null                  # null = last date in the data
+initial_equity: 100000
+benchmark: SPY
+events_file: configs/events.csv
+
+data:
+  dir: data/stocks         # one CSV per ticker: date,open,high,low,close,volume (adjusted)
+  membership: null         # data/stocks/membership.csv  (ticker,start,end) strongly recommended
+  sectors: null
+  sentiment: null          # date,ticker,score in [-1,1]; optional
+  macro: null              # date,T10Y2Y,HY_OAS; optional (FRED)
+
+# tickers that are never part of the single-stock universe
+non_stock_tickers: [SPY, QQQ, IWM, DIA, EFA, EEM, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY,
+                    IEF, TLT, SHY, BIL, GLD, HYG, LQD, SH, VIX, VIX3M]
+
+costs:
+  commission_bps: 1.0
+  slippage_bps: 5.0
+  borrow_bps_per_year: 50
+
+regime:
+  sma_long: 200
+  ret_sma: 20
+  vol_window: 20
+  vol_lookback: 252
+  vol_high_pct: 0.80
+  er_window: 20
+  er_trend: 0.30
+
+stress:                    # early-warning flags -> stress score -> crisis mode
+  enabled: true
+  enter: 0.50              # crisis on when >= 50% of available flags are on
+  exit: 0.25
+  min_days: 10
+  vol_pct: 0.80
+  drawdown: 0.10
+  vix_level: 25
+  vix_ratio: 1.0
+  credit_drop: 0.02
+  defensive_lead: 0.05
+  breadth: 0.40
+  breadth_min_names: 20
+  corr_pct: 0.90
+  hy_jump: 0.75
+  correlation_etfs: [XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY]
+  exclude_from_breadth: [SPY, QQQ, IWM, DIA, EFA, EEM, XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY,
+                         IEF, TLT, SHY, BIL, GLD, HYG, LQD, SH, VIX, VIX3M]
+
+allocation:
+  method: hedge            # hedge | fixed
+  fixed_weights: null      # e.g. {dual_momentum: 0.4, xs_momentum: 0.3, trend_pullback: 0.2, mean_reversion: 0.1}
+  hedge_eta: null          # null = sqrt(8 ln N / horizon)
+  hedge_horizon_months: 60
+  hedge_floor: 0.10
+  hedge_clip: 0.10         # monthly book return clipped to +/-10% before the loss mapping
+  vol_target: 0.12         # portfolio volatility target (annualized)
+  vol_window: 20
+  vol_scale_min: 0.5
+  vol_scale_max: 1.0       # 1.0 = never lever up
+
+risk:
+  max_gross: 1.0
+  max_name_weight: 0.10
+  dd_kill: 0.20
+  dd_pause_days: 20
+
+books:
+  dual_momentum:
+    enabled: true
+    etf_universe: true
+    universe: [XLB, XLE, XLF, XLI, XLK, XLP, XLU, XLV, XLY, XLC, XLRE, QQQ, IWM, EFA, EEM]
+    defensive: [IEF, TLT, GLD, SHY]
+    top_k: 3
+    min_change: 0.02
+    regimes: {bull_trend: 1.0, bull_chop: 1.0, risk_off: 1.0, crisis: 1.0}
+
+  xs_momentum:
+    enabled: true
+    universe: all
+    min_price: 5
+    min_adv_usd: 20000000
+    top_n: 20
+    max_weight: 0.10
+    min_score: 0.0
+    min_change: 0.01
+    regimes: {bull_trend: 1.0, bull_chop: 1.0, risk_off: 0.0, crisis: 0.0}
+
+  trend_pullback:
+    enabled: true
+    universe: all
+    min_price: 5
+    min_adv_usd: 20000000
+    rsi_pullback: 40
+    rsi_exit: 70
+    stop_atr: 2.0
+    trail_atr: 3.0
+    max_hold: 30
+    risk_per_trade: 0.005
+    max_weight: 0.10
+    max_positions: 10
+    sentiment_floor: -0.70
+    regimes: {bull_trend: 1.0, bull_chop: 0.5, risk_off: 0.0, crisis: 0.0}
+    ml:
+      enabled: false
+      threshold: 0.55
+      horizon: 15
+      pt_atr: 2.0
+      sl_atr: 2.0
+      min_train_events: 200
+      fallback: rules      # before a model exists: rules (trade) or skip
+
+  mean_reversion:
+    enabled: true
+    universe: all
+    min_price: 5
+    min_adv_usd: 20000000
+    rsi_period: 2
+    rsi_entry: 10
+    rsi_exit: 70
+    require_bb: false
+    stop_atr: 2.5
+    max_hold: 7
+    risk_per_trade: 0.005
+    max_weight: 0.10
+    max_positions: 10
+    sentiment_floor: -0.70
+    regimes: {bull_trend: 0.5, bull_chop: 1.0, risk_off: 0.0, crisis: 0.0}
+
+  crisis_alpha:
+    enabled: true
+    budget: 0.70           # share of equity this book controls in crisis mode; other books share the rest
+    defensive: [IEF, TLT, GLD, SHY]
+    defensive_weight: 0.70
+    short_weight: 0.30     # 0 disables the index short
+    inverse_etf: null      # e.g. SH to stay long-only
+    rebound_weight: 0.25   # 0 disables capitulation rebounds
+    rebound_rsi: 5
+    rebound_days: 10
+    rebalance_days: 5
+    min_change: 0.02

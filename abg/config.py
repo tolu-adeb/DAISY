@@ -289,7 +289,10 @@ class Settings(BaseSettings):
     fwd_profit_route_wr_slack: float = 0.005    #   win rate no more than 0.5 pt below live
     fwd_profit_route_ratio: float = 0.15        #   net/max-drawdown at least 15% better
     fwd_profit_route_net: float = 0.10          #   net profit at least 10% higher
-    swing_enabled: bool = False                 # grade + track swing ideas inside the monitor (dashboard: Swing Desk)
+    # ---- swing desk: RETIRED (docs/21). The stock desk below replaced it as the stock signal source.
+    # The settings stay so an existing .env still loads, and the module is still importable for its
+    # history, but nothing starts it unless swing_enabled is turned back on deliberately.
+    swing_enabled: bool = False                 # retired: the House of Traders intake and wide scanner
     swing_webhook_url: str | None = None        # Discord channel for swing alerts; unset = dashboard only
     swing_interval_min: int = 30                # intraday pass during market hours (prices, fills, in-zone nudges)
     swing_close_time: str = "16:20"             # after-close pass: final daily bars -> fills/exits, scanner, digest
@@ -330,6 +333,48 @@ class Settings(BaseSettings):
     pitch_equity_premium: float = 0.05
     pitch_terminal_growth: float = 0.025
     pitch_ai_memo: bool = False                    # Claude write-up from the data pack only (API key; tokens)
+
+    # ---------------------------------------------------------------- stock desk (docs/21)
+    # The four-book rule system from the Stocks Rule Book, run live: it replaces the swing desk as the
+    # terminal's stock signal source. Rules live in configs/stocks.yaml; only the knobs an operator
+    # changes often are here.
+    stocks_enabled: bool = False                   # run the stock desk inside the monitor (dashboard: Stocks)
+    stocks_webhook_url: str | None = None          # Discord channel for the daily pitches; unset = falls back to
+                                                   # ABG_PITCH_WEBHOOK_URL, and failing that the dashboard only
+    stocks_tag: str = "PAPER"                      # shown on every post; clear it only when you trust the record
+    stocks_config: str | None = None               # path to the rule file (default: configs/stocks.yaml)
+    stocks_daily_time: str = "16:20"               # ET, weekdays: the after-close pass that produces the pitches
+    stocks_post_max: int = 5                       # detailed pitch embeds per post; the rest are in the digest
+    stocks_books: str = ""                         # comma list to limit which books run (a,b,c,d,e or their names)
+    stocks_benchmark: str = "SPY"
+    stocks_initial_equity: float = 100_000.0       # the paper book the sizing rules work against
+    stocks_panel_start: str | None = "2015-01-01"  # earliest bar loaded into the panel (indicators warm up on it)
+    stocks_min_bars: int = 250                     # a symbol with fewer bars than this is left out of the panel
+    stocks_replay_years: int = 5                   # the live pass replays this far back to rebuild positions and
+                                                   # Hedge weights (= the allocator's 60-month horizon); research
+                                                   # studies use the rule file's own start instead
+    # universe and data upkeep
+    stocks_autofill: bool = True                   # backfill on first run when the store is empty
+    stocks_backfill_period: str = "10y"
+    stocks_backfill_concurrency: int = 3
+    stocks_sweep_minutes: int = 30                 # paged refresh cadence while the market is open
+    stocks_sweep_page: int = 60                    # symbols per pass; universe / page = passes for a full cycle
+    stocks_sweep_concurrency: int = 4
+    stocks_sweep_period: str = "6mo"               # history asked for on a refresh pass
+    stocks_sweep_pause: float = 0.0                # seconds between calls, for a strict rate limit
+    # risk and allocation overrides (null = whatever configs/stocks.yaml says)
+    stocks_allocation: str | None = None           # hedge | fixed
+    stocks_vol_target: float | None = None
+    stocks_max_gross: float | None = None
+    stocks_max_name_weight: float | None = None
+    stocks_dd_kill: float | None = None
+    stocks_risk_per_trade: float | None = None
+    stocks_max_positions: int | None = None
+    stocks_slippage_bps: float | None = None
+    stocks_commission_bps: float | None = None
+    stocks_crisis: bool | None = None              # early-warning flags -> crisis mode
+    stocks_ml: bool | None = None                  # walk-forward take/skip filter on the pullback book
+    stocks_ml_threshold: float | None = None
 
     log_level: str = "WARNING"
 

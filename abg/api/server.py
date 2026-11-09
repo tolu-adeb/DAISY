@@ -272,9 +272,11 @@ app.include_router(rd_router)
 
 from ..swing.routes import router as swing_router  # noqa: E402
 from ..pitch.routes import router as pitch_router  # noqa: E402
+from ..stocks.routes import router as stocks_router  # noqa: E402
 
 app.include_router(swing_router)
 app.include_router(pitch_router)
+app.include_router(stocks_router)
 
 # --------------------------------------------------------------------------- dashboard
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

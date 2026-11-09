@@ -74,7 +74,9 @@ def comps(target: dict, peers: list[dict]) -> dict:
     pe, n_pe = med("pe")
     fpe, n_fpe = med("forward_pe")
     eps, feps = target.get("eps"), target.get("forward_eps")
-    out = {"peers": [p["symbol"] for p in peers], "median_pe": pe, "median_forward_pe": fpe, "n_pe": n_pe,
+    # a peer row with no symbol is still a usable multiple, so don't let a missing key lose the comps
+    out = {"peers": [p.get("symbol") or "?" for p in peers],
+           "median_pe": pe, "median_forward_pe": fpe, "n_pe": n_pe,
            "n_forward_pe": n_fpe, "value_pe": pe * eps if pe and eps and eps > 0 else None,
            "value_forward_pe": fpe * feps if fpe and feps and feps > 0 else None}
     vals = [v for v in (out["value_pe"], out["value_forward_pe"]) if v]

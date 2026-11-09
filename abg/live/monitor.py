@@ -237,14 +237,31 @@ class Monitor:
             except Exception as e:   # pragma: no cover
                 log.exception("forward lab disabled")
                 self.errors.append({"ts": time.time(), "where": "forward lab init", "error": str(e)[:300]})
+        # The stock desk (docs/21) replaced the swing desk as the terminal's stock signal source.
+        # The swing desk still starts if someone turns it back on deliberately, but it is retired and
+        # running both would post two sets of stock signals to the same channel.
+        self.stocks = None
+        if getattr(self.s, "stocks_enabled", False):
+            try:
+                from ..stocks.desk import StockDesk
+                self.stocks = StockDesk(self.s, engine, hub)
+            except Exception as e:   # pragma: no cover
+                log.exception("stock desk disabled")
+                self.errors.append({"ts": time.time(), "where": "stocks init", "error": str(e)[:300]})
         self.swing = None
         if getattr(self.s, "swing_enabled", False):
-            try:
-                from ..swing.desk import SwingDesk
-                self.swing = SwingDesk(self.s, hub, engine.http)
-            except Exception as e:   # pragma: no cover
-                log.exception("swing desk disabled")
-                self.errors.append({"ts": time.time(), "where": "swing init", "error": str(e)[:300]})
+            if self.stocks is not None:
+                log.warning("swing desk (retired) and the stock desk are both enabled - starting the "
+                            "stock desk only, so one set of stock signals is posted")
+                self.errors.append({"ts": time.time(), "where": "swing init",
+                                    "error": "retired; the stock desk is enabled, so this stayed off"})
+            else:
+                try:
+                    from ..swing.desk import SwingDesk
+                    self.swing = SwingDesk(self.s, hub, engine.http)
+                except Exception as e:   # pragma: no cover
+                    log.exception("swing desk disabled")
+                    self.errors.append({"ts": time.time(), "where": "swing init", "error": str(e)[:300]})
         self.pitch = None
         if getattr(self.s, "pitch_enabled", False):
             try:
@@ -308,7 +325,7 @@ class Monitor:
                 self._aux_tasks.append(asyncio.ensure_future(self.alerio.run()))
             if self.rd is not None:
                 self._aux_tasks.append(asyncio.ensure_future(self.rd.run()))
-            for comp in (self.forward, self.swing, self.pitch):
+            for comp in (self.forward, self.stocks, self.swing, self.pitch):
                 if comp is not None:
                     self._aux_tasks.append(asyncio.ensure_future(comp.run()))
             while not self._stop.is_set():
@@ -351,8 +368,8 @@ class Monitor:
                 except Exception:
                     self._poll_task.cancel()
                 self._poll_task = None
-            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd, self.forward, self.swing,
-                         self.pitch):
+            for comp in (self.stream, self.gateway, self.scheduler, self.alpha, self.alerio, self.rd, self.forward,
+                         self.stocks, self.swing, self.pitch):
                 if comp is not None:
                     comp.stop()
             for t in self._aux_tasks:
@@ -574,6 +591,7 @@ class Monitor:
                 "alpha": {k: st.get(k) for k in ("day", "last_bar", "stream_age_s", "ratio", "done_reason")} if st else None,
                 "stream_connected": bool(self.stream and getattr(self.stream, "connected", False)),
                 "swing": {k: (self.swing.state() or {}).get(k) for k in ("seeded", "last_pass", "last_kind")} if self.swing else None,
+                "stocks": {k: (self.stocks.state() or {}).get(k) for k in ("last_daily_run", "last_sweep")} if self.stocks else None,
                 "keep_awake": self.keep_awake.active, "autostart": self.autostart, "errors": len(self.errors)}
 
     def status(self) -> dict:
@@ -599,7 +617,8 @@ class Monitor:
             "alerio": self.alerio.status() if self.alerio is not None else {"enabled": False},
             "rd": self.rd.status() if self.rd is not None else {"enabled": False},
             "forward": self.forward.status() if self.forward is not None else {"enabled": False},
-            "swing": self.swing.status() if self.swing is not None else {"enabled": False},
+            "stocks": self.stocks.status() if self.stocks is not None else {"enabled": False},
+            "swing": self.swing.status() if self.swing is not None else {"enabled": False, "retired": True},
             "pitch": self.pitch.status() if self.pitch is not None else {"enabled": False},
             "uptime": {"days": self.uptime.days(10), "since": self.uptime.since(),
                        "keep_awake": {"on": self.keep_awake.active, "available": self.keep_awake.enabled},
