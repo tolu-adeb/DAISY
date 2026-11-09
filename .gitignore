@@ -19,3 +19,8 @@ swingdesk/data/signals_raw.json
 swingdesk/state/*
 !swingdesk/state/.gitkeep
 !swingdesk/data/
+
+# local .env backups hold keys - never commit them
+.env.before-*
+.env.bak*
+*.env.backup
