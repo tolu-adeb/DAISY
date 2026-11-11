@@ -117,7 +117,8 @@ class MarketFeed:
             d = None
         # a day by default, so a new listing is in the research universe the day after it starts trading
         ttl = float(getattr(self.s, "stocks_universe_refresh_days", 1) or 1)
-        fresh = d and (time.time() - float(d.get("at", 0))) < ttl * 86400
+        # v2 = written after the paging fix; an older cache holds a cut-off list and is never "fresh"
+        fresh = d and d.get("v") == 2 and (time.time() - float(d.get("at", 0))) < ttl * 86400
         if fresh and not refresh:
             return set(d["symbols"])
         try:
@@ -144,7 +145,7 @@ class MarketFeed:
             for t in syms:
                 if t not in old:
                     seen.setdefault(t, today)
-        tmp.write_text(json.dumps({"at": time.time(), "symbols": syms, "names": names, "first_seen": seen}), encoding="utf-8")
+        tmp.write_text(json.dumps({"at": time.time(), "v": 2, "symbols": syms, "names": names, "first_seen": seen}), encoding="utf-8")
         tmp.replace(p)
         return set(syms)
 

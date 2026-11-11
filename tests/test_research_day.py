@@ -616,3 +616,55 @@ def test_the_dashboard_stays_small_and_declares_its_themes():
     html = (root / "daisy.html").read_text(encoding="utf-8")
     assert 'class="skip"' in html and "<main" in html and 'aria-live="polite"' in html and "cdn" not in html.lower()
     assert (root / "daisy" / "fonts" / "LICENSES.txt").exists()
+
+
+# --------------------------------------------------------------------------- the whole market really is the whole market
+def test_the_stock_list_follows_every_page(tmp_path):
+    """The paging link's cursor must survive: losing it cut the market to the first page (about 1,400 names)."""
+    from abg.swing.wide import Sources
+
+    class Http:
+        def __init__(self):
+            self.calls = []
+
+        async def get_json(self, url, provider=None, params=None, timeout=None, headers=None):
+            self.calls.append((url, dict(params or {})))
+            t, cur = (params or {}).get("type"), (params or {}).get("cursor")
+            if cur == "P2":
+                return {"results": [{"ticker": "CCC", "name": "C Co", "type": "CS"}]}
+            if t == "CS":
+                return {"results": [{"ticker": "AAA", "name": "A Co", "type": "CS"}, {"ticker": "BBB", "name": "B Co", "type": "CS"}],
+                        "next_url": "https://api.polygon.io/v3/reference/tickers?cursor=P2"}
+            return {"results": [{"ticker": "ADR1", "name": "Adr One", "type": "ADRC"}]}
+    http = Http()
+    src = Sources(SimpleNamespace(polygon_api_key="SECRET", swing_wide_polygon_per_min=100000, polygon_base_url=None), http)
+    rows = asyncio.run(src.common_stocks("CS,ADRC"))
+    assert [r["ticker"] for r in rows] == ["AAA", "BBB", "CCC", "ADR1"]
+    page2 = http.calls[1]
+    assert page2[1].get("cursor") == "P2" and "SECRET" not in page2[0] and "cursor" not in page2[0]
+
+
+def test_morning_catchup_runs_once_when_the_evening_pass_missed_the_market_bar(tmp_path):
+    d = _market_desk(tmp_path, ["BIGCO", "MIDCO"], sessions=65)
+    d.s.stocks_market_catchup = "06:30"
+    d.u.market = ["BIGCO"]
+    day = datetime(2026, 11, 11, 7, 0, tzinfo=NY)                              # a Wednesday morning
+    d._save("state.json", {"last_daily": {"as_of": "2026-11-10", "market_bar": False}})
+    assert d._catchup_due(day) and not d._catchup_due(day.replace(hour=5)) and not d._catchup_due(day.replace(hour=9, minute=30))
+    assert not d._catchup_due(datetime(2026, 11, 14, 7, 0, tzinfo=NY))         # Saturday
+    d._save("state.json", {"last_daily": {"as_of": "2026-11-10", "market_bar": True}})
+    assert not d._catchup_due(day)                                             # the pass already saw the whole market
+    d._save("state.json", {"last_daily": {"as_of": "2026-11-10", "market_bar": False}})
+    ran = []
+
+    async def fake_daily(post=True, enrich=None):
+        ran.append(post)
+        return {"opens": 0, "market_bar": True}
+    d.daily = fake_daily
+    out = asyncio.run(d.catchup(day))                                          # the stub publishes any session asked for
+    assert ran == [False] and out["market_bar"] is True                        # re-run, and never posted
+    assert d._market_bar("2026-11-10") and not d._catchup_due(day.replace(minute=30))      # once per morning
+    d.s.stocks_market_catchup = ""
+    d._save("state.json", {"last_daily": {"as_of": "2026-11-10", "market_bar": False}})
+    assert not d._catchup_due(day)                                             # "" switches it off
+    d.close()

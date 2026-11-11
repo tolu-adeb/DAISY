@@ -404,6 +404,8 @@ class StockDesk(DayMixin):
                 "seconds": round(time.time() - t0, 1), "enriched": sorted(enrich_set),
                 "screen": {k: screen_meta.get(k) for k in ("covered", "eligible", "too_new", "in_rule_panel", "seconds")},
                 "mood": mood.get("label"), "memory_mb": _peak_mb(),
+                # did the wider market have this session's bar? False = only the per-symbol core could signal
+                "market_bar": (not self.market.enabled) or (not self.u.market) or self._market_bar(state.date),
             }
             st = self._load("state.json", {})
             st["last_daily"] = self.last_daily
@@ -771,6 +773,53 @@ class StockDesk(DayMixin):
         # so compare against the calendar day the pass ran rather than the panel date
         return self._load("state.json", {}).get("last_daily_run") != now.date().isoformat() or not done
 
+    # ---- the morning catch-up: Polygon's free plan publishes a session's whole-market bar overnight
+    def _market_bar(self, day: str) -> bool:
+        try:
+            from datetime import date as _date
+            return bool(self.market.days.has(_date.fromisoformat(str(day)[:10])))
+        except Exception:
+            return False
+
+    def _catchup_due(self, now: datetime) -> bool:
+        """True on a trading morning when the last pass ran without the wider market's bar for its
+        session. The evening pass cannot wait for it (the free plan publishes after midnight), and without
+        that bar no name outside the per-symbol core can signal."""
+        from abg.live.market_hours import is_trading_day
+        raw = str(getattr(self.s, "stocks_market_catchup", "06:30") or "").strip()
+        if not raw or not self.market.enabled or not is_trading_day(now.date()):
+            return False
+        try:
+            hh, mm = (int(x) for x in raw.split(":"))
+        except ValueError:
+            hh, mm = 6, 30
+        if not (hh, mm) <= (now.hour, now.minute) < (9, 20):
+            return False
+        st = self._load("state.json", {})
+        if st.get("catchup_day") == now.date().isoformat():
+            return False
+        ld = st.get("last_daily") or {}
+        if ld.get("market_bar") and self.u.market:
+            return False                                   # the last pass already saw the whole market
+        return time.time() - getattr(self, "_catchup_try", 0.0) >= 600      # one try every ten minutes
+
+    async def catchup(self, now: datetime) -> dict:
+        """Fetch the last session's whole-market bar if it is out, then re-run the pass without posting:
+        the watchlist (08:30) and the top 5 (09:00) then come from the whole market."""
+        self._catchup_try = time.time()
+        st = self._load("state.json", {})
+        day = (st.get("last_daily") or {}).get("as_of")
+        if day and not self._market_bar(day):
+            await self.market_refresh(max_calls=3)
+        if day and not self._market_bar(day) and (now.hour, now.minute) < (8, 10):
+            return {"waiting": f"the whole-market bar for {day} is not published yet"}
+        st = self._load("state.json", {})
+        st["catchup_day"] = now.date().isoformat()
+        self._save("state.json", st)
+        out = await self.daily(post=False)
+        log.info("stocks: morning catch-up pass: %s opens, market bar %s", out.get("opens"), out.get("market_bar"))
+        return out
+
     def _mark_daily_run(self, now: datetime) -> None:
         st = self._load("state.json", {})
         st["last_daily_run"] = now.date().isoformat()
@@ -915,6 +964,8 @@ class StockDesk(DayMixin):
                         else:
                             await self._sleep(600)                       # Polygon not out yet: check in 10 min
                             continue
+                    elif self._catchup_due(now):
+                        await self.catchup(now)
                     elif (due := self._watch_due(now)) is not None:
                         if due == "scan":
                             await self.morning(now, post=False)

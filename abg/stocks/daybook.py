@@ -70,7 +70,12 @@ class DayMixin:
                     extra = SC.build(SC.wide_from_long(long), self.cfg, names, sectors, non_stock)
                     # outside the rule panel = the rules cannot pick it, whatever its own numbers say
                     extra["eligible"] = False
-                    extra["why_not"] = extra["why_not"].fillna("outside the rule universe (liquidity floor or cap)")
+                    tier = set(self.u.market)                # in the rule universe, but no bar yet for this session
+                    late = [t in tier for t in extra.index]
+                    extra.loc[late, "why_not"] = ("in the rule universe; its bar for this session is published overnight, "
+                                                  "so it is ranked at the morning pass")
+                    extra["why_not"] = extra["why_not"].where(extra["why_not"].notna(),
+                                                              "outside the rule universe (liquidity floor or cap)")
                     covered_extra = len(extra)
                     parts.append(extra)
         except Exception as e:                           # coverage beyond the panel is a bonus

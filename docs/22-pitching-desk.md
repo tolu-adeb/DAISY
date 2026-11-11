@@ -103,6 +103,16 @@ that is not eligible says why, on its Explore card and in `why_not`.
   allows), filled gradually: newest sessions first, `ABG_STOCKS_MARKET_BACKFILL_CALLS=25` older ones
   per day, so a deep backfill never holds up the day's posts.
 
+**Two things kept the wider market out until Nov 11 2026, both fixed.** The list of listed names
+was being cut to its first page (about 1,400 names instead of about 5,500): the paging link's cursor
+was dropped by the HTTP library, so page two came back as an unfiltered first page. And Polygon's free
+plan publishes a session's whole-market bar overnight, after the evening pass has run, so no name
+outside the per-symbol S&P 500 core had a bar for the session and none could signal. The evening pass
+now waits only until `ABG_STOCKS_MARKET_WAIT_UNTIL` (17:00), and a **morning catch-up pass**
+(`ABG_STOCKS_MARKET_CATCHUP`, 06:30 ET, no post) fetches the bar and re-runs the rules, so the 08:30
+watchlist and the 09:00 top 5 are picked from the whole market. `last_daily.market_bar` says whether a
+pass saw the wider market's bar.
+
 **IPOs and new listings have their own track.** The momentum and trend rules need about a year of
 history, so a name with fewer than `too_new_sessions` (252) bars is marked **too new for the tested
 rules**: watched and researched, not rule-pitched. Upcoming listings come from Finnhub's IPO
@@ -291,6 +301,8 @@ gain while the team is four people).
 | `ABG_STOCKS_MARKET_SESSIONS` | `500` | Whole-market sessions kept |
 | `ABG_STOCKS_MARKET_BACKFILL_CALLS` | `25` | Older sessions fetched per day until that many are stored |
 | `ABG_STOCKS_UNIVERSE_REFRESH_DAYS` | `1` | How often the list of listed names is re-read |
+| `ABG_STOCKS_MARKET_WAIT_UNTIL` | `17:00` | How long the evening pass waits for the whole-market bar |
+| `ABG_STOCKS_MARKET_CATCHUP` | `06:30` | Morning catch-up pass once that bar is out (no post); empty = off |
 | `ABG_STOCKS_NEWS` | `true` | Store headlines and filings (needs `ABG_FINNHUB_API_KEY`) |
 | `ABG_STOCKS_NEWS_MINUTES` / `_MAX_NAMES` | `30` / `40` | News re-read cadence and names per pass |
 | `ABG_STOCKS_EDGAR` / `_EDGAR_USER_AGENT` | `true` / app name | SEC filings and the User-Agent sent to the SEC |

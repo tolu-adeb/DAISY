@@ -207,7 +207,14 @@ class Sources:
                 nxt = (j or {}).get("next_url")
                 if not nxt:
                     break
-                url, params = nxt, {"apiKey": self.polygon_key}       # next_url carries the cursor, not the key
+                # next_url carries the cursor, not the key. Pass the cursor as a parameter: httpx (0.28+) drops
+                # a URL's own query string when params are given, which silently returned page one of an
+                # unfiltered list and cut the market to about 1,400 names.
+                from urllib.parse import parse_qs, urlparse
+                cur = (parse_qs(urlparse(nxt).query).get("cursor") or [None])[0]
+                if not cur:
+                    break
+                params = {"cursor": cur, "apiKey": self.polygon_key}
         return out
 
     # -------------------------------------------------- Finnhub

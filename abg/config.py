@@ -393,7 +393,12 @@ class Settings(BaseSettings):
     stocks_weekly_recap: bool = False              # post the Friday recap to Discord (off until you turn it on)
     stocks_weekly_recap_time: str = "16:45"        # ET, Fridays
     stocks_market_replay_years: int = 2            # live replay length when the market tier is on (memory)
-    stocks_market_wait_until: str = "21:30"        # ET: the daily pass waits for Polygon's bar until then
+    stocks_market_wait_until: str = "17:00"        # ET: the evening pass waits for Polygon's bar until then. The free
+                                                   # plan publishes it overnight, so the wider market joins at the
+                                                   # morning catch-up pass below
+    stocks_market_catchup: str = "06:30"           # ET, trading days: once the last session's whole-market bar is out,
+                                                   # re-run the pass (no post) so the 08:30 watchlist and the 09:00 top 5
+                                                   # are picked from the whole market; "" = off
     # risk and allocation overrides (null = whatever configs/stocks.yaml says)
     stocks_allocation: str | None = None           # hedge | fixed
     stocks_vol_target: float | None = None
