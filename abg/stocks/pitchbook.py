@@ -160,7 +160,9 @@ def track_record(rows: list[dict]) -> dict:
             "by_rank": by(lambda r: r.get("drank")), "by_sector": by(lambda r: r.get("sector")),
             # untested: pitches by the name's news sentiment when it was pitched, kept apart so the team can
             # see whether a sentiment gate would have helped before anyone proposes one
-            "by_sentiment": by(lambda r: r.get("sent_bucket"))}
+            "by_sentiment": by(lambda r: r.get("sent_bucket")),
+            # a person's idea and a rule's signal are different things: scored apart, so each can be judged
+            "by_kind": by(lambda r: "analyst" if r.get("book") == "analyst" else "rule")}
 
 
 # --------------------------------------------------------------------------- storage

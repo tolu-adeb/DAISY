@@ -126,6 +126,30 @@ class Portfolio:
         self.db.log("holding", "cash", "open", f"cash set to ${v:,.2f}")
         return v
 
+    # ---- money in and out (deposits are positive, withdrawals negative)
+    def flows(self) -> list[dict]:
+        return [dict(r) for r in self.db.q("SELECT id, day, amount, note FROM flow ORDER BY day, id")]
+
+    def add_flow(self, day, amount, note=None) -> dict:
+        try:
+            amt = float(str(amount).replace("$", "").replace(",", ""))
+        except (TypeError, ValueError):
+            raise ValueError("the amount must be a number (negative for a withdrawal)")
+        if amt != amt or amt == 0:
+            raise ValueError("the amount cannot be zero")
+        d = _day(day or date.today().isoformat(), "the date")
+        note = " ".join(str(note or "").split())[:200] or None
+        self.db.x("INSERT INTO flow(day, amount, note) VALUES(?,?,?)", (d, amt, note))
+        self.db.log("holding", "cash", "open", f"{'deposit' if amt > 0 else 'withdrawal'} of ${abs(amt):,.2f} on {d}")
+        return dict(self.db.q("SELECT id, day, amount, note FROM flow ORDER BY id DESC LIMIT 1")[0])
+
+    def delete_flow(self, fid: int) -> bool:
+        if not self.db.q("SELECT 1 FROM flow WHERE id=?", (int(fid),)):
+            raise KeyError(fid)
+        self.db.x("DELETE FROM flow WHERE id=?", (int(fid),))
+        self.db.log("holding", "cash", "open", "removed a deposit/withdrawal entry")
+        return True
+
     def log(self, limit: int = 60) -> list[dict]:
         return [dict(r) for r in self.db.q("SELECT ref, at, status, note FROM history WHERE kind='holding' ORDER BY rowid DESC LIMIT ?", (limit,))]
 
@@ -177,3 +201,177 @@ def weights(view: dict) -> dict | None:
         if r.get("weight"):
             out[r["symbol"]] = round(out.get(r["symbol"], 0.0) + r["weight"], 6)
     return out or None
+
+
+def performance(rows: list[dict], flows: list[dict], cash_now: float, closes_fn, bench) -> dict:
+    """The fund's value day by day, rebuilt from the position log, and its time-weighted return.
+
+    ``closes_fn(symbol)`` -> a close series (DatetimeIndex) or None; ``bench``: the benchmark's close series.
+    Value on a day = every position held at that day's close, at that close, plus cash. Cash is walked
+    backwards from today's logged cash: a buy took its cost out, a sale put its proceeds in, a deposit or
+    withdrawal moved it. The return is time-weighted: money moving in or out never counts as performance.
+    """
+    import pandas as pd
+    out = {"available": False, "series": [], "stats": {}, "assumptions": [], "contributions": []}
+    rows = [r for r in rows if r.get("opened")]
+    if not rows or bench is None or not len(bench):
+        out["reason"] = "log at least one position (and run a daily pass) to see performance"
+        return out
+    start = pd.Timestamp(min(r["opened"] for r in rows))
+    days = bench.index[bench.index >= start]
+    if len(days) < 2:
+        out["reason"] = "performance appears once two sessions have passed since the first position"
+        return out
+    value = pd.Series(0.0, index=days)
+    cash_moves = pd.Series(0.0, index=days)              # + into cash (sales), - out of cash (buys)
+    unpriced = []
+
+    def snap(d):                                         # the first session on or after a date
+        i = days.searchsorted(pd.Timestamp(d))
+        return days[min(i, len(days) - 1)]
+    for r in rows:
+        px = closes_fn(r["symbol"])
+        o = snap(r["opened"])
+        c = snap(r["closed"]) if r.get("status") == "closed" and r.get("closed") else None
+        if px is None or not len(px):
+            unpriced.append(r["symbol"])
+            p = pd.Series(float(r["cost"]), index=days)  # held at cost: it adds no gain and no loss
+        else:
+            p = px.reindex(days, method="ffill").fillna(float(r["cost"]))
+        held = (days >= o) & ((days < c) if c is not None else True)
+        value = value.add(p.where(held, 0.0) * float(r["shares"]), fill_value=0.0)
+        cash_moves[o] -= float(r["shares"]) * float(r["cost"])
+        if c is not None and r.get("exit_price") is not None:
+            cash_moves[c] += float(r["shares"]) * float(r["exit_price"])
+    ext = pd.Series(0.0, index=days)
+    for f in flows or []:
+        if pd.Timestamp(f["day"]) >= days[0]:
+            ext[snap(f["day"])] += float(f["amount"])
+    # cash at each close, walked back from today's logged cash
+    change = cash_moves + ext
+    cash = float(cash_now or 0.0) - change[::-1].cumsum()[::-1] + change
+    cash_before_first = float(cash.iloc[0] - change.iloc[0])
+    total = value + cash
+    prev = total.shift(1)
+    prev.iloc[0] = cash_before_first
+    ret = ((total - ext) / prev - 1).where(prev > 0, 0.0).fillna(0.0)
+    idx = (1 + ret).cumprod()
+    b = bench.reindex(days, method="ffill")
+    bidx = b / float(b.iloc[0])
+    dd = idx / idx.cummax() - 1
+    bret = b.pct_change().fillna(0.0)
+    var = float(bret.var())
+    step = max(1, len(days) // 500)
+    out.update({"available": True, "start": str(days[0].date()), "end": str(days[-1].date()), "days": int(len(days)),
+                "series": [{"t": str(d.date()), "fund": round(float(idx[d]), 5), "bench": round(float(bidx[d]), 5),
+                            "dd": round(float(dd[d]), 5), "value": round(float(total[d]), 2)} for d in days[::step]],
+                "stats": {"total_return": round(float(idx.iloc[-1] - 1), 5), "bench_return": round(float(bidx.iloc[-1] - 1), 5),
+                          "excess": round(float(idx.iloc[-1] - bidx.iloc[-1]), 5),
+                          "ann_vol": round(float(ret.std() * (252 ** 0.5)), 5) if len(ret) > 5 else None,
+                          "bench_vol": round(float(bret.std() * (252 ** 0.5)), 5) if len(bret) > 5 else None,
+                          "max_drawdown": round(float(dd.min()), 5), "current_drawdown": round(float(dd.iloc[-1]), 5),
+                          "beta": round(float(ret.cov(bret) / var), 3) if var > 0 and len(ret) > 20 else None,
+                          "value_now": round(float(total.iloc[-1]), 2), "best_day": round(float(ret.max()), 5),
+                          "worst_day": round(float(ret.min()), 5)}})
+    if (cash < -1e-6).any():
+        out["assumptions"].append("The cash log does not cover every purchase (cash would have been negative on some days): "
+                                  "log the fund's deposits so the return is exact.")
+    if not flows:
+        out["assumptions"].append("No deposits or withdrawals are logged, so the money behind each purchase is assumed to have "
+                                  "been in the fund as cash from the first day.")
+    if unpriced:
+        out["assumptions"].append(f"No stored prices for {', '.join(sorted(set(unpriced)))}: held at cost in the chart.")
+    return out
+
+
+def breakdown(view: dict, sectors: dict, cap: float = 0.10) -> dict:
+    """Where the money is: contribution by holding, sector weights and concentration."""
+    op = view.get("open") or []
+    tot_gain = sum(r["gain"] for r in op if r.get("gain") is not None) + sum(r["gain"] for r in view.get("closed") or [] if r.get("gain") is not None)
+    contrib = sorted(({"symbol": r["symbol"], "gain": r["gain"], "gain_pct": r.get("gain_pct"), "status": r["status"],
+                       "share": round(r["gain"] / tot_gain, 4) if tot_gain else None}
+                      for r in op + (view.get("closed") or []) if r.get("gain") is not None), key=lambda x: -x["gain"])
+    sec: dict = {}
+    for r in op:
+        k = sectors.get(r["symbol"]) or "not in data"
+        sec[k] = sec.get(k, 0.0) + (r.get("weight") or 0.0)
+    ws = sorted((r.get("weight") or 0.0 for r in op), reverse=True)
+    by_sym: dict = {}
+    for r in op:
+        by_sym[r["symbol"]] = by_sym.get(r["symbol"], 0.0) + (r.get("weight") or 0.0)
+    return {"contributions": contrib, "sectors": [{"sector": k, "weight": round(v, 4)} for k, v in sorted(sec.items(), key=lambda kv: -kv[1])],
+            "concentration": {"top1": round(ws[0], 4) if ws else None, "top3": round(sum(ws[:3]), 4) if ws else None,
+                              "hhi": round(sum(w * w for w in by_sym.values()), 4) if by_sym else None,
+                              "over_cap": sorted(s for s, w in by_sym.items() if w > cap), "cap": cap}}
+
+
+def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> list[dict]:
+    """What the log shows about how the fund invests, next to what DAISY pitched. Observations with their
+    evidence and one testable suggestion each - never an instruction."""
+    op, obs = view.get("open") or [], []
+    by_sym: dict = {}
+    for p in sorted(pitches, key=lambda p: p["as_of"]):
+        by_sym.setdefault(p["symbol"], []).append(p)
+
+    def pitch_for(h):
+        if h.get("pitch_id"):
+            got = next((p for p in pitches if p["id"] == h["pitch_id"] and p["symbol"] == h["symbol"]), None)
+            if got:
+                return got
+        return (by_sym.get(h["symbol"]) or [None])[-1]           # the latest pitch on the name
+    if not op:
+        return obs
+    linked = [(h, pitch_for(h)) for h in op]
+    with_p = [(h, p) for h, p in linked if p]
+    obs.append({"title": "How much of the portfolio came from DAISY's ideas",
+                "finding": f"{len(with_p)} of {len(op)} open positions are names DAISY has pitched.",
+                "evidence": [f"{h['symbol']}: pitched {p['as_of']} ({p.get('rating') or 'BUY'}, {'analyst' if p['book'] == 'analyst' else 'rule'})" for h, p in with_p][:8]
+                            + [f"{h['symbol']}: no DAISY pitch on record" for h, p in linked if not p][:8],
+                "suggestion": "Link each position to its pitch when logging it, so the two records can be compared name by name."})
+    past = [(h, p) for h, p in with_p if (p.get("plan") or {}).get("stop") and h.get("last") is not None and h["last"] < float(p["plan"]["stop"])]
+    if past:
+        avg = sum(h["last"] / float(p["plan"]["stop"]) - 1 for h, p in past) / len(past)
+        obs.append({"title": "Positions held below their pitch's stop",
+                    "finding": f"{len(past)} position(s) trade under the stop their pitch set, on average {avg:+.1%} beyond it.",
+                    "evidence": [f"{h['symbol']}: last ${h['last']:,.2f} against a stop of ${float(p['plan']['stop']):,.2f} ({h['last'] / float(p['plan']['stop']) - 1:+.1%})" for h, p in past],
+                    "suggestion": "Decide each one on purpose: either the stop is the exit, or write down why this position is an exception."})
+    stale = [(h, p) for h, p in with_p if p.get("status") == "closed"]
+    if stale:
+        obs.append({"title": "Still held after DAISY closed the pitch",
+                    "finding": f"{len(stale)} position(s) are open although their pitch has closed.",
+                    "evidence": [f"{h['symbol']}: pitch closed {p.get('closed_at')} ({p.get('close_reason')}); position {('%+.1f%%' % (h['gain_pct'] * 100)) if h.get('gain_pct') is not None else 'not priced'} against cost" for h, p in stale],
+                    "suggestion": "Check whether holding past the plan has helped: compare each position's return since the pitch closed with SPY's."})
+    weak = [h for h in op if (screen.get(h["symbol"]) or {}).get("close") and (screen[h["symbol"]].get("sma200") or 0) and screen[h["symbol"]]["close"] < screen[h["symbol"]]["sma200"]]
+    if weak:
+        obs.append({"title": "Holdings below their 200-day average",
+                    "finding": f"{len(weak)} of {len(op)} holdings trade below their 200-day average, where none of DAISY's rule books would buy.",
+                    "evidence": [f"{h['symbol']}: {screen[h['symbol']]['close'] / screen[h['symbol']]['sma200'] - 1:+.1%} from its 200-day average" for h in weak],
+                    "suggestion": "Review these first: a long-term thesis can justify one, but each should have a written reason."})
+    by_w: dict = {}
+    for h in op:
+        by_w[h["symbol"]] = by_w.get(h["symbol"], 0.0) + (h.get("weight") or 0.0)
+    big = {s: w for s, w in by_w.items() if w > cap}
+    if big:
+        obs.append({"title": "Positions larger than the pitch size cap",
+                    "finding": f"{len(big)} position(s) are above {cap:.0%} of the fund, the largest size a DAISY pitch will suggest.",
+                    "evidence": [f"{s}: {w:.1%} of the fund" for s, w in sorted(big.items(), key=lambda kv: -kv[1])],
+                    "suggestion": f"Either trim toward {cap:.0%} or raise pitch.max_position_pct on purpose, so the plan and the book agree."})
+    marked = [h for h in op if h.get("gain_pct") is not None]
+    win, lose = [h for h in marked if h["gain_pct"] > 0], [h for h in marked if h["gain_pct"] <= 0]
+    if win and lose:
+        aw, al = sum(h["gain_pct"] for h in win) / len(win), sum(h["gain_pct"] for h in lose) / len(lose)
+        worst = min(lose, key=lambda h: h["gain_pct"])
+        obs.append({"title": "Winners against losers",
+                    "finding": f"{len(win)} holdings are up (average {aw:+.1%}) and {len(lose)} are down (average {al:+.1%}).",
+                    "evidence": [f"Largest loss: {worst['symbol']} {worst['gain_pct']:+.1%}", f"Average gain to average loss: {abs(aw / al):.2f} to 1" if al else "No losing average"],
+                    "suggestion": "If the average loss is larger than the average gain, test a rule that cuts a position at a fixed loss."})
+    held = {h["symbol"] for h in op}
+    taken = [p for p in pitches if p["symbol"] in held and (p.get("track") or {}).get("ret") is not None]
+    passed = [p for p in pitches if p["symbol"] not in held and (p.get("track") or {}).get("ret") is not None and p["book"] != "dual_momentum"]
+    if taken and passed:
+        mt, mp = sum(p["track"]["ret"] for p in taken) / len(taken), sum(p["track"]["ret"] for p in passed) / len(passed)
+        obs.append({"title": "Pitches the fund took against those it passed on",
+                    "finding": f"Pitches on names the fund holds have returned {mt:+.1%} on average; the {len(passed)} it did not take, {mp:+.1%}.",
+                    "evidence": [f"Taken: {len(taken)} pitches", f"Passed on: {len(passed)} pitches"],
+                    "suggestion": "If the passed-on pitches keep doing better, look at how the fund chooses which pitches to act on."})
+    return obs

@@ -38,6 +38,7 @@ from . import thesis as T
 from .deskdb import DeskDB
 from .config import build_config, describe as describe_cfg
 from .daybook import DayMixin
+from .insight import InsightMixin
 from .live import LiveSignals
 from .market import MarketFeed
 from .store import BarStore
@@ -52,7 +53,7 @@ DEFAULT_DAILY_TIME = "16:20"
 ENRICH_DEFAULT = 6                # how many top candidates get fundamentals + news
 
 
-class StockDesk(DayMixin):
+class StockDesk(DayMixin, InsightMixin):
     def __init__(self, settings, engine, hub=None, symbols_fn=None):
         self.s = settings
         self.engine = engine                     # the terminal's data engine (providers, http)
@@ -320,7 +321,7 @@ class StockDesk(DayMixin):
         book = getattr(self, "book", None)
         return {"trades": r.get("trades"), "period": period, "store": self.store,
                 # pitches made before this session; today's own are this pass, not a prior idea
-                "open_pitches": {sym: bk for sym, bk in ((s_, {b: r for b, r in d.items() if r["as_of"] < state.date})
+                "open_pitches": {sym: bk for sym, bk in ((s_, {b: r for b, r in d.items() if r["as_of"] < state.date and b != "analyst"})
                                                          for s_, d in (book.open_by_symbol() if book else {}).items()) if bk},
                 "fund_holdings": self.fund_holdings() if book else None,
                 "sectors": self.store.sectors(),
@@ -361,14 +362,15 @@ class StockDesk(DayMixin):
                 eq_ = r_.get("equity")
                 per_ = (str(eq_.index[0].date()), str(eq_.index[-1].date())) if eq_ is not None and len(eq_) else None
                 self.db.kv_set("base_by_book", {b: {k: v for k, v in P.base_rates(r_.get("trades"), b, per_).items()
-                                                    if k in ("n", "median_hold_days", "median_win_R", "win_rate", "small_sample")}
+                                                    if isinstance(v, (int, float, bool, str, list)) or v is None}
                                                 for b in ("trend_pullback", "mean_reversion", "xs_momentum")})
             except Exception as e:
                 log.warning("stocks: screen refresh failed (%s: %s)", type(e).__name__, str(e)[:160])
                 self.errors.append({"ts": time.time(), "where": "screen", "error": f"{type(e).__name__}: {e}"[:300]})
             mood: dict = {}
             try:
-                await self.news_refresh(sorted({c.symbol for c in cands if c.book != "dual_momentum"}))
+                await self.news_refresh(sorted({c.symbol for c in cands if c.book != "dual_momentum"}
+                                               | {r["symbol"] for r in self.portfolio.rows("open")}))
                 mood = self.market_mood()
                 self.shocks(day=state.date)
             except asyncio.CancelledError:

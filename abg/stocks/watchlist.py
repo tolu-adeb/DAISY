@@ -23,7 +23,7 @@ from .live import BOOK_LABEL, BOOK_SHORT
 
 LIVE = ("watching", "triggered", "in_play")
 DEFAULTS = {"size": 30, "post": 10, "per_book": 8, "watch_sessions": 10, "max_steps": 2, "ipo_days_ahead": 14,
-            "ipo_days_back": 30}
+            "ipo_days_back": 30, "ideas": 5, "idea_min_adv_usd": 2e6, "idea_min_price": 2.0}
 
 
 def watch_cfg(cfg: dict | None) -> dict:
@@ -141,6 +141,30 @@ def ipo_card(x: dict, r: dict | None, today: date, wc: dict) -> dict:
     }
 
 
+def find_ideas(screen: dict[str, dict], wc: dict) -> list[str]:
+    """Research ideas from the market scan: names the rules cannot pitch (under the liquidity floor, or too
+    new) that are trading with strength - above their 50-day average with the best one-month gains. They
+    are untested by definition; a person can pitch one from Explore."""
+    cand = []
+    for sym, r in screen.items():
+        if r.get("eligible") or not r.get("is_stock") or (r.get("why_not") or "").startswith("in the rule universe"):
+            continue
+        c, s50, m = r.get("close"), r.get("sma50"), r.get("chg_21d")
+        if not c or not s50 or m is None or c < wc["idea_min_price"] or (r.get("adv20_usd") or 0) < wc["idea_min_adv_usd"]:
+            continue
+        if c > s50 and 0 < m < 1.5 and (r.get("sessions") or 0) >= 40:
+            cand.append((-m, sym))
+    return [s for _, s in sorted(cand)[:max(0, int(wc["ideas"]))]]
+
+
+def idea_card(sym: str, r: dict, today: date, wc: dict) -> dict:
+    c = news_card(sym, r, f"Market scan: up {r['chg_21d']:+.0%} in a month and above its 50-day average. "
+                          f"The rules cannot pitch it ({r.get('why_not') or 'outside the rule universe'}).", [], today, wc, "idea")
+    c["strategy"].update({"label": "Research idea (untested)",
+                          "trigger": "not rule-pitched and never tested: a starting point for an analyst pitch from Explore"})
+    return c
+
+
 def build(screen: dict[str, dict], setups_fn, packs: list[dict], today: date, cfg: dict, base_by_book: dict | None = None,
           prev_top: set | None = None, in_play: dict | None = None, ipos: list[dict] | None = None,
           earnings: dict | None = None, shocks: list[dict] | None = None, themes: dict | None = None) -> list[dict]:
@@ -190,12 +214,15 @@ def build(screen: dict[str, dict], setups_fn, packs: list[dict], today: date, cf
         sym = x.get("symbol") or x["name"][:12].upper()
         if sym not in cards:
             cards[sym] = ipo_card(x, screen.get(sym), today, wc)
+    for sym in find_ideas(screen, wc):
+        if sym not in cards:
+            cards[sym] = idea_card(sym, screen[sym], today, wc)
     for sym, c in cards.items():
         c["rank_words"] = RK.RANK_WORDS.get(c["drank"])
         if themes:
             from .news import themes_of
             c["themes"] = sorted(set(c["themes"]) | set(themes_of(sym, themes)))
-    order = {"pitch": 0, "setup": 1, "momentum_new": 1, "theme": 2, "news": 3, "ipo": 4}
+    order = {"pitch": 0, "setup": 1, "momentum_new": 1, "theme": 2, "news": 3, "idea": 4, "ipo": 5}
     out = sorted(cards.values(), key=lambda c: (c["drank"], order.get(c["source"], 5),
                                                 -((c["strategy"].get("conviction") or 0)), c["symbol"]))
     return out[:wc["size"]]

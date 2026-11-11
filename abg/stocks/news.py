@@ -392,3 +392,65 @@ def material(a: dict, cfg: dict | None = None) -> bool:
     """A headline worth an alert on a watched name: clearly about it and clearly good or bad, or a filing."""
     nc = news_cfg(cfg)
     return a.get("kind") == "filing" or ((a.get("rel") or 0) >= 0.6 and abs(a.get("sent") or 0) >= nc["material"])
+
+
+# --------------------------------------------------------------------------- the News tab (docs/23.2)
+CATEGORIES = [("holdings", "Our holdings"), ("pitches", "Our pitches and watchlist"), ("markets", "Markets and macro"),
+              ("earnings", "Earnings"), ("deals", "Mergers and deals"), ("ipos", "IPOs"), ("ai_tech", "AI and tech"),
+              ("filings", "Filings (SEC)")]
+_RX = {
+    "earnings": r"\b(earnings|quarterly results|q[1-4] results|eps|revenue (beat|miss)|guidance|profit (rises|falls|jumps|drops)|reports (first|second|third|fourth)[- ]quarter)\b",
+    "deals": r"\b(acquir\w+|merger|merge[sd]?|buyout|takeover|to buy|agrees to (buy|sell)|deal to|stake in|spin[- ]?off)\b",
+    "ipos": r"\b(ipo|initial public offering|goes public|going public|public debut|files to go public|direct listing)\b",
+    "ai_tech": r"\b(a\.?i\.?|artificial intelligence|chip\w*|semiconductor\w*|gpu\w*|data cent(er|re)s?|openai|anthropic|nvidia|cloud|llm|chatgpt|claude|gemini)\b",
+    "markets": r"\b(fed|federal reserve|inflation|cpi|rate cut|rate hike|interest rates?|treasur\w+|yields?|jobs report|payrolls|gdp|recession|tariffs?|stocks (rise|fall|rally|slide|close)|wall street|s&p 500|nasdaq|dow)\b",
+}
+
+
+def categorize(a: dict, holdings: set | None = None, watched: set | None = None, ai: set | None = None) -> list[str]:
+    """Which News-tab categories an article belongs to. Rules only, so it can be checked: the feed's own
+    category, whose ticker it is, and keywords in the headline."""
+    low = (a.get("title") or "").lower()
+    sym = a.get("symbol")
+    out = []
+    if a.get("kind") == "filing":
+        out.append("filings")
+    if sym and sym in (holdings or ()):
+        out.append("holdings")
+    if sym and sym in (watched or ()):
+        out.append("pitches")
+    if re.search(_RX["earnings"], low):
+        out.append("earnings")
+    if ((a.get("data") or {}).get("category") == "merger") or re.search(_RX["deals"], low):
+        out.append("deals")
+    if re.search(_RX["ipos"], low):
+        out.append("ipos")
+    if (sym and sym in (ai or ())) or re.search(_RX["ai_tech"], low):
+        out.append("ai_tech")
+    if re.search(_RX["markets"], low) or (not sym and not out):
+        out.append("markets")
+    return out or ["markets"]
+
+
+def brief(mood: dict | None, heat: dict | None, shocks: list[dict] | None, counts: dict | None = None) -> list[str]:
+    """The market brief: three to five sentences, every one built from a stored number."""
+    out = []
+    m, h = mood or {}, heat or {}
+    if m.get("score") is not None:
+        out.append(mood_sentence(m))
+    secs = [x for x in h.get("sectors") or [] if x.get("chg_1d") is not None]
+    if secs:
+        best, worst = max(secs, key=lambda x: x["chg_1d"]), min(secs, key=lambda x: x["chg_1d"])
+        up = sum(1 for x in secs if x["chg_1d"] > 0)
+        out.append(f"{up} of {len(secs)} sectors rose at the last close: {best['label']} led ({best['chg_1d']:+.1%}) and "
+                   f"{worst['label']} lagged ({worst['chg_1d']:+.1%}).")
+    b = h.get("breadth") or {}
+    if b.get("new_highs") is not None and b.get("n"):
+        out.append(f"Across {b['n']:,} eligible stocks there were {b['new_highs']} new 52-week highs and {b['new_lows']} new lows.")
+    for s in (shocks or [])[:2]:
+        out.append(shock_sentence(s))
+    c = counts or {}
+    if c.get("articles"):
+        out.append(f"{c['articles']} headlines and filings were stored in the last day"
+                   + (f", {c['holdings']} of them about names the fund holds." if c.get("holdings") else "."))
+    return out[:5] or ["No market data yet: the brief is written after the first daily pass."]

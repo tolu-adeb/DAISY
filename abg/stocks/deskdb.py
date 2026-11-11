@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS holding (          -- the fund's recorded portfolio: 
   closed TEXT, exit_price REAL, updated TEXT
 );
 
+CREATE TABLE IF NOT EXISTS flow (             -- money put into or taken out of the fund (so returns are time-weighted)
+  id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, amount REAL NOT NULL, note TEXT
+);
+
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """
 

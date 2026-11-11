@@ -309,7 +309,8 @@ class DayMixin:
                        if r.get("eligible") and r.get("setups")))[:20]
         movers = sorted((s for s, r in scr.items() if r.get("eligible") and r.get("chg_1d") is not None),
                         key=lambda s: -abs(scr[s]["chg_1d"]))[:12]
-        focus = list(dict.fromkeys([p["symbol"] for p in board.get("picks") or []] + [p["symbol"] for p in open_p]
+        held = [r["symbol"] for r in self.portfolio.rows("open")]          # the fund's holdings always get their news
+        focus = list(dict.fromkeys(held + [p["symbol"] for p in board.get("picks") or []] + [p["symbol"] for p in open_p]
                                    + [s for s, r in prev.items() if r["status"] in WL.LIVE] + [x[2] for x in near] + movers))
         news = await self.news_refresh(focus)
         mood = self.market_mood()
@@ -452,7 +453,7 @@ class DayMixin:
         if syms and time.time() - last >= every * 60 and getattr(self.s, "stocks_news", True):
             self._news_at = time.time()
             try:
-                res = await self.news_refresh(syms)
+                res = await self.news_refresh(list(dict.fromkeys(syms + [r["symbol"] for r in self.portfolio.rows("open")])))
                 for a in res.get("material") or []:
                     if a["symbol"] in tg:
                         t = tg[a["symbol"]]

@@ -390,6 +390,7 @@ class Settings(BaseSettings):
     stocks_live_max_names: int = 40                # names watched per tick
     stocks_live_alerts: bool = False               # post live alerts to Discord (off until you turn it on)
     stocks_dashboard_url: str | None = None        # the dashboard's address, for "open the pitch" links in alerts
+    stocks_post_analyst: bool = False              # post a member's analyst pitch to Discord when it is filed (off by default)
     stocks_weekly_recap: bool = False              # post the Friday recap to Discord (off until you turn it on)
     stocks_weekly_recap_time: str = "16:45"        # ET, Fridays
     stocks_market_replay_years: int = 2            # live replay length when the market tier is on (memory)

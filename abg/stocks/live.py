@@ -27,10 +27,11 @@ BOOK_LABEL = {
     "trend_pullback": "Trend pullback",
     "mean_reversion": "Mean reversion",
     "crisis_alpha": "Crisis alpha",
+    "analyst": "Analyst pitch",
 }
 BOOK_SHORT = {"dual_momentum": "Dual mom.", "xs_momentum": "12-1 mom.",
               "trend_pullback": "Pullback", "mean_reversion": "Reversion",
-              "crisis_alpha": "Crisis"}
+              "crisis_alpha": "Crisis", "analyst": "Analyst"}
 BOOK_EDGE = {
     "dual_momentum": "own the strongest sectors while the market is in an uptrend, and hide in the "
                      "best defensive asset when it is not",

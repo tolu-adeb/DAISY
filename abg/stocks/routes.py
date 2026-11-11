@@ -296,6 +296,8 @@ async def desk_today(request: Request):
         "watch": {"meta": wm, "rows": d.watch_rows()},
         "mood": wm.get("mood") or d.market_mood(), "shocks": d.last_shocks(),
         "heat": d.heat(), "calendar": d.calendar(), "live": {"heartbeat": d.live, "feed": d.live_feed()[:40]},
+        "regime_note": ("The rules' regime looks at the market's trend and volatility over months and decides how much each rule may trade. "
+                        "Market mood is a same-day read of breadth, new highs and lows, VIX and headlines. They can disagree."),
         "screen": d.screen_meta(), "tag": (getattr(d.s, "stocks_tag", "") or "") or None,
     })
 
@@ -457,10 +459,64 @@ async def set_holdings(request: Request, body: dict = Body(...)):
 
 @router.get("/portfolio")
 async def portfolio(request: Request):
-    """The fund's recorded portfolio. Anyone signed in may read it; changes need the admin token."""
+    """The fund's recorded portfolio with its performance, what the log shows about how the fund invests,
+    and news on its holdings. Anyone signed in may read it; changes need the admin token."""
     d = _desk(request)
-    v = await _thread(d.portfolio_view)
-    return jsonable({**v, "log": d.portfolio.log()})
+    return jsonable(await _thread(d.portfolio_full))
+
+
+@router.post("/portfolio/flow")
+async def portfolio_flow(request: Request, body: dict = Body(...)):
+    """A deposit (positive) or a withdrawal (negative), so returns are time-weighted. {day, amount, note?} or {delete: id}."""
+    d = _desk(request)
+    try:
+        if body.get("delete") is not None:
+            return {"deleted": d.portfolio.delete_flow(int(body["delete"]))}
+        return jsonable({"flow": d.portfolio.add_flow(body.get("day"), body.get("amount"), body.get("note"))})
+    except KeyError:
+        raise HTTPException(404, "no such entry")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/profile/{symbol}")
+async def profile(request: Request, symbol: str, refresh: bool = False):
+    """The deep Explore read on one name: key numbers, ratings with reasons, valuation, risk, forecast."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9.^-]{1,12}", symbol):
+        raise HTTPException(400, "bad symbol")
+    out = await _desk(request).profile(symbol, refresh=refresh)
+    if out is None:
+        raise HTTPException(404, "no data for that ticker")
+    return jsonable(out)
+
+
+@router.post("/analyst-pitch")
+async def analyst_pitch(request: Request, body: dict = Body(...)):
+    """File a member's idea as an analyst pitch: {symbol, analyst, thesis, direction, entry?, stop?, t1?, t2?, horizon_days?}.
+    Never posts from the API unless {post: true} and a webhook is set."""
+    d = _desk(request)
+    try:
+        return jsonable(await d.analyst_pitch(body, post=bool(body.get("post", False))))
+    except FileExistsError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/newsfeed")
+async def newsfeed(request: Request, category: str | None = None, symbol: str | None = None, q: str | None = None, limit: int = 120):
+    from . import news as N
+    if category and category not in {k for k, _ in N.CATEGORIES}:
+        raise HTTPException(400, "unknown category")
+    if (q and len(q) > 60) or (symbol and len(symbol) > 12):
+        raise HTTPException(400, "query too long")
+    return jsonable(await _thread(_desk(request).newsfeed, category, symbol, q, 4, limit))
+
+
+@router.get("/strategy")
+async def strategy(request: Request):
+    return jsonable(await _thread(_desk(request).strategy))
 
 
 @router.post("/portfolio")

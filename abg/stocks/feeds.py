@@ -64,6 +64,22 @@ class NewsFeeds:
                           datetime.fromtimestamp(r["datetime"], NY) if r.get("datetime") else None,
                           r.get("source"), name=name) for r in rows]
 
+    async def recommendation(self, symbol: str) -> dict | None:
+        """Wall Street's buy / hold / sell counts for the latest month (Finnhub, free plan). Third-party
+        opinion, shown as such. Price targets are not on the free plan."""
+        j = await self._fh("/stock/recommendation", {"symbol": symbol})
+        rows = [r for r in (j or []) if isinstance(r, dict) and r.get("period")]
+        if not rows:
+            return None
+        r = max(rows, key=lambda x: x["period"])
+        n = {k: int(r.get(k) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+        tot = sum(n.values())
+        if not tot:
+            return None
+        score = (2 * n["strongBuy"] + n["buy"] - n["sell"] - 2 * n["strongSell"]) / tot
+        label = "Buy" if score >= 0.75 else "Outperform" if score >= 0.25 else "Hold" if score > -0.25 else "Underperform" if score > -0.75 else "Sell"
+        return {"period": r["period"], **n, "analysts": tot, "score": round(score, 3), "label": label, "source": "Finnhub"}
+
     async def ipo_calendar(self, frm: date, to: date) -> list[dict]:
         j = await self._fh("/calendar/ipo", {"from": frm.isoformat(), "to": to.isoformat()})
         out = []
