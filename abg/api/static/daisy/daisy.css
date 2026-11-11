@@ -22,7 +22,7 @@
 }
 :root, :root[data-theme="dark"] {
   --bg: #213438; --surface: #2b4347; --surface-2: #33504f; --text: #e4d7d0; --muted: #b8b1ad;
-  --stroke: #e4d7d026; --stroke-strong: #e4d7d055; --accent: #a8c7c6; --accent-fill: #5d7f80; --nav: #0000004d;
+  --stroke: #e4d7d026; --stroke-strong: #e4d7d055; --accent: #a8c7c6; --accent-fill: #4f7173; --nav: #0000004d;
   --up: #8fcdee; --down: #f2a877; --warn: #e8c66f; --on-accent: #16262a; --band: #000000; --band-text: #e4d7d0;
   --focus: #e4d7d0;
 }

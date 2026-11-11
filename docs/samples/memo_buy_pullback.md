@@ -12,7 +12,7 @@
 
 - **Do:** Buy S36 at Friday's open near $427.21. A pullback in an established uptrend just ended. Risk $12.78/share to a $431.12 first target.
 - **Why now:** S36 is in an established uptrend — the close of $427.21 is above its 200-day EMA of $387.79, and the 50-day EMA ($424.14) is above the 200-day. It then pulled back: RSI-14 got as low as 37.9 in the last five sessions. Today the pullback ended — the close is above yesterday's high of $424.35 and the MACD histogram turned up (-1.81 against -2.28 yesterday).
-- **Risk vs expect:** $217 at risk (0.25% of the fund) to the stop, for a first target +0.9% away (R:R 0.3).
+- **Risk vs expect:** 0.25% of the fund at risk to the stop, for a first target +0.9% away (R:R 0.3).
 
 ## 01 Company Overview
 
@@ -121,8 +121,8 @@ Recent headlines:
 | T2 | $434.12 (+1.6%) — reference level: 75th-percentile winning exit of this book's replayed trades = 0.54R; 0.54 x $12.78 risk + $427.21 entry |
 | 12-month targets | bear $232.26 · base $410.62 · bull $602.77 · weighted $414.07 (reference, by 2026-12-31) |
 | Reward:risk | 0.31 — below the 1.5 minimum |
-| Size | 17 shares, $7,263 = 8.3% of the fund (risk-based) |
-| At risk | $217 = 0.25% of the fund |
+| Suggested size | 8.4% of the fund (risk-based) |
+| At risk | 0.25% of the fund |
 | $10k account risking 1% | 2 shares |
 | Max hold | 30 trading days |
 
@@ -146,12 +146,10 @@ We're wrong if:
 
 ### Why this fits our fund
 
-It adds a diversifier (average 60-day correlation to holdings 0.19).
-
-- Sector (Industrials): 0.0% of the fund before, 8.3% after
-- 60-day correlation: 0.19 to current holdings, 0.41 to the benchmark
+- Sector: Industrials
+- 60-day correlation: 0.41 to the benchmark
 - Beta: 0.61 (60-day vs SPY, from the bar store)
-- Already held: no · AI-infrastructure name: no (the fund holds 0 today)
+- Fund holdings: holdings not provided (add them in Settings) · AI-infrastructure name: no
 
 ### Questions for the team
 
@@ -164,7 +162,7 @@ It adds a diversifier (average 60-day correlation to holdings 0.19).
 
 - Regime: **bull_chop** (a choppy but rising market), book size ×0.5
 - Stress score 0.11, 1 early-warning flag(s) on
-- This book currently has 22% of capital ($19,010), set by the Hedge allocator from how the books have been doing lately
+- This book currently has 22% of capital (—), set by the Hedge allocator from how the books have been doing lately
 
 ## Every check the rule made
 
@@ -194,7 +192,7 @@ It adds a diversifier (average 60-day correlation to holdings 0.19).
 
 ---
 
-*Paper only. Nothing here places an order, and the desk holds no real position.*
+*Research only. The desk pitches ideas; nothing here places an order.*
 *The single-stock universe is still the built-in seed list, which only contains names that survived to today. Load a real point-in-time index list before trusting any backtest number from it.*
 
 *Research, not advice.*

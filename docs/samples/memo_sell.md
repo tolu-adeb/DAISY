@@ -87,8 +87,7 @@ not in data
 
 The rule's exit fired: sma5 exit.
 
-- Bought $40.86 on 2025-12-26, now $40.73: -0.3%, -$6 on 46 shares, -0.09R, held 3 sessions
-- What it tells us: -0.09R against the book's average loss of -0.49R over 734 replayed trades: a normal outcome for this book.
+- Result: not in data (we have no open pitch on this name; the exit is the rule's, from its historical replay)
 
 ### What would make this wrong
 
@@ -103,15 +102,14 @@ An exit frees the capital; fit is a question for the next entry, not this one.
 
 ### Questions for the team
 
-1. The trade closes at -0.09R after 3 session(s). Was anything about this name different from the book's usual setup?
-2. This book's replayed expectancy is -0.031R per trade over 734 trades. Is that still worth the capital it takes?
-3. If the same setup fires again on this name, does the team want it, or should it be excluded?
+1. This book's replayed expectancy is -0.031R per trade over 734 trades. Is that still worth the capital it takes?
+2. If the same setup fires again on this name, does the team want it, or should it be excluded?
 
 ## Market context
 
 - Regime: **bull_chop** (a choppy but rising market), book size ×1
 - Stress score 0.11, 1 early-warning flag(s) on
-- This book currently has 21% of capital ($18,657), set by the Hedge allocator from how the books have been doing lately
+- This book currently has 21% of capital (—), set by the Hedge allocator from how the books have been doing lately
 
 ## Every check the rule made
 
@@ -138,7 +136,7 @@ An exit frees the capital; fit is a question for the next entry, not this one.
 
 ---
 
-*Paper only. Nothing here places an order, and the desk holds no real position.*
+*Research only. The desk pitches ideas; nothing here places an order.*
 *The single-stock universe is still the built-in seed list, which only contains names that survived to today. Load a real point-in-time index list before trusting any backtest number from it.*
 
 *Research, not advice.*

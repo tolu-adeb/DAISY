@@ -1,5 +1,10 @@
 # 21. Stock desk (replaces the swing desk; MNQ bot retired)
 
+> **Read chapter 22 next.** Since Nov 10 2026 the desk is a stock-pitching desk: it shows no paper
+> portfolio. Where this chapter mentions the paper book, equity, positions or a `PAPER` tag, chapter 22
+> (`docs/22-pitching-desk.md`, section 22.1) says what each became. The rule books, the pitch format
+> (21.6) and the top-5 board (21.7) are unchanged.
+
 The four-book rule system from the *Stocks Rule Book* (`tradebook`, vendored at `abg/tradebook/`),
 run live on the terminal's own bar store, pitching stocks to Discord with a written thesis.
 
@@ -139,6 +144,6 @@ inside that window still posts it, later than that it is skipped.
 
 ## 21.3 Rules that still hold
 
-Paper only (`ABG_STOCKS_TAG=PAPER` on every post); webhooks only in `.env`; one live poster per channel;
+Research only (`ABG_STOCKS_TAG=RESEARCH` on every post); webhooks only in `.env`; one live poster per channel;
 findings are proposals, never automatic config changes; the seed universe is survivorship-biased and
 every report says so.

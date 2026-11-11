@@ -12,7 +12,7 @@
 
 - **Do:** Buy S30 at Friday's open near $55.88. A sharp sell-off in a long-term uptrend has it deeply oversold. Risk $2.46/share to a $57.40 first target in about 1 week(s).
 - **Why now:** S30 is still in a long-term uptrend — the close of $55.88 is above its 200-day average of $55.68 — but it has just been sold hard: the 2-day RSI is 6.9, which is about as stretched as this measure gets. The book buys that weakness and sells into the first bounce, usually within a week.
-- **Risk vs expect:** $327 at risk (0.37% of the fund) to the stop, for a first target +2.7% away (R:R 0.6).
+- **Risk vs expect:** 0.38% of the fund at risk to the stop, for a first target +2.7% away (R:R 0.6).
 
 ## 01 Company Overview
 
@@ -118,8 +118,8 @@ Recent headlines:
 | T1 | $57.40 (+2.7%) — rule exit: the book exits when the close gets back above the 5-day average, today $57.40 |
 | 12-month targets | bear $32.08 · base $48.54 · bull $61.31 · weighted $47.62 (reference, by 2026-12-31) |
 | Reward:risk | 0.62 — below the 1.5 minimum |
-| Size | 133 shares, $7,432 = 8.5% of the fund (risk-based) |
-| At risk | $327 = 0.37% of the fund |
+| Suggested size | 8.5% of the fund (risk-based) |
+| At risk | 0.38% of the fund |
 | $10k account risking 1% | 17 shares |
 | Max hold | 7 trading days |
 
@@ -141,12 +141,10 @@ We're wrong if:
 
 ### Why this fits our fund
 
-It adds a diversifier (average 60-day correlation to holdings 0.17).
-
-- Sector (Consumer Staples): 0.0% of the fund before, 8.5% after
-- 60-day correlation: 0.17 to current holdings, 0.39 to the benchmark
+- Sector: Consumer Staples
+- 60-day correlation: 0.39 to the benchmark
 - Beta: 0.71 (60-day vs SPY, from the bar store)
-- Already held: no · AI-infrastructure name: no (the fund holds 0 today)
+- Fund holdings: holdings not provided (add them in Settings) · AI-infrastructure name: no
 
 ### Questions for the team
 
@@ -159,7 +157,7 @@ It adds a diversifier (average 60-day correlation to holdings 0.17).
 
 - Regime: **bull_chop** (a choppy but rising market), book size ×1
 - Stress score 0.11, 1 early-warning flag(s) on
-- This book currently has 21% of capital ($18,657), set by the Hedge allocator from how the books have been doing lately
+- This book currently has 21% of capital (—), set by the Hedge allocator from how the books have been doing lately
 
 ## Every check the rule made
 
@@ -186,7 +184,7 @@ It adds a diversifier (average 60-day correlation to holdings 0.17).
 
 ---
 
-*Paper only. Nothing here places an order, and the desk holds no real position.*
+*Research only. The desk pitches ideas; nothing here places an order.*
 *The single-stock universe is still the built-in seed list, which only contains names that survived to today. Load a real point-in-time index list before trusting any backtest number from it.*
 
 *Research, not advice.*
