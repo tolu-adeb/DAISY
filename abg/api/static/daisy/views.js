@@ -289,7 +289,13 @@ const exploreRows = (rows) => (rows.length ? table("Matching names from the rese
     r.eligible ? "yes" : `<span class="muted">no: ${esc(r.why_not || "")}</span>`, gradeChips(r.grades)]), { numeric: [2, 3] }) : empty("No name matches that. Try a ticker (NVDA) or part of a company name."));
 
 export async function explore([sym]) {
-  if (sym) return nameCard(await api(`/api/stocks/name/${encodeURIComponent(sym)}`));
+  if (sym) {
+    try { return nameCard(await api(`/api/stocks/name/${encodeURIComponent(sym)}`)); }
+    catch (e) {                                           // not a fault: say what we know and offer the search again
+      return hero("Explore", `No card for ${esc(sym.toUpperCase())} yet.`, esc(e.message), { short: true,
+        extra: `<p style="margin-top:18px"><a class="link-caps" href="#/explore">Search another name</a></p>` });
+    }
+  }
   const d = await api("/api/stocks/explore?limit=12&only=eligible");
   const cov = d.coverage || {}, ls = ((d.listings || {}).rows || []).slice(0, 30);
   after = (box) => {
@@ -352,7 +358,8 @@ export async function settings() {
         ["Post tag", esc(s.tag || "none")]]), { alt: true })
     + section("Schedule (ET)", kv([["Daily pass", esc(sc.daily)], ["Top picks and check-ins", esc(sc.board)], ["Morning scan / post", `${esc(sc.watch_scan)} / ${esc(sc.watch_post)}`],
         ["Live look every", `${esc(sc.live_seconds)} seconds`], ["News re-read every", `${esc(sc.news_minutes)} minutes`], ["Weekly recap", `Fridays ${esc(sc.weekly_recap)}`]]))
-    + section("Keys present", kv([["Polygon (whole-market bars)", has(k.polygon)], ["Finnhub (quotes, news, calendars)", has(k.finnhub)], ["Anthropic (optional write-ups)", has(k.anthropic)]]), { alt: true })
+    + section("Keys present", kv([["Polygon (whole-market bars)", has(k.polygon)], ["Finnhub (quotes, news, calendars)", has(k.finnhub)], ["Anthropic (optional write-ups)", has(k.anthropic)],
+        ["Twelve Data (per-stock history)", has(k.twelvedata)], ["Tiingo (per-stock history, news)", has(k.tiingo)], ["FMP (index list fallback)", has(k.fmp)]]), { alt: true })
     + section("Research universe", kv([["Screen as of", esc(scr.day || "not built yet")], ["Names researched", num(scr.covered, 0)], ["Pitch eligible", num(scr.eligible, 0)],
         ["Too new for the tested rules", num(scr.too_new, 0)], ["In the rule panel", num(scr.in_rule_panel, 0)], ["Screen time", scr.seconds != null ? `${scr.seconds}s` : "—"],
         ["Fund size for share counts", s.fund_equity_set ? "set" : "not set: sizes are a % of the fund"]]))

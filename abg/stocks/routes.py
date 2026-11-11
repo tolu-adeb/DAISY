@@ -372,7 +372,12 @@ async def name(request: Request, symbol: str):
         raise HTTPException(400, "bad symbol")
     card = _desk(request).name_card(symbol)
     if card is None:
-        raise HTTPException(404, "not in the research universe (no bars for that ticker)")
+        d = _desk(request)
+        if not d.screen_meta().get("day"):
+            raise HTTPException(404, "The research universe has not been built yet. It is built by the daily pass (16:20 ET) "
+                                     "and refreshed by the morning pass; search will work after the next one.")
+        raise HTTPException(404, f"{symbol.upper()} is not in the research universe. DAISY covers US-listed common stocks and "
+                                 "ADRs with recent prices: check the ticker, or it may be an ETF, a fund or not US-listed.")
     return jsonable(card)
 
 

@@ -50,7 +50,12 @@ def setup_card(r: dict, setup: dict, today: date, base: dict | None, wc: dict, e
     from .pitch_plan import next_month_end_session
     book = setup["book"]
     hold = (base or {}).get("median_hold_days")
-    earliest = _sessions_after(today - timedelta(days=1), 1) if book != "xs_momentum" else next_month_end_session(today)
+    # the next close after the screen's own session: a scan run in the evening points at tomorrow, not today
+    try:
+        seen = date.fromisoformat(str(r.get("day"))[:10])
+    except (TypeError, ValueError):
+        seen = today - timedelta(days=1)
+    earliest = _sessions_after(seen, 1) if book != "xs_momentum" else next_month_end_session(today)
     return {
         "symbol": r["symbol"], "name": r.get("name") or r["symbol"], "sector": r.get("sector"),
         "price": r.get("close"), "chg_1d": r.get("chg_1d"), "status": "watching", "source": "setup",

@@ -569,7 +569,7 @@ def test_api_serves_the_pitching_desk(desk, monkeypatch, tmp_path):
             h = c.post("/api/stocks/holdings", json={"holdings": [{"symbol": "nvda", "weight": 8}]}).json()
             assert h["holdings"] == [{"symbol": "NVDA", "weight": 0.08}]
             st = c.get("/api/stocks/settings").json()
-            assert st["features"]["live_alerts"] is False and set(st["keys"]) == {"polygon", "finnhub", "anthropic"}
+            assert st["features"]["live_alerts"] is False and set(st["keys"]) == {"polygon", "finnhub", "anthropic", "tiingo", "twelvedata", "fmp"}
             assert all(isinstance(v, bool) for v in st["keys"].values())                          # yes/no only, never a value
             g = c.get("/api/stocks/glossary").json()
             assert "ATR" in g["terms"] and g["ranks"]["1"] == "Strong buy" and "in_zone" in g["status"]

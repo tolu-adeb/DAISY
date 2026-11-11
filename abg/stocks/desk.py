@@ -1044,7 +1044,10 @@ class StockDesk(DayMixin):
                          "weekly_recap": bool(getattr(self.s, "stocks_weekly_recap", False))},
             "keys": {"polygon": bool(getattr(self.s, "polygon_api_key", None)),
                      "finnhub": bool(getattr(self.s, "finnhub_api_key", None)),
-                     "anthropic": bool(getattr(self.s, "anthropic_api_key", None))},
+                     "anthropic": bool(getattr(self.s, "anthropic_api_key", None)),
+                     "tiingo": bool(getattr(self.s, "tiingo_api_key", None)),
+                     "twelvedata": bool(getattr(self.s, "twelvedata_api_key", None)),
+                     "fmp": bool(getattr(self.s, "fmp_api_key", None))},
             "errors": list(self.errors)[-5:],
         }
 
