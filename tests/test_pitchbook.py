@@ -203,3 +203,84 @@ def test_the_next_session_holds_an_open_pitch_instead_of_pitching_it_again(tmp_p
     assert mine and mine[0]["rec"]["rating"] == "HOLD" and mine[0]["rec"]["open_pitch"] == r["id"]
     assert mine[0]["rec"]["daisy_rank"] == 3
     d.store.close()
+
+
+# --------------------------------------------------------------------------- the fund's recorded portfolio (docs/22.12)
+def test_recorded_portfolio_is_validated_marked_and_logged(tmp_path):
+    from abg.stocks import portfolio as PF
+    db = DeskDB(tmp_path / "desk.sqlite3")
+    pf = PF.Portfolio(db)
+    a = pf.add({"symbol": " nvda ", "shares": "10", "cost": "100", "opened": "2026-10-01", "note": "  first   buy "})
+    b = pf.add({"symbol": "MSFT", "shares": 5, "cost": 400, "opened": "2026-10-15", "pitch_id": "2026-10-14-trend_pullback-MSFT"})
+    assert a["symbol"] == "NVDA" and a["note"] == "first buy" and a["status"] == "open"
+    for bad in ({"symbol": "bad sym", "shares": 1, "cost": 1}, {"symbol": "X", "shares": 0, "cost": 1}, {"symbol": "X", "shares": 1, "cost": "abc"},
+                {"symbol": "X", "shares": 1, "cost": 1, "opened": "yesterday"}, {"symbol": "X", "shares": 1, "cost": 1, "pitch_id": "a b"}):
+        with pytest.raises(ValueError):
+            pf.add(bad)
+    pf.set_cash(1000)
+    last = {"NVDA": (120.0, "2026-11-10"), "MSFT": (380.0, "2026-11-10")}
+    v = PF.value(pf.rows(), lambda s: last.get(s), lambda day: 0.05, pf.cash())
+    t = v["totals"]
+    assert t["invested"] == 3100.0 and t["total"] == 4100.0 and t["gain"] == 100.0 and t["gain_pct"] == pytest.approx(100 / 3000, abs=1e-5)
+    nv = next(r for r in v["open"] if r["symbol"] == "NVDA")
+    assert nv["gain_pct"] == pytest.approx(0.2) and nv["excess"] == pytest.approx(0.15) and nv["weight"] == pytest.approx(1200 / 4100, abs=1e-5)
+    assert PF.weights(v) == {"MSFT": pytest.approx(1900 / 4100, abs=1e-5), "NVDA": pytest.approx(1200 / 4100, abs=1e-5)}
+    pf.update(a["id"], {"shares": 12})
+    assert pf.get(a["id"])["shares"] == 12
+    pf.close(b["id"], 390, "2026-11-05")
+    v = PF.value(pf.rows(), lambda s: last.get(s), None, pf.cash())
+    assert [r["symbol"] for r in v["open"]] == ["NVDA"] and v["closed"][0]["gain"] == -50.0 and v["totals"]["realized"] == -50.0
+    unpriced = PF.value([{**pf.get(a["id"])}], lambda s: None)
+    assert unpriced["open"][0]["value"] is None and unpriced["totals"]["gain"] is None and unpriced["totals"]["unmarked"] == 1
+    pf.reopen(b["id"])
+    assert pf.get(b["id"])["status"] == "open" and pf.delete(b["id"]) and pf.get(b["id"]) is None
+    with pytest.raises(KeyError):
+        pf.close(999, 1)
+    notes = " | ".join(h["note"] for h in pf.log())
+    assert "logged 10 NVDA at $100.00" in notes and "sold at $390.00" in notes and "removed the MSFT entry" in notes and "cash set" in notes
+    db.close()
+
+
+def test_portfolio_feeds_fund_fit_and_only_an_admin_can_change_it(tmp_path, monkeypatch):
+    d = _desk(tmp_path)
+    assert d.fund_holdings() is None
+    sym = d.u.stocks[0]
+    d.portfolio.add({"symbol": sym, "shares": 10, "cost": 50, "opened": "2024-01-02"})
+    d.portfolio.set_cash(0)
+    view = d.portfolio_view()
+    assert view["open"][0]["last"] and view["open"][0]["spy_pct"] is not None and view["totals"]["positions"] == 1
+    assert d.fund_holdings() == {sym: 1.0}                                      # the recorded portfolio is what fit compares against
+    for k, v in (("ABG_ALLOW_SYNTHETIC", "true"), ("ABG_PROVIDER_ORDER", "synthetic"), ("ABG_CACHE_DIR", str(tmp_path / "c")),
+                 ("ABG_AI_ENABLED", "false"), ("ABG_DATA_DIR", str(tmp_path / "api")), ("ABG_MONITOR_ON_SERVE", "false")):
+        monkeypatch.setenv(k, v)
+    from fastapi.testclient import TestClient
+    from abg.api.server import app
+    with TestClient(app) as c:
+        app.state.stock_desk = d
+        try:
+            got = c.get("/api/stocks/portfolio").json()
+            assert got["totals"]["positions"] == 1 and got["log"]
+            hid = c.post("/api/stocks/portfolio", json={"symbol": "SPY", "shares": 2, "cost": 400, "opened": "2024-02-01"}).json()["row"]["id"]
+            assert c.post("/api/stocks/portfolio", json={"symbol": "SPY", "shares": -1, "cost": 400}).status_code == 400
+            assert c.post(f"/api/stocks/portfolio/{hid}", json={"action": "close", "exit_price": 420}).json()["row"]["status"] == "closed"
+            assert c.post("/api/stocks/portfolio/9999", json={"action": "delete"}).status_code == 404
+            assert c.post("/api/stocks/portfolio", json={"cash": 2500}).json() == {"cash": 2500.0}
+            assert c.get("/api/stocks/portfolio").json()["totals"]["cash"] == 2500.0
+            assert "#/portfolio" in c.get("/").text
+        finally:
+            app.state.stock_desk = None
+    from abg.ops import auth
+    from types import SimpleNamespace
+
+    class Req:
+        def __init__(self, method, path, token):
+            self.method, self.headers, self.cookies, self.url = method, {"authorization": f"Bearer {token}"}, {}, SimpleNamespace(path=path)
+    mw = auth.middleware(lambda r: SimpleNamespace(admin_token="adm", view_token="view"))
+
+    async def ok(_):
+        return "passed"
+    assert asyncio.run(mw(Req("GET", "/api/stocks/portfolio", "view"), ok)) == "passed"        # viewers can read it
+    assert asyncio.run(mw(Req("POST", "/api/stocks/portfolio", "view"), ok)).status_code == 403   # and cannot change it
+    assert asyncio.run(mw(Req("POST", "/api/stocks/portfolio/1", "view"), ok)).status_code == 403
+    assert asyncio.run(mw(Req("POST", "/api/stocks/portfolio", "adm"), ok)) == "passed"
+    d.close()

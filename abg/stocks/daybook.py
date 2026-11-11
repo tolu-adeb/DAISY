@@ -585,6 +585,48 @@ class DayMixin:
                 "pitches": [{k: p.get(k) for k in ("id", "as_of", "book", "rating", "status", "close_reason", "track")} for p in mine[-8:]],
                 "watch": next((w for w in self.watch_rows() if w["symbol"] == sym), None)}
 
+    async def bars_for(self, symbol: str, sessions: int = 520) -> dict | None:
+        """Daily bars for the Explore chart, with the 50- and 200-day EMAs the rules read and the levels
+        that matter (an open pitch's stop and targets, or the trigger a setup is waiting for). The bar
+        store first; a name it does not hold falls back to the terminal's history providers."""
+        from abg.tradebook.common import indicators as ind
+        sym = symbol.strip().upper()
+        df, source = self.store.frame(sym), "the desk's bar store"
+        if len(df) < 30:
+            try:
+                res = await self.engine.history(sym, "2y", "1d", None, warmup=False)
+                df = res.value.df[["open", "high", "low", "close", "volume"]].astype(float)
+                source = getattr(res.provenance, "provider", None) or "a history provider"
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return None
+        if len(df) < 2:
+            return None
+        df = df[df["close"].notna()]
+        e50, e200 = ind.ema(df["close"], 50), ind.ema(df["close"], 200)
+        tail = df.iloc[-max(30, int(sessions)):]
+
+        def f(x):
+            return None if x is None or x != x else round(float(x), 4)
+        bars = [{"t": str(ts.date()), "o": f(r.open), "h": f(r.high), "l": f(r.low), "c": f(r.close), "v": f(r.volume),
+                 "e50": f(e50.loc[ts]), "e200": f(e200.loc[ts])} for ts, r in tail.iterrows()]
+        levels = []
+        mine = [p for p in self.pitches() if p["symbol"] == sym and p.get("status") in ("new", "active")]
+        if mine:
+            pl = mine[-1].get("plan") or {}
+            for key, label in (("stop", "Stop"), ("t1", "T1"), ("t2", "T2")):
+                if pl.get(key):
+                    levels.append({"kind": key, "label": label, "price": f(pl[key])})
+            if mine[-1].get("entry_open"):
+                levels.append({"kind": "entry", "label": "Tested entry", "price": f(mine[-1]["entry_open"])})
+        else:
+            for s in ((self.screen_rows().get(sym) or {}).get("setups") or [])[:1]:
+                if s.get("level"):
+                    levels.append({"kind": "trigger", "price": f(s["level"]),
+                                   "label": f"Trigger: close {'above' if s.get('level_kind') == 'above' else 'below'}"})
+        return {"symbol": sym, "source": source, "as_of": bars[-1]["t"], "bars": bars, "levels": levels}
+
     def new_listings(self) -> dict:
         return self.db.kv_get("ipos") or {"at": None, "rows": []}
 

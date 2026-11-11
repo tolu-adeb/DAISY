@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS note (             -- team notes and votes on a pitch
 );
 CREATE INDEX IF NOT EXISTS note_pitch ON note(pitch_id);
 
+CREATE TABLE IF NOT EXISTS holding (          -- the fund's recorded portfolio: real positions, logged by an admin
+  id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, shares REAL NOT NULL, cost REAL NOT NULL,
+  opened TEXT NOT NULL, note TEXT, pitch_id TEXT, status TEXT NOT NULL DEFAULT 'open',
+  closed TEXT, exit_price REAL, updated TEXT
+);
+
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 """
 

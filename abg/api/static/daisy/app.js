@@ -3,11 +3,11 @@ import { $, $$, api, post, state, toast, wireTips, esc } from "./ui.js";
 import * as V from "./views.js";
 
 const ROUTES = {
-  today: V.today, watchlist: V.watchlist, pitches: V.pitches, pitch: V.pitch, scorecard: V.scorecard,
+  today: V.today, watchlist: V.watchlist, pitches: V.pitches, pitch: V.pitch, portfolio: V.portfolio, scorecard: V.scorecard,
   explore: V.explore, research: V.research, settings: V.settings, glossary: V.glossary,
 };
 const NAV = { pitches: "pitch", pitch: "pitch", glossary: "settings" };
-const TITLES = { today: "Today", watchlist: "Watchlist", pitches: "Pitches", pitch: "Pitch", scorecard: "Scorecard",
+const TITLES = { today: "Today", watchlist: "Watchlist", pitches: "Pitches", pitch: "Pitch", portfolio: "Portfolio", scorecard: "Scorecard",
   explore: "Explore", research: "Research", settings: "Settings", glossary: "Glossary" };
 let seq = 0;
 
@@ -50,7 +50,7 @@ function setDeep(on) {
   $("#deep").setAttribute("aria-checked", on ? "true" : "false");
   try { localStorage.setItem("daisy-deep", on ? "1" : "0"); } catch { /* private window */ }
 }
-$("#theme").addEventListener("click", () => { setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"); if ($("img[data-light]")) render(); });
+$("#theme").addEventListener("click", () => { setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light"); if ($("img[data-light]") || $(".chart")) render(); });
 $("#deep").addEventListener("click", () => setDeep(document.documentElement.dataset.deep !== "1"));
 $("#deep").setAttribute("aria-checked", document.documentElement.dataset.deep === "1" ? "true" : "false");
 $("#nav-menu").addEventListener("click", () => {

@@ -381,6 +381,18 @@ async def name(request: Request, symbol: str):
     return jsonable(card)
 
 
+@router.get("/bars/{symbol}")
+async def bars(request: Request, symbol: str, sessions: int = 520):
+    """Daily bars, EMAs and plan levels for the Explore chart."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9.^-]{1,12}", symbol):
+        raise HTTPException(400, "bad symbol")
+    out = await _desk(request).bars_for(symbol, max(30, min(1300, sessions)))
+    if out is None:
+        raise HTTPException(404, "no price history for that ticker")
+    return jsonable(out)
+
+
 @router.get("/news")
 async def news_list(request: Request, symbol: str | None = None, limit: int = 40):
     from . import news as N
@@ -441,6 +453,46 @@ async def set_holdings(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "holdings must be a list of {symbol, weight} (at most 300)")
     h = _desk(request).set_fund_holdings(rows)
     return {"provided": bool(h), "holdings": [{"symbol": k, "weight": v} for k, v in sorted((h or {}).items())]}
+
+
+@router.get("/portfolio")
+async def portfolio(request: Request):
+    """The fund's recorded portfolio. Anyone signed in may read it; changes need the admin token."""
+    d = _desk(request)
+    v = await _thread(d.portfolio_view)
+    return jsonable({**v, "log": d.portfolio.log()})
+
+
+@router.post("/portfolio")
+async def portfolio_add(request: Request, body: dict = Body(...)):
+    d = _desk(request)
+    try:
+        if "cash" in body and "symbol" not in body:
+            return {"cash": d.portfolio.set_cash(body.get("cash"))}
+        return jsonable({"row": d.portfolio.add(body)})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/portfolio/{hid}")
+async def portfolio_change(request: Request, hid: int, body: dict = Body(...)):
+    """{action: "update" | "close" | "reopen" | "delete", ...fields}"""
+    d = _desk(request)
+    act = str(body.get("action") or "update")
+    try:
+        if act == "close":
+            return jsonable({"row": d.portfolio.close(hid, body.get("exit_price"), body.get("closed"))})
+        if act == "reopen":
+            return jsonable({"row": d.portfolio.reopen(hid)})
+        if act == "delete":
+            return {"deleted": d.portfolio.delete(hid)}
+        if act == "update":
+            return jsonable({"row": d.portfolio.update(hid, {k: v for k, v in body.items() if k != "action"})})
+        raise HTTPException(400, "action must be update, close, reopen or delete")
+    except KeyError:
+        raise HTTPException(404, "no such position")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/glossary")

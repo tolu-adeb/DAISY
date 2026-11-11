@@ -562,6 +562,9 @@ def test_api_serves_the_pitching_desk(desk, monkeypatch, tmp_path):
             assert ex["rows"] and ex["coverage"]["covered"] == 24
             assert c.get("/api/stocks/name/" + ex["rows"][0]["symbol"]).json()["gates"]
             assert c.get("/api/stocks/name/ZZZZ").status_code == 404 and c.get("/api/stocks/name/bad$sym").status_code == 400
+            br = c.get("/api/stocks/bars/" + ex["rows"][0]["symbol"] + "?sessions=120").json()
+            assert len(br["bars"]) == 120 and br["bars"][-1]["e200"] and br["bars"][-1]["c"] and br["source"] == "the desk's bar store"
+            assert c.get("/api/stocks/bars/ZZZZ").status_code == 404                              # no bars and no provider: said plainly
             assert c.post(f"/api/stocks/notes/{pid}", json={"name": "Ada", "vote": "up", "text": "ok"}).json()["votes"]["up"] == 1
             assert c.post(f"/api/stocks/notes/{pid}", json={"name": "", "vote": "up"}).status_code == 400
             assert c.post("/api/stocks/notes/none", json={"name": "Ada", "vote": "up"}).status_code == 404

@@ -62,6 +62,8 @@ class StockDesk(DayMixin):
         self.store = BarStore.from_settings(settings)
         self.db = DeskDB(self.dir / "desk.sqlite3")
         self.book = PB.PitchBook(self.db)
+        from .portfolio import Portfolio
+        self.portfolio = Portfolio(self.db)          # the fund's real, hand-logged positions (docs/22.12)
         self._migrate_pitches()
         self.u = Universe.load(self.store)
         if symbols_fn:
@@ -147,6 +149,13 @@ class StockDesk(DayMixin):
     def fund_holdings(self) -> dict | None:
         """``{symbol: weight}`` from Settings (kept in the data folder, never in the repo), else from
         ``configs/fund_holdings.yaml``; ``None`` when neither has any ("holdings not provided")."""
+        try:                                         # the recorded portfolio is the first source
+            from .portfolio import weights
+            w = weights(self.portfolio_view())
+            if w:
+                return w
+        except Exception:
+            log.debug("stocks: portfolio weights unavailable", exc_info=True)
         h = self.db.kv_get("fund_holdings")
         if h:
             return h
@@ -158,6 +167,35 @@ class StockDesk(DayMixin):
         except Exception:
             return None
         return PB_holdings((raw or {}).get("holdings"))
+
+    def portfolio_view(self) -> dict:
+        """The recorded portfolio, marked at the last stored close, with SPY over each holding's days."""
+        from .portfolio import value
+        frames: dict = {}
+
+        def fr(sym):
+            if sym not in frames:
+                frames[sym] = self.store.frame(sym)
+            return frames[sym]
+
+        def last(sym):
+            f = fr(sym)
+            return (float(f["close"].iloc[-1]), str(f.index[-1].date())) if len(f) else None
+        bench = self.cfg.get("benchmark", "SPY")
+
+        def spy(day):
+            f = fr(bench)
+            if not len(f):
+                return None
+            try:
+                a = f["close"].asof(day)
+                return round(float(f["close"].iloc[-1]) / float(a) - 1, 5) if a and a == a else None
+            except Exception:
+                return None
+        v = value(self.portfolio.rows(), last, spy, self.portfolio.cash())
+        v["as_of"] = (last(bench) or (None, None))[1]
+        v["benchmark"] = bench
+        return v
 
     def set_fund_holdings(self, rows) -> dict | None:
         h = PB_holdings(rows)
