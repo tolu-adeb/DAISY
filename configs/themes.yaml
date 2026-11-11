@@ -1,0 +1,42 @@
+# Themes: groups of listed names that move together when one story breaks (docs/22.3).
+#
+# symbols   the hand-written list. Names that are 60-day correlated with the list's basket are added
+#           automatically each day and shown apart ("by correlation").
+# keywords  lower-case words or phrases matched against the day's headlines. This is how a company with
+#           no ticker - a private lab, an IPO candidate - still reaches the desk: its name goes here, next
+#           to the listed names it touches (suppliers, customers, competitors, comps).
+#
+# Membership is a tag for research and alerts. It is never a trading signal.
+themes:
+  ai_compute:
+    label: AI compute
+    symbols: [NVDA, AVGO, AMD, TSM, ASML, MU, ARM, MRVL, AMAT, LRCX, KLAC, SMCI, DELL, HPE, COHR, CIEN, ANET, GLW]
+    keywords: [nvidia, gpu, ai chip, ai chips, export controls, hbm, data center chips, tsmc]
+  ai_power_and_data_centres:
+    label: AI power and data centres
+    symbols: [VRT, ETN, PWR, GEV, CEG, VST, NEE, TLN, EQIX, DLR, CRWV, NBIS]
+    keywords: [data center, data centre, power demand, nuclear deal, hyperscaler capex]
+  ai_models_and_software:
+    label: AI models and software
+    symbols: [MSFT, GOOGL, GOOG, AMZN, META, ORCL, CRM, NOW, PLTR, SNOW, ADBE, CDNS, SNPS]
+    keywords: [anthropic, openai, claude, chatgpt, gemini, xai, mistral, model launch, ai ipo, anthropic ipo, openai ipo]
+  semis_equipment:
+    label: Semiconductor equipment
+    symbols: [ASML, AMAT, LRCX, KLAC, TER, ONTO, ENTG]
+    keywords: [chip equipment, lithography, wafer fab]
+  megacap_tech:
+    label: Mega-cap tech
+    symbols: [AAPL, MSFT, GOOGL, AMZN, META, NVDA, TSLA]
+    keywords: [magnificent seven, big tech earnings]
+  banks:
+    label: Banks
+    symbols: [JPM, BAC, WFC, C, GS, MS, USB, PNC, TFC, SCHW]
+    keywords: [bank stress, regional banks, fed stress test, net interest income]
+  energy:
+    label: Energy
+    symbols: [XOM, CVX, COP, EOG, OXY, SLB, MPC, PSX, VLO]
+    keywords: [opec, crude oil, oil prices, brent]
+  health_care:
+    label: Health care
+    symbols: [LLY, UNH, JNJ, MRK, ABBV, PFE, AMGN, TMO, ISRG, VRTX, REGN]
+    keywords: [drug pricing, fda approval, glp-1, medicare rates]

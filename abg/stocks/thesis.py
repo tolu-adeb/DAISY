@@ -257,6 +257,9 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
                     "vol_scale": state.vol_scale, "equity": None, "drawdown": None},
         "provider": provider,
         "reason": c.reason,
+        # research context from the whole-market screen and the news store (docs/22.2-22.3); all optional
+        "grades": ctx.get("grades"), "sentiment": ctx.get("sentiment"), "flags": ctx.get("flags") or [],
+        "themes": ctx.get("themes") or [],
     }
     pack.update(_plan(c, state, cfg, pc, fund, val, as_of, exits, ctx))
     return pack
@@ -299,7 +302,8 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
                         flags_on=sum(1 for v in (state.flags or {}).values() if v),
                         earnings_in_hold=earnings_in_hold, has_fundamentals=bool(fund),
                         horizons_disagree=horizons_disagree,
-                        small_sample=bool(base.get("n")) and base.get("small_sample", True), pcfg=pc)
+                        small_sample=bool(base.get("n")) and base.get("small_sample", True), pcfg=pc,
+                        news=ctx.get("conviction_news"))
     # the weight the book's own rule gives the name (replay order / replay capital): a ratio, not a position
     rule_w = (float(c.notional) / float(state.equity)) if c.notional and getattr(state, "equity", None) else None
     risk = P.risk_and_size(c, c.price, c.stop, tgt.get("t1"), pc.get("fund_equity"), conv["bucket"], pc,
@@ -535,6 +539,20 @@ def render_md(pack: dict, note: str | None = None) -> str:
     risks_w = w.get("risks")
     for r in (risks_w if isinstance(risks_w, list) and risks_w else p["risks"]):
         L.append(f"- {r}")
+    if p.get("flags"):
+        L += ["", "Flags from the news and filings (each with its source):", ""]
+        for fl in p["flags"]:
+            L.append(f"- ⚑ {fl['text']}" + (f" ([source]({fl['url']}))" if fl.get("url") else ""))
+    sn = p.get("sentiment") or {}
+    if sn.get("name") or sn.get("market"):
+        nm = sn.get("name") or {}
+        bits = []
+        if nm.get("level") is not None:
+            bits.append(f"news sentiment {nm['level']:+.2f} over {nm.get('n', 0)} article(s) in 3 days"
+                        + (f", {nm['change']:+.2f} against its 20-day baseline" if nm.get("change") is not None else ""))
+        if sn.get("market"):
+            bits.append(f"market mood {sn['market']}")
+        L += ["", "*" + "; ".join(bits) + ". Scores are computed from stored headlines; they inform conviction and never gate the rule.*"]
     if p.get("news"):
         L += ["", "Recent headlines:", ""]
         for n in p["news"]:

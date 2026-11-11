@@ -154,7 +154,7 @@ pitch:
   min_rr: 1.5                 # reward:risk to T1 below this is flagged in the plan
   risk_per_trade: 0.005       # share of the fund risked to the stop, before the conviction scale
   max_position_pct: 0.10      # hard cap on one position as a share of the fund (analysts propose 5-12%)
-  fund_equity: null           # the fund's size in $ for share counts; null = the paper book's equity
+  fund_equity: null           # the fund's size in $ for share counts; null = sizes are a % of the fund only
   size_scale: {High: 1.0, Medium: 0.75, Low: 0.5}   # risk multiplier per conviction bucket
   scenario_weights: {bear: 0.25, base: 0.50, bull: 0.25}   # probability-weighted 12-month target
   valuation_agree_upside: 0.15  # 12-month upside at/above this counts as valuation agreeing with a buy
@@ -176,7 +176,60 @@ pitch:
     earnings_in_hold: -10
     no_fundamentals: -5
     small_sample: -5
+    news_positive: 5          # the name's news sentiment is at/over news.positive (needs news.min_articles)
+    news_negative: -8
+    market_risk_on: 3         # the market-mood read (breadth, highs/lows, VIX, sectors, headlines)
+    market_risk_off: -5
+  eligibility:                # research covers every listed name; only names over this floor are pitched
+    min_price: 5
+    min_adv_usd: 20000000     # 20-day average dollar volume
+    min_sessions: 60
+    too_new_sessions: 252     # under a year of history = "too new for the tested rules" (IPO track)
   glossary: true              # glossary at the bottom of every memo
   ai_infrastructure: [NVDA, AVGO, AMD, TSM, ASML, MU, ARM, MRVL, ANET, AMAT, LRCX, KLAC, CDNS, SNPS, SMCI,
                       DELL, HPE, VRT, ETN, PWR, GEV, CEG, VST, NEE, TLN, EQIX, DLR, ORCL, MSFT, AMZN, GOOGL,
                       GOOG, META, CRWV, NBIS, COHR, CIEN, GLW]   # the fund's AI focus; a tag, not a signal
+
+# ---------------------------------------------------------------------------------------------------
+# News and sentiment (docs/22.3). Scores are computed in code from stored headlines. They find names to
+# research, raise flags in a pitch and feed two conviction terms. They never gate an entry: a sentiment
+# gate stays "untested" until the R&D study shows it helps out of sample.
+news:
+  min_articles: 3             # fewer than this in 3 days = no sentiment grade, no conviction term
+  positive: 0.25              # name sentiment at/over this counts as positive
+  negative: -0.25
+  material: 0.5               # |score| at/over this on a headline about the name = a material headline
+  collapse: -0.40             # level minus the 20-day baseline at/under this = a sentiment collapse flag
+  volume_spike: 3.0           # today's article count over the 20-day daily average
+  shock:                      # a theme shock: the event that moves a whole group (configs/themes.yaml)
+    move_pct: 0.03            # a member counts when it moved this much ...
+    min_names: 3              # ... and at least this many did, the same way ...
+    median_pct: 0.015         # ... with the theme's median move agreeing
+    lead_pct: 0.07            # or: one name moved this much and two others followed by follow_pct
+    follow_pct: 0.015
+    min_articles: 2           # or: this many of today's headlines match the theme's keywords
+    corr_min: 0.75            # names this correlated (60 days) with a theme's basket are added to it
+    corr_max_add: 8
+
+# The morning watchlist (docs/22.4).
+watchlist:
+  size: 30                    # names kept on the dashboard list
+  post: 10                    # names in the Discord digest
+  per_book: 8                 # at most this many near-trigger names per book
+  max_steps: 2                # how far from a trigger a name can be and still be listed
+  watch_sessions: 10          # a name leaves the list after this many sessions if nothing happened
+  ipo_days_ahead: 14          # upcoming IPOs shown this far ahead
+  ipo_days_back: 30           # and recent listings this far back
+
+# Live alerts on the picks, the watchlist and active pitches (docs/22.5). Posting them is off until
+# ABG_STOCKS_LIVE_ALERTS=true; the dashboard shows them either way.
+alerts:
+  near_stop_atr: 0.5          # within this many ATRs of the stop
+  gap_atr: 1.0                # an open this many ATRs from yesterday's close
+  rel_volume: 2.0             # volume over this multiple of the 20-day pace for the time of day
+  cooldown_min: 30            # one alert per name per this many minutes (stops and targets always go)
+  max_per_tick: 8
+  max_per_hour: 20
+  quiet: true                 # nothing is posted outside 9:30-16:00 ET
+  kinds: {zone_enter: true, zone_leave: true, near_stop: true, stop: true, t1: true, t2: true, gap: true,
+          rel_volume: true, forming: true, news: true, sentiment: true, theme: true, earnings: true}

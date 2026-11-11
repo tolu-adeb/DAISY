@@ -103,6 +103,9 @@ def check_in(board: dict, quotes: dict[str, dict]) -> tuple[dict, list[str]]:
     keep, dropped = [], []
     for p in board.get("picks") or []:
         st = live_status(p, quotes.get(p["symbol"]))
+        was = (p.get("live") or {}).get("state")
+        if was and was != st["state"]:
+            st["was"] = was                      # what it was at the last post, so the check-in can say what changed
         p = {**p, "live": st}
         (keep if st["state"] in ACTIVE + ("no_quote",) else dropped).append(p)
     swapped: list[str] = []
@@ -157,7 +160,8 @@ def _live_line(p: dict) -> str:
         move += f" ({_pct(st['from_open'])} from the {_px(st.get('open'))} open"
         move += f", {st['r_from_open']:+.2f}R" if st.get("r_from_open") is not None else ""
         move += ")"
-    return f"Now {move}\n{STATE_WORDS.get(st['state'], st['state'])}"
+    since = f"\n↪ changed since the last post (was: {st['was'].replace('_', ' ')})" if st.get("was") else ""
+    return f"Now {move}\n{STATE_WORDS.get(st['state'], st['state'])}{since}"
 
 
 def board_embed(board: dict, kind: str, now: datetime, tag: str = "") -> dict:

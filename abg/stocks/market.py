@@ -115,7 +115,9 @@ class MarketFeed:
             d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
         except (OSError, ValueError):
             d = None
-        fresh = d and (time.time() - float(d.get("at", 0))) < COMMON_TTL_DAYS * 86400
+        # a day by default, so a new listing is in the research universe the day after it starts trading
+        ttl = float(getattr(self.s, "stocks_universe_refresh_days", 1) or 1)
+        fresh = d and (time.time() - float(d.get("at", 0))) < ttl * 86400
         if fresh and not refresh:
             return set(d["symbols"])
         try:
@@ -134,7 +136,15 @@ class MarketFeed:
             raise ValueError(f"Polygon returned only {len(syms)} common stocks - refusing to use that list")
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"at": time.time(), "symbols": syms}), encoding="utf-8")
+        names = {_norm(r["ticker"]): r.get("name") for r in rows if r.get("ticker") and r.get("name")}
+        old = set((d or {}).get("symbols") or [])
+        seen = dict((d or {}).get("first_seen") or {})
+        if old:                                             # tickers that were not on yesterday's list
+            today = datetime.now(NY).date().isoformat()
+            for t in syms:
+                if t not in old:
+                    seen.setdefault(t, today)
+        tmp.write_text(json.dumps({"at": time.time(), "symbols": syms, "names": names, "first_seen": seen}), encoding="utf-8")
         tmp.replace(p)
         return set(syms)
 
@@ -205,7 +215,7 @@ class MarketFeed:
         names = await asyncio.to_thread(self.liquid, long, common, min_price, min_dv)
         core = set(self.u.core())
         tier = [t for t in names if t not in core]
-        cap = int(getattr(self.s, "stocks_market_max", 3000) or 0)
+        cap = int(getattr(self.s, "stocks_market_max", 0) or 0)      # 0 = no cap: every liquid name
         if cap and len(tier) > cap:                         # keep the most liquid if a cap is set
             recent = long[long["date"] >= long["date"].max() - pd.Timedelta(days=40)]
             dv = (recent["c"] * recent["v"]).groupby(recent["T"]).median()

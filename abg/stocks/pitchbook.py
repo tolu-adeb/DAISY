@@ -157,7 +157,10 @@ def track_record(rows: list[dict]) -> dict:
         return {k: agg([r for r in rows if str(key(r)) == k]) for k in keys}
     return {"all": agg(rows), "by_book": by(lambda r: r.get("book")),
             "by_bucket": by(lambda r: (r.get("plan") or {}).get("bucket")),
-            "by_rank": by(lambda r: r.get("drank")), "by_sector": by(lambda r: r.get("sector"))}
+            "by_rank": by(lambda r: r.get("drank")), "by_sector": by(lambda r: r.get("sector")),
+            # untested: pitches by the name's news sentiment when it was pitched, kept apart so the team can
+            # see whether a sentiment gate would have helped before anyone proposes one
+            "by_sentiment": by(lambda r: r.get("sent_bucket"))}
 
 
 # --------------------------------------------------------------------------- storage

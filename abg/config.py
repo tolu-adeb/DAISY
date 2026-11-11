@@ -370,8 +370,28 @@ class Settings(BaseSettings):
     stocks_sweep_pause: float = 0.0                # seconds between calls, for a strict rate limit
     # the whole US market (docs/21.4): one Polygon "grouped daily" call per session covers every stock
     stocks_market: bool = True                     # on whenever ABG_POLYGON_API_KEY is set
-    stocks_market_sessions: int = 300              # sessions kept (the free plan allows about two years)
-    stocks_market_max: int = 3000                  # most-liquid cap on the market tier (0 = no cap)
+    stocks_market_sessions: int = 500              # sessions kept (the free plan allows about two years)
+    stocks_market_backfill_calls: int = 25         # older sessions fetched per day until that many are stored
+    stocks_market_max: int = 0                     # cap on the rule universe; 0 = unlimited (every liquid name)
+    stocks_universe_refresh_days: float = 1        # how often the list of US common stocks/ADRs is re-read
+    # research around the rules (docs/22): screen, news, watchlist, live alerts. Posting anything new is off.
+    stocks_news: bool = True                       # store headlines + filings for watched names (needs ABG_FINNHUB_API_KEY)
+    stocks_news_minutes: int = 30                  # how often the live layer re-reads news for the watched names
+    stocks_news_max_names: int = 40                # names per news pass (free-tier budget)
+    stocks_edgar: bool = True                      # SEC EDGAR filings (8-K, S-1, 13D/G, Form 4) for watched names
+    stocks_edgar_user_agent: str | None = None     # SEC asks for an app name here; default names DAISY, never a person
+    stocks_themes: str | None = None               # path to the theme map (default: configs/themes.yaml)
+    stocks_watch: bool = True                      # build the morning watchlist for the dashboard
+    stocks_watch_scan_time: str = "08:30"          # ET, trading days
+    stocks_watch_post: bool = False                # post the morning watchlist to Discord (off until you turn it on)
+    stocks_watch_post_time: str = "08:45"          # ET
+    stocks_live: bool = True                       # watch live quotes on picks, active pitches and the watchlist
+    stocks_live_seconds: int = 120                 # how often (polling; Finnhub's free plan is 60 calls a minute)
+    stocks_live_max_names: int = 40                # names watched per tick
+    stocks_live_alerts: bool = False               # post live alerts to Discord (off until you turn it on)
+    stocks_dashboard_url: str | None = None        # the dashboard's address, for "open the pitch" links in alerts
+    stocks_weekly_recap: bool = False              # post the Friday recap to Discord (off until you turn it on)
+    stocks_weekly_recap_time: str = "16:45"        # ET, Fridays
     stocks_market_replay_years: int = 2            # live replay length when the market tier is on (memory)
     stocks_market_wait_until: str = "21:30"        # ET: the daily pass waits for Polygon's bar until then
     # risk and allocation overrides (null = whatever configs/stocks.yaml says)

@@ -41,6 +41,8 @@ DEFAULTS: dict = {
         "regime": {"bull_trend": 5, "bull_chop": 0, "risk_off": -10, "crisis": -15, "warmup": -5},
         "flag_each": -3, "flags_max": -12, "earnings_in_hold": -10, "no_fundamentals": -5,
         "small_sample": -5,
+        # news and market sentiment (docs/22.3): a name needs news.min_articles before either applies
+        "news_positive": 5, "news_negative": -8, "market_risk_on": 3, "market_risk_off": -5,
     },
     "buckets": {"High": 70, "Medium": 45},
     "min_base_trades": 30,          # fewer replayed trades than this = small-sample warning
@@ -356,7 +358,7 @@ def entry_plan(c, as_of: date, earnings: str | None, pcfg: dict) -> dict:
 # --------------------------------------------------------------------------- conviction
 def conviction(*, gates: dict, ml_prob: float | None, ml_threshold: float | None, upside: float | None,
                regime: str, flags_on: int, earnings_in_hold: bool, has_fundamentals: bool,
-               horizons_disagree: bool, small_sample: bool, pcfg: dict) -> dict:
+               horizons_disagree: bool, small_sample: bool, pcfg: dict, news: dict | None = None) -> dict:
     w = pcfg["conviction"]
     score, parts = float(w["start"]), [("start", float(w["start"]))]
 
@@ -387,6 +389,17 @@ def conviction(*, gates: dict, ml_prob: float | None, ml_threshold: float | None
         add("trade view and 12-month view disagree", w["horizons_disagree"])
     if small_sample:
         add("base rates rest on a small sample", w["small_sample"])
+    if news:                                    # {"level", "n", "min_n", "positive", "negative", "market"}
+        lvl, n = news.get("level"), news.get("n") or 0
+        if lvl is not None and n >= int(news.get("min_n", 3)):
+            if lvl >= float(news.get("positive", 0.25)):
+                add(f"news sentiment positive ({lvl:+.2f} over {n} articles)", w.get("news_positive", 0))
+            elif lvl <= float(news.get("negative", -0.25)):
+                add(f"news sentiment negative ({lvl:+.2f} over {n} articles)", w.get("news_negative", 0))
+        if news.get("market") == "risk-on":
+            add("market mood: risk-on", w.get("market_risk_on", 0))
+        elif news.get("market") == "risk-off":
+            add("market mood: risk-off", w.get("market_risk_off", 0))
     s = int(round(min(100.0, max(0.0, score))))
     b = pcfg["buckets"]
     bucket = "High" if s >= b["High"] else "Medium" if s >= b["Medium"] else "Low"

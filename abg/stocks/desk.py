@@ -37,6 +37,7 @@ from . import pitchbook as PB
 from . import thesis as T
 from .deskdb import DeskDB
 from .config import build_config, describe as describe_cfg
+from .daybook import DayMixin
 from .live import LiveSignals
 from .market import MarketFeed
 from .store import BarStore
@@ -51,7 +52,7 @@ DEFAULT_DAILY_TIME = "16:20"
 ENRICH_DEFAULT = 6                # how many top candidates get fundamentals + news
 
 
-class StockDesk:
+class StockDesk(DayMixin):
     def __init__(self, settings, engine, hub=None, symbols_fn=None):
         self.s = settings
         self.engine = engine                     # the terminal's data engine (providers, http)
@@ -82,6 +83,9 @@ class StockDesk:
         self.last_sweep: dict | None = None
         self.last_state = None
         self.research_busy: str | None = None
+        self.live: dict | None = None            # the live layer's heartbeat (docs/22.5)
+        self.last_news: dict | None = None
+        self._screen = None
 
     # ------------------------------------------------------------------ storage
     def _p(self, name: str) -> Path:
@@ -310,6 +314,29 @@ class StockDesk:
             cands = ls.candidates()
             state = ls.state()
             self.last_state = state
+            # research around the rules (docs/22.2-22.3): the whole-market screen, then the news. Each is
+            # a bonus: a failure is logged and the pitches go out without it.
+            screen_meta: dict = {}
+            try:
+                screen_meta = await asyncio.to_thread(self.screen_refresh, ls)
+                r_ = ls.result or {}
+                eq_ = r_.get("equity")
+                per_ = (str(eq_.index[0].date()), str(eq_.index[-1].date())) if eq_ is not None and len(eq_) else None
+                self.db.kv_set("base_by_book", {b: {k: v for k, v in P.base_rates(r_.get("trades"), b, per_).items()
+                                                    if k in ("n", "median_hold_days", "median_win_R", "win_rate", "small_sample")}
+                                                for b in ("trend_pullback", "mean_reversion", "xs_momentum")})
+            except Exception as e:
+                log.warning("stocks: screen refresh failed (%s: %s)", type(e).__name__, str(e)[:160])
+                self.errors.append({"ts": time.time(), "where": "screen", "error": f"{type(e).__name__}: {e}"[:300]})
+            mood: dict = {}
+            try:
+                await self.news_refresh(sorted({c.symbol for c in cands if c.book != "dual_momentum"}))
+                mood = self.market_mood()
+                self.shocks(day=state.date)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.info("stocks: news pass failed (%s)", type(e).__name__)
 
             n_enrich = ENRICH_DEFAULT if enrich is None else enrich
             # only entries in the single-stock books are worth a valuation, and only the best few
@@ -329,6 +356,8 @@ class StockDesk:
                     fund, peers, news, provider = await self._enrich(c.symbol)
                 ctx = {**base_ctx, "bars": self.store.frame(c.symbol) if c.is_entry else None,
                        "earnings": earnings.get(c.symbol), "fund_provider": provider}
+                if c.book != "dual_momentum":
+                    ctx.update(self.research_context(c.symbol, fund, peers, state.date, mood))
                 try:
                     packs.append(T.build_pack(c, state, self.cfg, fund=fund, peers=peers or [],
                                               news=news or [], provider=provider, ctx=ctx))
@@ -373,6 +402,8 @@ class StockDesk:
                 "pitch_book": self.book.counts(state.date), "posted": sent,
                 "regime": state.regime, "crisis": state.crisis, "stress": state.stress,
                 "seconds": round(time.time() - t0, 1), "enriched": sorted(enrich_set),
+                "screen": {k: screen_meta.get(k) for k in ("covered", "eligible", "too_new", "in_rule_panel", "seconds")},
+                "mood": mood.get("label"), "memory_mb": _peak_mb(),
             }
             st = self._load("state.json", {})
             st["last_daily"] = self.last_daily
@@ -401,6 +432,8 @@ class StockDesk:
                            "ml_prob": p.get("ml_prob"), "regime": state.regime, "crisis": state.crisis,
                            "sector": p.get("sector") or self.store.sectors().get(p["symbol"]),
                            "drank": (p.get("rec") or {}).get("daisy_rank"),
+                           # kept so the untested question "does news sentiment add edge?" can be answered later
+                           "sent_bucket": _sent_bucket(p.get("sentiment"), self.cfg),
                            "fair_value": (p.get("valuation") or {}).get("fair_value"),
                            "upside": (p.get("valuation") or {}).get("upside"),
                            "plan": P.plan_record(p, pc), "plan_mark": None, "track": None,
@@ -676,7 +709,8 @@ class StockDesk:
         async def one(sym):
             try:
                 q = (await self.engine.quote(sym, use_cache=False)).value
-                return sym, {"price": q.price, "open": q.open, "day_high": q.day_high, "day_low": q.day_low}
+                return sym, {"price": q.price, "open": q.open, "day_high": q.day_high, "day_low": q.day_low,
+                             "prev_close": q.prev_close, "volume": q.volume}
             except Exception:
                 return sym, None
         return {k: v for k, v in await asyncio.gather(*(one(x) for x in symbols)) if v}
@@ -854,7 +888,10 @@ class StockDesk:
                 self.errors.append({"ts": time.time(), "where": "autofill",
                                     "error": f"{type(e).__name__}: {e}"[:300]})
         if self.market.enabled:
-            out["market"] = await self.market_refresh()
+            # newest sessions first, and only a slice per start: a deep backfill must not hold up the day's posts
+            have = len(self.market.days.days())
+            out["market"] = await self.market_refresh(
+                max_calls=max(60, int(getattr(self.s, "stocks_market_backfill_calls", 25) or 25)) if have else None)
         return out
 
     async def run(self) -> None:
@@ -871,13 +908,27 @@ class StockDesk:
                         if self._market_ready(now):
                             self._mark_daily_run(now)
                             await self.daily(post=True)
+                            want = int(getattr(self.s, "stocks_market_sessions", 500) or 500)
+                            if self.market.enabled and len(self.market.days.days()) < want:   # gradual backfill
+                                await self.market_refresh(
+                                    max_calls=int(getattr(self.s, "stocks_market_backfill_calls", 25) or 25))
                         else:
                             await self._sleep(600)                       # Polygon not out yet: check in 10 min
                             continue
+                    elif (due := self._watch_due(now)) is not None:
+                        if due == "scan":
+                            await self.morning(now, post=False)
+                        else:
+                            await self.watch_post(now)
                     elif (slot := self._board_slot(now)) is not None:
                         await self.board_post(slot, now)
+                    elif self._recap_due(now):
+                        await self.recap_post(now)
                     elif self._sweep_due(now):
                         await self.intraday()
+                    if self._live_due(now):                              # every tick it is due, whatever else ran
+                        self._live_at = time.time()
+                        await self.live_tick(now)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -909,7 +960,8 @@ class StockDesk:
     def state(self) -> dict:
         st = self._load("state.json", {})
         return {"last_daily": st.get("last_daily"), "last_daily_run": st.get("last_daily_run"),
-                "last_sweep": self.last_sweep}
+                "last_sweep": self.last_sweep, "live": self.live, "news": self.last_news,
+                "watchlist": {k: self.watch_meta().get(k) for k in ("day", "at", "names", "posted")}}
 
     def status(self) -> dict:
         stats = self.store.stats()
@@ -931,6 +983,17 @@ class StockDesk:
             "research": {"schedule": getattr(self.s, "stocks_research", "weekly"), "busy": self.research_busy,
                          "last": (lambda r: {"at": r.get("at"), "verdict": (r.get("verdict") or {}).get("overall")}
                                   if r else None)(self.last_research())},
+            "screen": self.screen_meta(), "live": self.live, "news": self.last_news,
+            "watchlist": {k: self.watch_meta().get(k) for k in ("day", "at", "names", "posted")},
+            "features": {"watch": bool(getattr(self.s, "stocks_watch", True)),
+                         "watch_post": bool(getattr(self.s, "stocks_watch_post", False)),
+                         "live": bool(getattr(self.s, "stocks_live", True)),
+                         "live_alerts": bool(getattr(self.s, "stocks_live_alerts", False)),
+                         "news": bool(getattr(self.s, "stocks_news", True)),
+                         "weekly_recap": bool(getattr(self.s, "stocks_weekly_recap", False))},
+            "keys": {"polygon": bool(getattr(self.s, "polygon_api_key", None)),
+                     "finnhub": bool(getattr(self.s, "finnhub_api_key", None)),
+                     "anthropic": bool(getattr(self.s, "anthropic_api_key", None))},
             "errors": list(self.errors)[-5:],
         }
 
@@ -979,6 +1042,26 @@ class StockDesk:
 def _mime(path: Path) -> str:
     return {".png": "image/png", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ".pdf": "application/pdf"}.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _peak_mb() -> float | None:
+    """Peak memory of this process in MB (Linux/macOS; None on Windows)."""
+    try:
+        import resource
+        import sys
+        v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return round(v / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
+    except Exception:
+        return None
+
+
+def _sent_bucket(sn: dict | None, cfg: dict) -> str | None:
+    from .news import news_cfg
+    nm = (sn or {}).get("name") or {}
+    nc = news_cfg(cfg)
+    if nm.get("level") is None or (nm.get("n") or 0) < nc["min_articles"]:
+        return None
+    return "positive" if nm["level"] >= nc["positive"] else "negative" if nm["level"] <= nc["negative"] else "neutral"
 
 
 def _rating(p: dict) -> str:
