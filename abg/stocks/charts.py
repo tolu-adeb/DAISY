@@ -182,7 +182,7 @@ def price_chart(pack: dict, bars, path: Path, sessions: int = 252) -> Path | Non
             sx.annotate(t, xy=(0.24, y), xytext=(0.30, ly), ha="left", va="center", fontsize=8, color=INK,
                         arrowprops={"arrowstyle": "-", "color": GRID, "lw": 0.6} if abs(ly - y) > 1e-9 else None)
     fig.text(0.01, 0.01, f"Source: {pack.get('provider') or 'bar store'} daily closes; levels from the pitch "
-             f"plan. Paper only · research, not advice.", fontsize=7, color=MUTED)
+             f"plan. Research, not advice.", fontsize=7, color=MUTED)
     fig.subplots_adjust(left=0.07, right=0.97 if has12 else 0.86, top=0.9, bottom=0.1)
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -253,7 +253,7 @@ def football_field(pack: dict, path: Path) -> Path | None:
     note = "DCF discounts EPS (owner-earnings proxy). "
     if isinstance(w, dict) and w:
         note += "Weighted = " + " + ".join(f"{int(round(float(v) * 100))}% {k}" for k, v in w.items()) + ". "
-    fig.text(0.01, 0.01, note + "Paper only · research, not advice.", fontsize=7, color=MUTED)
+    fig.text(0.01, 0.01, note + "Research, not advice.", fontsize=7, color=MUTED)
     fig.subplots_adjust(left=0.2, right=0.97, top=0.8, bottom=0.12 if len(rows) > 2 else 0.25)
     fig.savefig(path, dpi=150)
     plt.close(fig)

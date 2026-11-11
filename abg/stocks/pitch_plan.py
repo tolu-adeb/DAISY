@@ -30,7 +30,7 @@ DEFAULTS: dict = {
     "min_rr": 1.5,                  # reward:risk below this is flagged
     "risk_per_trade": 0.005,        # share of the fund risked to the stop, before the conviction scale
     "max_position_pct": 0.10,       # cap on one position as a share of the fund (analysts propose 5-12%)
-    "fund_equity": None,            # the fund's size in $; null = the desk's paper book equity
+    "fund_equity": None,            # the fund's size in $; null = sizes are shown as a % of the fund only
     "size_scale": {"High": 1.0, "Medium": 0.75, "Low": 0.5},
     "scenario_weights": {"bear": 0.25, "base": 0.50, "bull": 0.25},
     "valuation_agree_upside": 0.15, # 12-mo upside at/above this = valuation agrees with a buy
@@ -122,29 +122,23 @@ def next_month_end_session(d: date) -> date:
 
 
 # --------------------------------------------------------------------------- rating
-def rating(action: str, shares: float | None = None, book_held: float | None = None,
-           fund_held: float | None = None) -> str:
-    """The rule's action in the fund's vocabulary.
+def rating(action: str, shares: float | None = None, open_same: bool = False,
+           open_other: bool = False) -> str:
+    """The rule's action in the fund's vocabulary, decided against the desk's own open pitches.
 
-    Books keep separate sleeves, so the *direction* comes from the order against the same book's
-    holding (a REBALANCE to 1 share in a book that holds none is a purchase, even if another book
-    already owns the name), and BUY vs ADD comes from what the fund holds in total.
+    ``open_same``: this book already has an open pitch on the name; ``open_other``: another book does.
+    A new entry on a name we already pitched is an ADD (another book) or a HOLD (the same book: the idea
+    is already out there). A rule exit closes the pitch: SELL, or TRIM when another book's pitch stays open.
     """
     a = (action or "").upper()
-    fund_held = fund_held or 0.0
-    book_held = book_held or 0.0
-    if a == "BUY":
-        return "ADD" if fund_held > 0 else "BUY"
-    if a == "SELL":
-        return "SELL" if fund_held - book_held <= 0 else "TRIM"
     if a == "REBALANCE":
         if shares is None:
             return "HOLD"
-        if shares > book_held:
-            return "ADD" if fund_held > 0 else "BUY"
-        if shares < book_held:
-            return "TRIM" if shares > 0 or fund_held - book_held > 0 else "SELL"
-        return "HOLD"
+        a = "BUY" if shares > 0 else "SELL"
+    if a == "BUY":
+        return "HOLD" if open_same else "ADD" if open_other else "BUY"
+    if a == "SELL":
+        return "TRIM" if open_other else "SELL"
     return VERDICT_TO_RATING.get(a, "WATCH")
 
 
@@ -400,11 +394,17 @@ def conviction(*, gates: dict, ml_prob: float | None, ml_threshold: float | None
 
 
 # --------------------------------------------------------------------------- risk and size
-def risk_and_size(c, entry: float | None, stop: float | None, t1: float | None, equity: float,
-                  bucket: str, pcfg: dict) -> dict:
-    out: dict = {"equity": round(equity, 2), "stop": stop, "stop_pct": None, "stop_atr": _f(c.stop_atr),
-                 "rr": None, "rr_flag": False, "shares": None, "notional": None, "pct_of_fund": None,
-                 "risk_dollars": None, "risk_pct_of_fund": None, "bound": None, "small_account": None}
+def risk_and_size(c, entry: float | None, stop: float | None, t1: float | None, equity: float | None,
+                  bucket: str, pcfg: dict, rule_weight: float | None = None) -> dict:
+    """The recommended size as a share of the fund. With ``equity`` (``pitch.fund_equity``) it is also
+    given in shares and dollars; without it, percent only. ``rule_weight`` is the weight the book's own
+    rule gives a name that carries no stop (the momentum books)."""
+    equity = float(equity) if equity else None
+    cap = float(pcfg["max_position_pct"])
+    out: dict = {"equity": round(equity, 2) if equity else None, "stop": stop, "stop_pct": None,
+                 "stop_atr": _f(c.stop_atr), "rr": None, "rr_flag": False, "shares": None, "notional": None,
+                 "pct_of_fund": None, "risk_dollars": None, "risk_pct_of_fund": None, "bound": None,
+                 "small_account": None}
     if entry and stop and entry > stop:
         out["stop_pct"] = round(stop / entry - 1, 4)
         if t1 and t1 > entry:
@@ -412,41 +412,54 @@ def risk_and_size(c, entry: float | None, stop: float | None, t1: float | None, 
             out["rr_flag"] = out["rr"] < float(pcfg["min_rr"])
         per = entry - stop
         scale = float((pcfg["size_scale"] or {}).get(bucket, 0.5))
-        risk_cash = float(pcfg["risk_per_trade"]) * scale * equity
-        by_risk = math.floor(risk_cash / per)
-        by_cap = math.floor(float(pcfg["max_position_pct"]) * equity / entry)
-        sh = max(0, min(by_risk, by_cap))
-        out.update({"shares": sh, "notional": round(sh * entry, 2), "pct_of_fund": round(sh * entry / equity, 4),
-                    "risk_dollars": round(sh * per, 2), "risk_pct_of_fund": round(sh * per / equity, 5),
-                    "bound": "risk-based" if by_risk <= by_cap else "capped",
-                    "risk_per_trade": float(pcfg["risk_per_trade"]) * scale})
+        rpt = float(pcfg["risk_per_trade"]) * scale
+        out["risk_per_trade"] = rpt
+        if equity:
+            by_risk = math.floor(rpt * equity / per)
+            by_cap = math.floor(cap * equity / entry)
+            sh = max(0, min(by_risk, by_cap))
+            out.update({"shares": sh, "notional": round(sh * entry, 2), "pct_of_fund": round(sh * entry / equity, 4),
+                        "risk_dollars": round(sh * per, 2), "risk_pct_of_fund": round(sh * per / equity, 5),
+                        "bound": "risk-based" if by_risk <= by_cap else "capped"})
+        else:
+            by_risk = rpt * entry / per                      # the position size whose loss at the stop is rpt
+            pct = min(by_risk, cap)
+            out.update({"pct_of_fund": round(pct, 4), "risk_pct_of_fund": round(pct * per / entry, 5),
+                        "bound": "risk-based" if by_risk <= cap else "capped"})
         out["small_account"] = {"account": 10_000, "risk_pct": 0.01,
-                                "shares": int(min(math.floor(100 / per),
-                                                  math.floor(float(pcfg["max_position_pct"]) * 10_000 / entry)))}
-    elif entry and c.weight is not None and c.notional:
+                                "shares": int(min(math.floor(100 / per), math.floor(cap * 10_000 / entry)))}
+    elif entry and rule_weight:
         # momentum books carry no stop: they are sized by the book's own target weight
-        pct = min(float(c.notional) / equity, float(pcfg["max_position_pct"]))
-        sh = math.floor(pct * equity / entry)
-        out.update({"shares": sh, "notional": round(sh * entry, 2), "pct_of_fund": round(sh * entry / equity, 4),
-                    "bound": "book weight" if float(c.notional) / equity <= float(pcfg["max_position_pct"]) else "capped"})
-    if out["pct_of_fund"] is not None and out["pct_of_fund"] > float(pcfg["max_position_pct"]) + 1e-9:
+        pct = min(float(rule_weight), cap)
+        out.update({"pct_of_fund": round(pct, 4), "bound": "book weight" if float(rule_weight) <= cap else "capped"})
+        if equity:
+            sh = math.floor(pct * equity / entry)
+            out.update({"shares": sh, "notional": round(sh * entry, 2), "pct_of_fund": round(sh * entry / equity, 4)})
+    if out["pct_of_fund"] is not None and out["pct_of_fund"] > cap + 1e-9:
         raise AssertionError("position above max_position_pct")                         # pragma: no cover
     return out
 
 
 # --------------------------------------------------------------------------- fund fit
-def fund_fit(symbol: str, sector: str | None, store, holdings: list[str], sectors: dict,
-             equity: float, notional: float | None, held_value: dict, pcfg: dict, bench: str = "SPY") -> dict:
-    """Sector weight before/after, 60-day correlation to holdings and to the benchmark, beta, overlap,
-    AI-infrastructure exposure - and one computed sentence on what the position adds."""
+def fund_fit(symbol: str, sector: str | None, store, holdings: dict | None, sectors: dict,
+             pct_of_fund: float | None, pcfg: dict, bench: str = "SPY") -> dict:
+    """How the idea sits next to the fund's actual holdings (``{symbol: weight}``, from Settings or
+    ``configs/fund_holdings.yaml``): sector weight before/after, 60-day correlation to the holdings and to
+    the benchmark, beta, overlap, AI-infrastructure exposure - and one computed sentence on what it adds.
+    With no list, the holdings lines say "holdings not provided"; nothing is assumed."""
+    provided = holdings is not None
+    holdings = {str(k).upper(): (_f(v) or 0.0) for k, v in (holdings or {}).items()}
     out: dict = {"sector": sector or NOT_IN_DATA, "sector_before": None, "sector_after": None,
                  "corr_holdings": None, "corr_benchmark": None, "beta": None, "beta_source": None,
-                 "already_held": symbol in holdings, "ai_infrastructure": symbol in set(pcfg["ai_infrastructure"]),
-                 "ai_names_held": sorted(set(holdings) & set(pcfg["ai_infrastructure"])), "adds": None}
-    if sector and equity:
-        before = sum(v for t, v in held_value.items() if sectors.get(t) == sector)
-        out["sector_before"] = round(before / equity, 4)
-        out["sector_after"] = round((before + (notional or 0)) / equity, 4)
+                 "holdings_provided": provided, "holdings_n": len(holdings) if provided else None,
+                 "already_held": (symbol in holdings) if provided else None,
+                 "ai_infrastructure": symbol in set(pcfg["ai_infrastructure"]),
+                 "ai_names_held": sorted(set(holdings) & set(pcfg["ai_infrastructure"])) if provided else None,
+                 "adds": None}
+    if sector and provided:
+        before = sum(w for t, w in holdings.items() if sectors.get(t) == sector)
+        out["sector_before"] = round(before, 4)
+        out["sector_after"] = round(before + (pct_of_fund or 0), 4)
 
     def rets(t, n=61):
         f = store.frame(t)
@@ -469,8 +482,10 @@ def fund_fit(symbol: str, sector: str | None, store, holdings: list[str], sector
         if cs:
             out["corr_holdings"] = _r(float(np.mean(cs)), 3)
     ch, beta = out["corr_holdings"], out["beta"]
-    if out["already_held"]:
-        out["adds"] = "doubling down: the paper book already holds it"
+    if not provided:
+        out["adds"] = None
+    elif out["already_held"]:
+        out["adds"] = "more of a name the fund already holds"
     elif ch is not None and ch < 0.3:
         out["adds"] = f"a diversifier (average 60-day correlation to holdings {ch:.2f})"
     elif beta is not None and beta < 0.7:
@@ -567,19 +582,20 @@ def wrong_if(c, exits: list[str]) -> list[str]:
     return out
 
 
-def exit_review(c, positions: dict, base: dict) -> dict | None:
-    """For a SELL / TRIM: what the position did, in $ and in R, and how that compares with the book."""
-    pos = (positions or {}).get(c.book, {}).get(c.symbol)
-    if not pos:
+def exit_review(c, pitch: dict | None, base: dict) -> dict | None:
+    """For a SELL / TRIM: what our open pitch on the name did since its tested entry, in % and in R, and
+    how that compares with the book. ``None`` when we have no open pitch on it."""
+    if not pitch:
         return None
-    entry, price, sh = _f(pos.get("entry")), _f(pos.get("price")), _f(pos.get("shares"))
+    entry, price = _f(pitch.get("entry_open")), _f(c.price)
     if not entry or not price:
         return None
-    pnl = (price - entry) * (sh or 0)
-    r = _f(pos.get("open_r"))
-    out = {"entry": entry, "entry_date": pos.get("entry_date"), "price": price, "shares": sh,
-           "days_held": pos.get("days_held"), "return": round(price / entry - 1, 4),
-           "pnl": round(pnl, 2), "r": _r(r, 2), "reason": (c.reason or "").replace("_", " ")}
+    stop = _f((pitch.get("plan") or {}).get("stop"))
+    r = (price - entry) / (entry - stop) if stop and entry > stop else None
+    out = {"pitch_id": pitch.get("id"), "pitched": pitch.get("as_of"), "entry": entry,
+           "entry_date": pitch.get("entry_date"), "price": price, "shares": None, "pnl": None,
+           "days_held": pitch.get("days_open"), "return": round(price / entry - 1, 4), "r": _r(r, 2),
+           "reason": (c.reason or "").replace("_", " ")}
     if r is not None and base.get("n"):
         ref = base.get("avg_win_R") if r > 0 else base.get("avg_loss_R")
         if ref is not None:

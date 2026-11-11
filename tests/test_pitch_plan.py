@@ -165,7 +165,9 @@ def packs(tmp_path_factory):
         b = out["buy"]
         sell = Candidate(book=b["book"], symbol=b["symbol"], action="SELL", shares=-10.0, reason="trend_break",
                          price=b["price"], atr=b["atr"])
-        hold = {**ctx, "held_by_book": {b["book"]: {b["symbol"]: 10.0}}, "held_shares": {b["symbol"]: 10.0}}
+        mine = {"id": "old-pitch", "as_of": "2026-01-02", "entry_open": b["price"] * 0.95, "entry_date": "2026-01-05",
+                "plan": {"stop": b["price"] * 0.9}}
+        hold = {**ctx, "open_pitches": {b["symbol"]: {b["book"]: mine}}}
         out["sell"] = T.build_pack(sell, state, cfg, ctx=hold)
     out["cfg"], out["state"] = cfg, state
     yield out
@@ -181,7 +183,8 @@ def test_buy_memo_follows_the_aibg_order(packs):
     pos = [md.find(h) for h in order]
     assert all(p >= 0 for p in pos), [h for h, p in zip(order, pos) if p < 0]
     assert pos == sorted(pos)
-    assert "Paper only" in md and "Research, not advice." in md
+    assert "Research only" in md and "Research, not advice." in md
+    assert "paper" not in md.lower() and "equity" not in md.lower().replace("equity analyst", "")
     assert "untested refinement" in md.lower()
     rec = packs["buy"]["rec"]
     assert rec["rating"] in ("BUY", "ADD") and rec["one_liner"].startswith(("Buy", "Add"))
@@ -311,8 +314,11 @@ def test_scorecard_splits_by_bucket_and_tested_vs_refined(tmp_path):
     last = d.store.frame("SPY").index[-6].date().isoformat()
     for r in rows:
         r["as_of"] = last
-    d._save("pitches.json", rows)
+        d.book.save(r)
     sc = d.scorecard()
+    assert sc["track"]["all"]["n"] == len(rows) and sc["track"]["all"]["marked"] == len(rows)
+    assert all(r["status"] in ("active", "closed") and r["entry_open"] for r in sc["pitches"])
+    assert all(d.book.history(r["id"])[0]["status"] == "new" for r in rows)     # the lifecycle is kept
     assert sc["plan"]["tested"]["n"] == len(rows)
     assert sc["plan"]["tested"]["marked"] == len(rows)
     assert set(sc["plan"]["by_bucket"]) <= {"High", "Medium", "Low"}

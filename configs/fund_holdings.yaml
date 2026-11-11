@@ -1,0 +1,12 @@
+# The fund's actual holdings, for the "Why this fits our fund" section of every pitch.
+#
+# This repo is public. If the fund's holdings are not public, leave this list empty and enter them in the
+# dashboard instead (Settings -> Fund holdings): that list is saved in the server's data folder, never in
+# the repo, and it wins over this file.
+#
+# weight = share of the fund (0.08 or 8 both mean 8%). With no list anywhere, pitches say
+# "holdings not provided" and assume nothing.
+as_of: null
+holdings: []
+#  - {symbol: NVDA, weight: 0.08}
+#  - {symbol: MSFT, weight: 0.06}

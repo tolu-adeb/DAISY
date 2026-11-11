@@ -339,7 +339,9 @@ class Settings(BaseSettings):
     stocks_enabled: bool = False                   # run the stock desk inside the monitor (dashboard: Stocks)
     stocks_webhook_url: str | None = None          # Discord channel for the daily pitches; unset = falls back to
                                                    # ABG_PITCH_WEBHOOK_URL, and failing that the dashboard only
-    stocks_tag: str = "PAPER"                      # shown on every post; clear it only when you trust the record
+    stocks_tag: str = "RESEARCH"                   # shown on every post (the desk pitches; it places no orders)
+    stocks_fund_holdings: str | None = None        # path to the fund's holdings list (default: configs/fund_holdings.yaml;
+                                                   # the list saved from Settings wins and stays out of the repo)
     stocks_config: str | None = None               # path to the rule file (default: configs/stocks.yaml)
     stocks_daily_time: str = "16:20"               # ET, weekdays: the after-close pass that produces the pitches
     stocks_post_max: int = 5                       # detailed pitch embeds per post; the rest are in the digest
@@ -350,7 +352,8 @@ class Settings(BaseSettings):
     stocks_post_decks: bool = True                 # attach the AIBG deck for each new pick (needs python-pptx)
     stocks_books: str = ""                         # comma list to limit which books run (a,b,c,d,e or their names)
     stocks_benchmark: str = "SPY"
-    stocks_initial_equity: float = 100_000.0       # the paper book the sizing rules work against
+    stocks_initial_equity: float = 100_000.0       # capital the historical replay starts from (base rates only;
+                                                   # pitch sizes use pitch.fund_equity, or % of the fund)
     stocks_panel_start: str | None = "2015-01-01"  # earliest bar loaded into the panel (indicators warm up on it)
     stocks_min_bars: int = 250                     # a symbol with fewer bars than this is left out of the panel
     stocks_replay_years: int = 5                   # the live pass replays this far back to rebuild positions and

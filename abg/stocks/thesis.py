@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import pitch_plan as P
+from . import rank as RK
 from .live import BOOK_EDGE, BOOK_LABEL, BOOK_SHORT
 
 log = logging.getLogger(__name__)
@@ -180,7 +181,7 @@ def _risks(c, state, cfg: dict, val: dict | None, pack_fund: dict | None) -> lis
 
 
 def _caveats(state, cfg: dict) -> list[str]:
-    out = ["Paper only. Nothing here places an order, and the desk holds no real position."]
+    out = ["Research only. The desk pitches ideas; nothing here places an order."]
     uni = state.universe or {}
     if uni.get("seed"):
         out.append("The single-stock universe is still the built-in seed list, which only contains "
@@ -197,8 +198,9 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
     """Everything a memo, an embed or a deck needs for one candidate. Pure: no I/O, no secrets.
 
     ``ctx`` (optional, from the desk): ``trades`` (the replay's trades, for base rates), ``period``,
-    ``bars`` (this symbol's daily bars), ``store``, ``holdings`` / ``held_value`` / ``held_shares``
-    (the paper book), ``sectors``, ``earnings`` (next report date, ISO), ``ml_threshold``.
+    ``bars`` (this symbol's daily bars), ``store``, ``open_pitches`` (the desk's own open pitches,
+    ``{symbol: {book: row}}``), ``fund_holdings`` (``{symbol: weight}`` or None), ``sectors``,
+    ``earnings`` (next report date, ISO), ``ml_threshold``.
     """
     ctx = ctx or {}
     pc = P.pitch_cfg(cfg)
@@ -228,8 +230,11 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
         "book_label": BOOK_LABEL.get(c.book, c.book),
         "edge": BOOK_EDGE.get(c.book, ""),
         "rank": c.rank, "of": c.of, "score": c.score, "ml_prob": c.ml_prob,
-        "price": c.price, "stop": c.stop, "shares": c.shares, "notional": c.notional,
-        "weight": c.weight, "risk_pct": c.risk_pct, "r_dollars": c.r_dollars,
+        "price": c.price, "stop": c.stop,
+        # retired with the paper book (docs/22.1): kept as null so old readers do not break
+        "shares": None, "notional": None, "weight": None, "risk_pct": None, "r_dollars": None,
+        # the historical replay's own order, for the ledger a ranker learns from; not a position
+        "replay": {"shares": c.shares, "notional": c.notional, "weight": c.weight, "risk_pct": c.risk_pct},
         "atr": c.atr, "stop_atr": c.stop_atr,
         "max_hold": bp.get("max_hold"),
         "what_happened": _what_happened(c, f),
@@ -247,10 +252,9 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
                     "crisis": state.crisis, "stress": state.stress,
                     "flags_on": [k for k, v in (state.flags or {}).items() if v],
                     "book_weight": (state.weights or {}).get(c.book),
-                    "book_budget": (state.budgets or {}).get(c.book),
+                    "book_budget": None,
                     "size_mult": (bp.get("regimes") or {}).get(state.regime),
-                    "vol_scale": state.vol_scale, "equity": state.equity,
-                    "drawdown": state.drawdown},
+                    "vol_scale": state.vol_scale, "equity": None, "drawdown": None},
         "provider": provider,
         "reason": c.reason,
     }
@@ -261,8 +265,8 @@ def build_pack(c, state, cfg: dict, fund: dict | None = None, peers: list[dict] 
 def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as_of: date,
           exits: list[str], ctx: dict) -> dict:
     """The AIBG pitch fields (docs/21.6): recommendation, both horizons, entry, risk, size, fit, questions."""
-    rating = P.rating(c.action, c.shares, ((ctx.get("held_by_book") or {}).get(c.book) or {}).get(c.symbol),
-                      (ctx.get("held_shares") or {}).get(c.symbol))
+    mine = (ctx.get("open_pitches") or {}).get(c.symbol) or {}
+    rating = P.rating(c.action, c.shares, open_same=c.book in mine, open_other=any(b != c.book for b in mine))
     base = P.base_rates(ctx.get("trades"), c.book, ctx.get("period"), min_n=int(pc["min_base_trades"]))
     try:
         tgt = P.trade_targets(c, base, ctx.get("bars"), as_of) if c.is_entry else \
@@ -296,14 +300,16 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
                         earnings_in_hold=earnings_in_hold, has_fundamentals=bool(fund),
                         horizons_disagree=horizons_disagree,
                         small_sample=bool(base.get("n")) and base.get("small_sample", True), pcfg=pc)
-    equity = float(pc.get("fund_equity") or state.equity or 100_000)
-    risk = P.risk_and_size(c, c.price, c.stop, tgt.get("t1"), equity, conv["bucket"], pc)
+    # the weight the book's own rule gives the name (replay order / replay capital): a ratio, not a position
+    rule_w = (float(c.notional) / float(state.equity)) if c.notional and getattr(state, "equity", None) else None
+    risk = P.risk_and_size(c, c.price, c.stop, tgt.get("t1"), pc.get("fund_equity"), conv["bucket"], pc,
+                           rule_weight=rule_w)
     fit = None
     if ctx.get("store") is not None and c.is_entry:
         try:
             fit = P.fund_fit(c.symbol, (fund or {}).get("sector") or (ctx.get("sectors") or {}).get(c.symbol),
-                             ctx["store"], ctx.get("holdings") or [], ctx.get("sectors") or {}, equity,
-                             risk.get("notional"), ctx.get("held_value") or {}, pc, cfg.get("benchmark", "SPY"))
+                             ctx["store"], ctx.get("fund_holdings"), ctx.get("sectors") or {},
+                             risk.get("pct_of_fund"), pc, cfg.get("benchmark", "SPY"))
         except Exception as e:                     # fit is context; never lose the pitch over it
             log.info("fund fit failed for %s: %s", c.symbol, e)
     style = P.BOOK_STYLE.get(c.book, "").format(max_hold=(cfg.get("books") or {}).get(c.book, {}).get("max_hold", "?"))
@@ -333,7 +339,7 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
     if horizons_disagree:
         conflict = (f"The rule says {rating}, while the 12-month probability-weighted target is {pw_up:+.1%} "
                     f"from here. Conviction is cut for it; treat this as a trade, sized as one.")
-    exit_rev = P.exit_review(c, state.positions, base) if rating in ("SELL", "TRIM") else None
+    exit_rev = P.exit_review(c, mine.get(c.book), base) if rating in ("SELL", "TRIM") else None
     if rating in ("SELL", "TRIM"):
         qs = P.exit_questions(c, exit_rev, base)
         wrong = P.exit_wrong_if(c)
@@ -359,6 +365,8 @@ def _plan(c, state, cfg: dict, pc: dict, fund: dict | None, val: dict | None, as
     }
     return {
         "rec": {"rating": rating, "action_line": P.ACTION_LINE.get(rating, ""), "core_thesis": core,
+                "open_pitch": (mine.get(c.book) or next(iter(mine.values()), {})).get("id"),
+                "daisy_rank": RK.daisy_rank(rating, conv.get("bucket")),
                 "one_liner": one, "conviction": conv, "conflict": conflict,
                 "method": {"book": c.book, "label": BOOK_LABEL.get(c.book, c.book),
                            "edge": BOOK_EDGE.get(c.book, ""), "style": style}},
@@ -445,9 +453,10 @@ def render_md(pack: dict, note: str | None = None) -> str:
     # TL;DR
     L += ["**TL;DR**", "", f"- **Do:** {rec.get('one_liner') or p['what_happened']}",
           f"- **Why now:** {p['what_happened']}"]
-    if risk.get("risk_dollars") is not None and tgt.get("t1"):
-        L.append(f"- **Risk vs expect:** {_money(risk['risk_dollars'])} at risk ({_pct0(risk['risk_pct_of_fund'], 2)} "
-                 f"of the fund) to the stop, for a first target {_pct((tgt['t1'] / p['price'] - 1) if p.get('price') else None)} away"
+    if risk.get("risk_pct_of_fund") is not None and tgt.get("t1"):
+        at_risk = (f"{_money(risk['risk_dollars'])} at risk ({_pct0(risk['risk_pct_of_fund'], 2)} of the fund)"
+                   if risk.get("risk_dollars") is not None else f"{_pct0(risk['risk_pct_of_fund'], 2)} of the fund at risk")
+        L.append(f"- **Risk vs expect:** {at_risk} to the stop, for a first target {_pct((tgt['t1'] / p['price'] - 1) if p.get('price') else None)} away"
                  + (f" (R:R {risk['rr']:.1f})" if risk.get("rr") else "") + ".")
     elif inv.get("prob_upside") is not None:
         L.append(f"- **Risk vs expect:** {_pct(inv['prob_upside'])} to the 12-month probability-weighted target; "
@@ -578,12 +587,16 @@ def render_md(pack: dict, note: str | None = None) -> str:
                  f"bull {_px(cases.get('bull', {}).get('value'))} · weighted {_px(inv['prob_weighted'])} (reference, by {inv['horizon']}) |")
     if risk.get("rr"):
         L.append(f"| Reward:risk | {risk['rr']:.2f}{' — below the ' + format(cfgp.get('min_rr', 1.5), 'g') + ' minimum' if risk.get('rr_flag') else ''} |")
-    if risk.get("shares") and rating not in ("SELL",):
-        label = "Position after" if rating in ("ADD", "TRIM") else "Size"
-        L.append(f"| {label} | {risk['shares']:,} share{'s' if risk['shares'] != 1 else ''}, {_money(risk['notional'])} = "
-                 f"{_pct0(risk['pct_of_fund'], 1)} of the fund ({risk['bound']}) |")
-    if risk.get("risk_dollars") is not None:
-        L.append(f"| At risk | {_money(risk['risk_dollars'])} = {_pct0(risk['risk_pct_of_fund'], 2)} of the fund |")
+    if risk.get("pct_of_fund") and rating not in ("SELL",):
+        label = "Suggested add" if rating == "ADD" else "Suggested size"
+        if risk.get("shares"):
+            L.append(f"| {label} | {_pct0(risk['pct_of_fund'], 1)} of the fund = {risk['shares']:,} "
+                     f"share{'s' if risk['shares'] != 1 else ''}, {_money(risk['notional'])} ({risk['bound']}) |")
+        else:
+            L.append(f"| {label} | {_pct0(risk['pct_of_fund'], 1)} of the fund ({risk['bound']}) |")
+    if risk.get("risk_pct_of_fund") is not None:
+        L.append(f"| At risk | {_pct0(risk['risk_pct_of_fund'], 2)} of the fund"
+                 + (f" = {_money(risk['risk_dollars'])}" if risk.get("risk_dollars") is not None else "") + " |")
     if (risk.get("small_account") or {}).get("shares") is not None:
         L.append(f"| $10k account risking 1% | {risk['small_account']['shares']} shares |")
     if pl.get("max_hold"):
@@ -601,14 +614,14 @@ def render_md(pack: dict, note: str | None = None) -> str:
     if rating in ("SELL", "TRIM"):
         L += ["### Why we're exiting", "", f"The rule's exit fired: {p['reason'].replace('_', ' ')}.", ""]
         if ex:
-            L += [f"- Bought {_px(ex['entry'])} on {ex['entry_date']}, now {_px(ex['price'])}: "
-                  f"{_pct(ex['return'])}, {usd_s(ex['pnl'])} on {ex['shares']:,.0f} shares"
+            L += [f"- Pitched {ex.get('pitched')}, tested entry {_px(ex['entry'])} at the {ex['entry_date']} open, "
+                  f"now {_px(ex['price'])}: {_pct(ex['return'])}"
                   + (f", {ex['r']:+.2f}R" if ex.get("r") is not None else "")
                   + (f", held {ex['days_held']} sessions" if ex.get("days_held") is not None else "")]
             if ex.get("lesson"):
                 L.append(f"- What it tells us: {ex['lesson']}")
         else:
-            L.append(f"- Result: {P.NOT_IN_DATA} (the position is not in the paper book's record)")
+            L.append(f"- Result: {P.NOT_IN_DATA} (we have no open pitch on this name; the exit is the rule's, from its historical replay)")
         L.append("")
     L += ["### What would make this wrong", "", "We're wrong if:", ""] + [f"- {x}" for x in pl.get("wrong_if") or p["exits"]]
     L.append("")
@@ -617,14 +630,19 @@ def render_md(pack: dict, note: str | None = None) -> str:
     if w.get("why_it_fits"):
         L += [w["why_it_fits"], ""]
     if fit:
-        L.append(f"It adds {fit['adds']}.")
-        L.append("")
+        if fit.get("adds"):
+            L += [f"It adds {fit['adds']}.", ""]
+        prov = fit.get("holdings_provided")
         L += [f"- Sector ({fit['sector']}): {_pct0(fit['sector_before'], 1)} of the fund before, "
               f"{_pct0(fit['sector_after'], 1)} after" if fit.get("sector_before") is not None else f"- Sector: {fit['sector']}",
-              f"- 60-day correlation: {_n(fit['corr_holdings'], 2)} to current holdings, {_n(fit['corr_benchmark'], 2)} to the benchmark",
+              (f"- 60-day correlation: {_n(fit['corr_holdings'], 2)} to the fund's holdings, " if prov else "- 60-day correlation: ")
+              + f"{_n(fit['corr_benchmark'], 2)} to the benchmark",
               f"- Beta: {_n(fit['beta'], 2)}" + (f" ({fit['beta_source']})" if fit.get("beta_source") else ""),
-              f"- Already held: {'yes' if fit['already_held'] else 'no'} · AI-infrastructure name: "
-              f"{'yes' if fit['ai_infrastructure'] else 'no'} (the fund holds {len(fit['ai_names_held'])} today)"]
+              (f"- Already held by the fund: {'yes' if fit['already_held'] else 'no'} · AI-infrastructure name: "
+               f"{'yes' if fit['ai_infrastructure'] else 'no'} (the fund holds {len(fit['ai_names_held'] or [])} today)"
+               if prov else
+               f"- Fund holdings: holdings not provided (add them in Settings) · AI-infrastructure name: "
+               f"{'yes' if fit['ai_infrastructure'] else 'no'}")]
     elif rating in ("SELL", "TRIM"):
         L.append("An exit frees the capital; fit is a question for the next entry, not this one.")
     else:
@@ -711,7 +729,8 @@ def embed(pack: dict, note: str = "Full write-up on the dashboard (Stocks tab)."
     if t:
         plan.append(t + (f" · **R:R** {risk['rr']:.1f}" if risk.get("rr") else ""))
     if risk.get("pct_of_fund") is not None:
-        plan.append(f"**Size** {_pct0(risk['pct_of_fund'], 1)} of fund ({risk.get('shares') or 0:,} sh, {risk.get('bound')})")
+        plan.append(f"**Size** {_pct0(risk['pct_of_fund'], 1)} of fund ("
+                    + (f"{risk['shares']:,} sh, " if risk.get("shares") else "") + f"{risk.get('bound')})")
     fields = [{"name": "Plan", "value": "\n".join(plan), "inline": False}]
     cases = inv.get("cases") or {}
     if cases or inv.get("comps"):
@@ -740,7 +759,7 @@ def embed(pack: dict, note: str = "Full write-up on the dashboard (Stocks tab)."
     return _fit_embed(e)
 
 
-def digest_embed(packs: list[dict], state, cfg: dict) -> dict:
+def digest_embed(packs: list[dict], state, cfg: dict, book: dict | None = None) -> dict:
     """The one embed that leads a daily post: what the desk sees and what it wants to do."""
     def rating(p):
         return (p.get("rec") or {}).get("rating") or p["action"]
@@ -755,7 +774,7 @@ def digest_embed(packs: list[dict], state, cfg: dict) -> dict:
     if state.weights:
         w = ", ".join(f"{BOOK_SHORT.get(k, k)} {_pct0(v)}"
                       for k, v in sorted(state.weights.items(), key=lambda kv: -(kv[1] or 0)))
-        lines.append(f"Capital by book: {w}")
+        lines.append(f"Rule weights by book: {w}")
 
     def buy_line(p):
         pl = p.get("plan") or {}
@@ -781,13 +800,13 @@ def digest_embed(packs: list[dict], state, cfg: dict) -> dict:
     if not buys and not trims:
         fields.append({"name": "Nothing to do", "inline": False,
                        "value": "No book's entry conditions were met at today's close, and nothing "
-                                "held hit an exit. Standing pat is the signal."})
-    held = sum(len(v) for v in (state.positions or {}).values())
-    fields.append({"name": "Book", "inline": False,
-                   "value": f"{held} position(s) open · equity {_money(state.equity)} "
-                            f"({_pct(state.drawdown)} from peak) · gross {_pct0(state.gross)} of equity"})
+                                "pitched hit an exit. Standing pat is the signal."})
+    if book:
+        fields.append({"name": "Pitch book", "inline": False,
+                       "value": f"{book.get('active', 0)} active · {book.get('new', 0)} new, entering at the next open"
+                                f" · {book.get('closed_today', 0)} closed today · {book.get('closed', 0)} closed in all"})
     return _fit_embed({"title": "Stock desk — daily signals", "description": "\n".join(lines),
                        "color": 0xB3403A if state.crisis else 0x2E9B5B if buys else 0x8A8F98,
                        "fields": fields[:5],
-                       "footer": {"text": "Paper only, research not advice. Rules in configs/stocks.yaml."},
+                       "footer": {"text": "Research, not advice. Rules in configs/stocks.yaml."},
                        "timestamp": datetime.now(NY).isoformat(timespec="seconds")})

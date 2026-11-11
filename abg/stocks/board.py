@@ -179,7 +179,7 @@ def board_embed(board: dict, kind: str, now: datetime, tag: str = "") -> dict:
             val += "\n⚠️ 12-month valuation disagrees: sized as a trade"
         fields.append({"name": head[:256], "value": val[:1024], "inline": False})
     desc = ("Signals from the close; the tested entry is the open. Decks attached for new picks. "
-            "Paper only · research, not advice.")
+            "Research, not advice.")
     gone = [d for d in board.get("dropped") or [] if d.get("live")]
     if kind == "check" and gone:
         desc = "Out since this morning: " + ", ".join(

@@ -165,7 +165,7 @@ def deck_content(pack: dict) -> dict:
                 f"expectancy {base.get('expectancy_R') or 0:+.2f}R per trade. In-sample replay, not a walk-forward record.")
     else:
         note = f"Book base rates: {base.get('note') or NA}."
-    note += f" Prices: daily closes to {pack['as_of']}. Paper only · research, not advice."
+    note += f" Prices: daily closes to {pack['as_of']}. Research, not advice."
 
     # recommendation
     size = []
@@ -179,10 +179,10 @@ def deck_content(pack: dict) -> dict:
               f"R:R {risk['rr']:.2f}" if risk.get("rr") else None,
               f"review {tgt['review_date']}" if tgt.get("review_date") else None]
         size.append(" · ".join(x for x in lv if x))
-        if risk.get("shares"):
-            size.append(f"Size: {risk['shares']:,} shares ≈ {risk.get('pct_of_fund', 0):.1%} of the fund "
-                        f"({risk.get('bound')}); {_px(risk.get('risk_dollars'))} at risk "
-                        f"= {risk.get('risk_pct_of_fund', 0):.2%}")
+        if risk.get("pct_of_fund"):
+            size.append(f"Size: {risk['pct_of_fund']:.1%} of the fund"
+                        + (f" = {risk['shares']:,} shares" if risk.get("shares") else "") + f" ({risk.get('bound')})"
+                        + (f"; {risk['risk_pct_of_fund']:.2%} of the fund at risk" if risk.get("risk_pct_of_fund") is not None else ""))
         for x in (ent.get("refinements") or [])[:1]:
             size.append(_cut(f"Untested refinement: {x['text']}", 150))
     elif rating in ("SELL", "TRIM"):

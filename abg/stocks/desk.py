@@ -1,15 +1,18 @@
-"""The stock desk: the four-book rule system, run every day, pitched to Discord.
+"""The stock desk: a stock-pitching desk. The rule books run every day and the desk pitches what they find.
 
     daily      after the close (ABG_STOCKS_DAILY_TIME, 16:20 ET): replay the books to today, write a
                thesis for everything they want to open or close, post a digest plus one embed per
                pitch, and record every candidate - including the ones that were skipped
     intraday   every ABG_STOCKS_SWEEP_MINUTES while the market is open: refresh the next page of the
-               universe, watch open paper positions against their stops, and flag names that cross an
-               entry condition mid-session
-    scorecard  every pitch is marked against SPY from its signal-day close; paper only, no orders
+               universe (live alerts on the picks are abg/stocks/alerts.py)
+    scorecard  the pitch track record: every pitch from its tested entry (the next open) against SPY
+               and its sector ETF. There is no portfolio here: no equity, no positions, no orders
+
+The rule engine still replays history on every pass. That replay is a research tool - it gives the base
+rates, the regime and which names the rules pick - and none of its simulated holdings are shown.
 
 State lives in ``<data_dir>/stocks/``: ``state.json`` (schedule bookkeeping), ``ledger.jsonl`` (every
-candidate ever seen), ``pitches.json`` (what was pitched and how it has done), ``memos/<id>.md``.
+candidate ever seen), ``desk.sqlite3`` (pitches and their lifecycle, watchlist, news), ``memos/<id>.md``.
 Bars live in ``<data_dir>/stocks.sqlite3``.
 
 Secrets: the Discord webhook is read from the settings at post time and never written to a file, a
@@ -30,7 +33,9 @@ from abg.utils import jsonable
 
 from . import board as B
 from . import pitch_plan as P
+from . import pitchbook as PB
 from . import thesis as T
+from .deskdb import DeskDB
 from .config import build_config, describe as describe_cfg
 from .live import LiveSignals
 from .market import MarketFeed
@@ -54,6 +59,9 @@ class StockDesk:
         self.symbols_fn = symbols_fn             # extra names to follow - callable -> list[str]
         self.dir = Path(settings.data_dir).expanduser() / "stocks"
         self.store = BarStore.from_settings(settings)
+        self.db = DeskDB(self.dir / "desk.sqlite3")
+        self.book = PB.PitchBook(self.db)
+        self._migrate_pitches()
         self.u = Universe.load(self.store)
         if symbols_fn:
             try:
@@ -119,7 +127,38 @@ class StockDesk:
         return out
 
     def pitches(self) -> list[dict]:
-        return self._load("pitches.json", [])
+        return self.book.rows()
+
+    def _migrate_pitches(self) -> None:
+        """Once: carry the paper-era ``pitches.json`` into the pitch book. The file is left where it is."""
+        if self.db.kv_get("pitches_json_migrated"):
+            return
+        old = self._load("pitches.json", [])
+        n = self.book.migrate(old)
+        self.db.kv_set("pitches_json_migrated", {"rows_in_file": len(old), "carried_over": n})
+        if old:
+            log.info("stocks: carried %d of %d pitches.json rows into the pitch book", n, len(old))
+
+    # ------------------------------------------------------------------ the fund's real holdings
+    def fund_holdings(self) -> dict | None:
+        """``{symbol: weight}`` from Settings (kept in the data folder, never in the repo), else from
+        ``configs/fund_holdings.yaml``; ``None`` when neither has any ("holdings not provided")."""
+        h = self.db.kv_get("fund_holdings")
+        if h:
+            return h
+        try:
+            import yaml
+            path = Path(getattr(self.s, "stocks_fund_holdings", None) or
+                        Path(__file__).resolve().parents[2] / "configs" / "fund_holdings.yaml")
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else None
+        except Exception:
+            return None
+        return PB_holdings((raw or {}).get("holdings"))
+
+    def set_fund_holdings(self, rows) -> dict | None:
+        h = PB_holdings(rows)
+        self.db.kv_set("fund_holdings", h or None)
+        return h
 
     # ------------------------------------------------------------------ data upkeep
     async def backfill(self, symbols: list[str] | None = None, period: str | None = None) -> dict:
@@ -229,21 +268,19 @@ class StockDesk:
             W.apply(p, await W.generate(self.s, self.engine.http, p))
 
     def _pitch_context(self, ls: LiveSignals, state) -> dict:
-        """What every pitch's plan needs from the replay and the paper book (docs/21.6)."""
+        """What every pitch's plan needs: the replay's base rates, our own open pitches and the fund's
+        real holdings (docs/21.6, docs/22.1). Nothing from the replay's simulated book."""
         r = ls.result or {}
         eq = r.get("equity")
         period = (str(eq.index[0].date()), str(eq.index[-1].date())) if eq is not None and len(eq) else None
-        held_value, held_shares, held_by_book = {}, {}, {}
-        for book, pos in (state.positions or {}).items():
-            for sym, d in pos.items():
-                held_by_book.setdefault(book, {})[sym] = float(d.get("shares") or 0)
-                held_shares[sym] = held_shares.get(sym, 0.0) + float(d.get("shares") or 0)
-                held_value[sym] = held_value.get(sym, 0.0) + float(d.get("shares") or 0) * float(d.get("price") or 0)
         tp = (self.cfg.get("books") or {}).get("trend_pullback", {})
         ml = tp.get("ml") or {}
+        book = getattr(self, "book", None)
         return {"trades": r.get("trades"), "period": period, "store": self.store,
-                "holdings": sorted(held_shares), "held_value": held_value, "held_shares": held_shares,
-                "held_by_book": held_by_book,
+                # pitches made before this session; today's own are this pass, not a prior idea
+                "open_pitches": {sym: bk for sym, bk in ((s_, {b: r for b, r in d.items() if r["as_of"] < state.date})
+                                                         for s_, d in (book.open_by_symbol() if book else {}).items()) if bk},
+                "fund_holdings": self.fund_holdings() if book else None,
                 "sectors": self.store.sectors(),
                 "ml_threshold": float(ml.get("threshold", 0.55)) if ml.get("enabled") else None}
 
@@ -281,6 +318,7 @@ class StockDesk:
             worth.sort(key=lambda c: (c.rank or 99))
             enrich_set = {c.symbol for c in worth[:max(0, n_enrich)]}
 
+            await asyncio.to_thread(self.mark_pitches)      # lifecycle first: ratings are against open pitches
             base_ctx = self._pitch_context(ls, state)
             entry_syms = sorted({c.symbol for c in cands if c.is_entry})
             earnings = await self._earnings(entry_syms)
@@ -303,11 +341,11 @@ class StockDesk:
 
             if getattr(self.s, "pitch_ai_memo", False) and getattr(self.s, "anthropic_api_key", None):
                 await self._writeups(packs)
-            memo_packs = [p for p in packs if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
+            memo_packs = [p for p in packs if _rating(p) in ("BUY", "ADD") and p["book"] != "dual_momentum"]
             if getattr(self.s, "stocks_charts", True):
                 await asyncio.to_thread(self._charts, memo_packs)
             for p in packs:
-                if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum":
+                if _rating(p) in ("BUY", "ADD", "SELL", "TRIM") and p["book"] != "dual_momentum":
                     try:
                         self._p("memos").mkdir(parents=True, exist_ok=True)
                         (self._p("memos") / f"{p['id']}.md").write_text(
@@ -327,8 +365,12 @@ class StockDesk:
 
             self.last_daily = {
                 "at": datetime.now(NY).isoformat(timespec="seconds"), "as_of": state.date,
-                "candidates": len(packs), "opens": sum(1 for p in packs if p["action"] in ("BUY", "REBALANCE")),
-                "closes": sum(1 for p in packs if p["action"] == "SELL"), "posted": sent,
+                "candidates": len(packs), "opens": sum(1 for p in packs if _rating(p) in ("BUY", "ADD")),
+                "closes": sum(1 for p in packs if _rating(p) in ("SELL", "TRIM")),
+                "holds": sum(1 for p in packs if _rating(p) == "HOLD"),
+                "pitches_closing": sum(1 for p in packs if _rating(p) in ("SELL", "TRIM")
+                                       and (p.get("rec") or {}).get("open_pitch")),
+                "pitch_book": self.book.counts(state.date), "posted": sent,
                 "regime": state.regime, "crisis": state.crisis, "stress": state.stress,
                 "seconds": round(time.time() - t0, 1), "enriched": sorted(enrich_set),
             }
@@ -337,43 +379,51 @@ class StockDesk:
             st["last_daily_day"] = state.date
             self._save("state.json", st)
             await asyncio.to_thread(self.store.checkpoint)
-            self._save("today.json", {"state": _state_dict(state),
+            self._save("today.json", {"state": _public_state(state), "pitch_book": self.book.counts(state.date),
                                       "candidates": [_public(p) for p in packs]})
             self._broadcast("stocks_daily", self.last_daily)
             return self.last_daily
 
     # ------------------------------------------------------------------ pitch record
     def _record_pitches(self, packs: list[dict], state) -> None:
-        """One row per name we said to open, so it can be marked against SPY later."""
-        rows = self.pitches()
-        have = {(r["as_of"], r["book"], r["symbol"]) for r in rows}
+        """One pitch per name the rules say to buy (status: new), and a rule exit noted on any open pitch."""
+        pc = P.pitch_cfg(self.cfg)
         for p in packs:
-            if p["action"] not in ("BUY", "REBALANCE") or p.get("price") is None:
+            rt = _rating(p)
+            if rt in ("SELL", "TRIM"):
+                self.book.exit_signal(p["symbol"], p["book"], p["as_of"], p.get("price"), p.get("reason") or "rule exit")
                 continue
-            key = (p["as_of"], p["book"], p["symbol"])
-            if key in have:
+            if rt not in ("BUY", "ADD") or p.get("price") is None:
                 continue
-            rows.append({"id": p["id"], "as_of": p["as_of"], "symbol": p["symbol"], "book": p["book"],
-                         "action": p["action"], "price": p["price"], "stop": p.get("stop"),
-                         "rank": p.get("rank"), "of": p.get("of"), "score": p.get("score"),
-                         "ml_prob": p.get("ml_prob"), "regime": state.regime, "crisis": state.crisis,
-                         "fair_value": (p.get("valuation") or {}).get("fair_value"),
-                         "upside": (p.get("valuation") or {}).get("upside"),
-                         "plan": P.plan_record(p, P.pitch_cfg(self.cfg)), "plan_mark": None,
-                         "marked": None, "last": None, "ret": None, "spy_ret": None, "excess": None})
-        self._save("pitches.json", rows[-500:])
+            self.book.add({"id": p["id"], "as_of": p["as_of"], "symbol": p["symbol"], "name": p.get("name"),
+                           "book": p["book"], "action": p["action"], "rating": rt, "price": p["price"],
+                           "stop": p.get("stop"), "rank": p.get("rank"), "of": p.get("of"), "score": p.get("score"),
+                           "ml_prob": p.get("ml_prob"), "regime": state.regime, "crisis": state.crisis,
+                           "sector": p.get("sector") or self.store.sectors().get(p["symbol"]),
+                           "drank": (p.get("rec") or {}).get("daisy_rank"),
+                           "fair_value": (p.get("valuation") or {}).get("fair_value"),
+                           "upside": (p.get("valuation") or {}).get("upside"),
+                           "plan": P.plan_record(p, pc), "plan_mark": None, "track": None,
+                           "marked": None, "last": None, "ret": None, "spy_ret": None, "excess": None})
 
-    def scorecard(self) -> dict:
-        """Mark every pitch against SPY from its signal-day close. Paper, and that is the point: it is
-        the only honest read on whether the rules are worth anything here."""
+    def mark_pitches(self) -> list[dict]:
+        """Walk every pitch forward on the stored bars: the marks, the lifecycle (new -> active ->
+        closed) and the return from the tested entry against SPY and the sector ETF."""
         rows = self.pitches()
         bench = self.cfg.get("benchmark", "SPY")
-        spy = self.store.frame(bench)
-        changed = False
+        frames: dict = {}
+
+        def fr(sym):
+            if sym not in frames:
+                frames[sym] = self.store.frame(sym)
+            return frames[sym]
+        spy = fr(bench)
+        sectors = self.store.sectors()
         for r in rows:
-            px = self.store.frame(r["symbol"])
+            px = fr(r["symbol"])
             if px.empty or spy.empty:
                 continue
+            was = json.dumps(r, sort_keys=True, default=str)
             try:
                 a = px["close"].asof(r["as_of"])
                 b = float(px["close"].iloc[-1])
@@ -395,9 +445,29 @@ class StockDesk:
                     r["plan_mark"] = P.mark_plan(r["plan"], r["as_of"], px, spy)
                 except Exception as e:                # a bad row must not stop the scorecard
                     log.info("stocks: plan mark for %s failed (%s)", r.get("id"), e)
-            changed = True
-        if changed:
-            self._save("pitches.json", rows)
+            if r.get("status") != "closed":           # the lifecycle only ever moves forward
+                res = PB.resolve(r, px, r.get("plan_mark"))
+                r["sector"] = r.get("sector") or sectors.get(r["symbol"])
+                etf = PB.sector_etf(r["sector"])
+                r["entry_open"], r["entry_date"] = res["entry_open"], res["entry_date"]
+                r["days_open"] = int((px.index > r["as_of"]).sum())
+                r["track"] = PB.track(r, res, px, spy, fr(etf) if etf else None, etf)
+                if res["status"] == "closed":
+                    r.update({"closed_at": res["closed_at"], "close_reason": res["reason"],
+                              "close_price": res["close_price"], "close_basis": res["close_basis"]})
+                    self.book.set_status(r, "closed", f"{res['reason']}: {res['close_price']} ({res['close_basis']})")
+                    continue
+                if res["status"] != r.get("status"):
+                    self.book.set_status(r, res["status"], f"entered at the {res['entry_date']} open, {res['entry_open']}")
+                    continue
+            if json.dumps(r, sort_keys=True, default=str) != was:
+                self.book.save(r)
+        return rows
+
+    def scorecard(self) -> dict:
+        """The pitch track record (docs/22.1): every pitch from its tested entry against SPY and its
+        sector ETF, by book, conviction, DAISY Rank and sector. Research only: there is no portfolio."""
+        rows = self.mark_pitches()
 
         def agg(rows_):
             rs = [r for r in rows_ if r.get("excess") is not None]
@@ -416,6 +486,8 @@ class StockDesk:
         refined = [r for r in planned if not ((r.get("plan_mark") or {}).get("chase_skip")
                                               or (r.get("plan_mark") or {}).get("gap_skip"))]
         return {"all": agg(rows), "by_book": {b: agg([r for r in rows if r["book"] == b]) for b in books},
+                "track": PB.track_record(rows), "counts": self.book.counts(),
+                "migration": self.db.kv_get("pitches_json_migrated"),
                 "plan": {"all": P.plan_stats(planned),
                          "by_book": {b: P.plan_stats([r for r in planned if r["book"] == b]) for b in books
                                      if any(r["book"] == b for r in planned)},
@@ -500,26 +572,10 @@ class StockDesk:
 
     # ------------------------------------------------------------------ intraday
     async def intraday(self) -> dict:
-        """A sweep pass, plus a look at what we already hold."""
+        """A sweep pass: refresh the next page of the universe. (The picks and the active pitches are
+        watched by the live alert layer, abg/stocks/alerts.py; there are no simulated positions to watch.)"""
         rep = await self.sweep()
-        watch = []
-        try:
-            ls = self._signals()
-            state = ls.state()
-            self.last_state = state
-            for book, pos in (state.positions or {}).items():
-                for sym, d in pos.items():
-                    stop = d.get("stop")
-                    price = d.get("price")
-                    if stop and price and price <= stop * 1.01:
-                        watch.append({"symbol": sym, "book": book, "price": price, "stop": stop,
-                                      "note": "at or within 1% of its stop"})
-        except Exception as e:
-            self.errors.append({"ts": time.time(), "where": "intraday", "error": f"{type(e).__name__}: {e}"[:300]})
-        out = {"at": datetime.now(NY).isoformat(timespec="seconds"), "sweep": rep, "near_stop": watch}
-        if watch:
-            self._broadcast("stocks_watch", out)
-        return out
+        return {"at": datetime.now(NY).isoformat(timespec="seconds"), "sweep": rep, "near_stop": []}
 
     # ------------------------------------------------------------------ discord
     def _webhook(self) -> str | None:
@@ -560,15 +616,14 @@ class StockDesk:
     async def _post_daily(self, packs: list[dict], state, board: dict | None = None) -> str:
         cap = int(getattr(self.s, "stocks_post_max", 5))
         tag = (getattr(self.s, "stocks_tag", "") or "").strip()
-        digest = T.digest_embed(packs, state, self.cfg)
+        digest = T.digest_embed(packs, state, self.cfg, book=self.book.counts(state.date))
         if tag:
             digest["title"] = f"[{tag}] {digest['title']}"
         if board is not None:                       # the day's top picks by conviction (docs/21.7)
             by_id = {p["id"]: p for p in packs}
             detail = [by_id[b["id"]] for b in board["picks"] if b["id"] in by_id]
         else:
-            detail = [p for p in packs
-                      if p["action"] in ("BUY", "REBALANCE") and p["book"] != "dual_momentum"]
+            detail = [p for p in packs if _rating(p) in ("BUY", "ADD") and p["book"] != "dual_momentum"]
             detail.sort(key=lambda p: (p.get("rank") or 99))
         embeds, files = [digest], []
         for p in detail[:max(0, cap)]:
@@ -581,7 +636,7 @@ class StockDesk:
         res = await self._post_to(self._webhook(), embeds, files=files)
         if res == "posted" and board is not None and board["picks"]:
             await self._post_decks(board, [b["id"] for b in board["picks"]], "after the close")
-        closes = [p for p in packs if p["action"] == "SELL"]
+        closes = [p for p in packs if _rating(p) in ("SELL", "TRIM") and (p.get("rec") or {}).get("open_pitch")]
         if closes and res == "posted" and len(embeds) >= MAX_EMBEDS_PER_POST:
             await self._post([T.embed(p) for p in closes[:MAX_EMBEDS_PER_POST]])
         return res
@@ -845,6 +900,11 @@ class StockDesk:
     def stop(self) -> None:
         self._stop.set()
 
+    def close(self) -> None:
+        """Close both databases (tests, and a clean shutdown)."""
+        self.db.close()
+        self.store.close()
+
     # ------------------------------------------------------------------ reporting
     def state(self) -> dict:
         st = self._load("state.json", {})
@@ -865,7 +925,9 @@ class StockDesk:
             "sweep": self.sweeper.status(),
             "market": {**self.market.status(), "last": self.last_market},
             "last_daily": self.last_daily or self._load("state.json", {}).get("last_daily"),
-            "pitches": len(self.pitches()),
+            "pitches": sum(self.book.counts().values()), "pitch_book": self.book.counts(),
+            "fund_holdings": (lambda h: len(h) if h else 0)(self.fund_holdings()),
+            "fund_equity_set": bool(P.pitch_cfg(self.cfg).get("fund_equity")),
             "research": {"schedule": getattr(self.s, "stocks_research", "weekly"), "busy": self.research_busy,
                          "last": (lambda r: {"at": r.get("at"), "verdict": (r.get("verdict") or {}).get("overall")}
                                   if r else None)(self.last_research())},
@@ -919,13 +981,38 @@ def _mime(path: Path) -> str:
             ".pdf": "application/pdf"}.get(path.suffix.lower(), "application/octet-stream")
 
 
+def _rating(p: dict) -> str:
+    return (p.get("rec") or {}).get("rating") or p.get("action") or ""
+
+
+def PB_holdings(rows) -> dict | None:
+    """``[{symbol, weight}]`` or ``{symbol: weight}`` -> ``{SYMBOL: weight}`` (a weight above 1 is read as
+    percent points). ``None`` when the list is empty."""
+    out: dict = {}
+    items = rows.items() if isinstance(rows, dict) else [(r.get("symbol"), r.get("weight")) for r in (rows or [])
+                                                          if isinstance(r, dict)]
+    for sym, w in items:
+        try:
+            w = float(w)
+        except (TypeError, ValueError):
+            continue
+        if sym and w > 0:
+            out[str(sym).upper().strip()] = round(w / 100.0 if w > 1 else w, 6)
+    return out or None
+
+
 def _public(p: dict) -> dict:
-    """A pack trimmed for the dashboard and the API: no provider internals, no raw frames."""
+    """A pack trimmed for the dashboard and the API: no provider internals, no raw frames, and nothing
+    from the replay's simulated book (the retired size fields are null)."""
     keep = ("id", "as_of", "symbol", "name", "sector", "action", "book", "book_label", "edge",
             "rank", "of", "score", "ml_prob", "price", "stop", "shares", "notional", "weight",
             "risk_pct", "r_dollars", "atr", "stop_atr", "max_hold", "what_happened", "gates",
-            "exits", "risks", "caveats", "valuation", "news", "context", "reason", "facts")
-    return {k: p.get(k) for k in keep}
+            "exits", "risks", "caveats", "valuation", "news", "context", "reason", "facts",
+            "rec", "plan", "overview", "charts", "grades", "flags", "sentiment")
+    out = {k: p.get(k) for k in keep}
+    if out.get("plan"):                             # base rates carry the replay's trade list: keep the summary
+        out["plan"] = {k: v for k, v in out["plan"].items() if k != "settings"}
+    return out
 
 
 def _ledger_row(p: dict, state) -> dict:
@@ -936,8 +1023,10 @@ def _ledger_row(p: dict, state) -> dict:
     return {"as_of": p["as_of"], "written_at": p["written_at"], "symbol": p["symbol"],
             "book": p["book"], "action": p["action"], "rank": p.get("rank"), "of": p.get("of"),
             "score": p.get("score"), "ml_prob": p.get("ml_prob"), "price": p.get("price"),
-            "stop": p.get("stop"), "shares": p.get("shares"), "weight": p.get("weight"),
-            "risk_pct": p.get("risk_pct"), "atr": p.get("atr"),
+            "stop": p.get("stop"), "shares": (p.get("replay") or {}).get("shares"),
+            "weight": (p.get("replay") or {}).get("weight"),
+            "risk_pct": (p.get("replay") or {}).get("risk_pct"), "atr": p.get("atr"),
+            "rating": _rating(p), "conviction": ((p.get("rec") or {}).get("conviction") or {}).get("score"),
             "regime": state.regime, "crisis": state.crisis, "stress": state.stress,
             "vol_scale": state.vol_scale, "book_weight": (state.weights or {}).get(p["book"]),
             "gates_passed": sum(1 for ok in (p.get("gates") or {}).values() if ok),
@@ -947,6 +1036,14 @@ def _ledger_row(p: dict, state) -> dict:
             **{f"f_{k}": val for k, val in f.items()}}
 
 
-def _state_dict(state) -> dict:
+def _public_state(state) -> dict:
+    """The market read for the dashboard. The replay's simulated book (equity, drawdown, positions,
+    budgets) is not shown: those keys stay in the payload as null (deprecated, docs/22.1)."""
     from dataclasses import asdict
-    return asdict(state)
+    d = asdict(state)
+    for k in ("equity", "drawdown", "gross", "budgets", "positions", "bench_vs"):
+        d[k] = None
+    return d
+
+
+_state_dict = _public_state

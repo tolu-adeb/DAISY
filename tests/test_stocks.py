@@ -313,7 +313,7 @@ def test_thesis_answers_the_four_questions(tmp_path):
         assert heading in md
     assert entry.symbol in md
     assert "Research, not advice." in md
-    assert "Paper only" in md
+    assert "Research only" in md and "paper" not in md.lower()
     assert pack["valuation"] and pack["valuation"]["fair_value"]
     assert "Valuation cross-check" in md
     assert pack["exits"] and pack["risks"]

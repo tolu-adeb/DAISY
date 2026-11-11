@@ -185,7 +185,7 @@ def signals(post: bool = typer.Option(False, "--post", help="send the pitches to
     cands = today.get("candidates") or []
     if not cands:
         console.print("\n[yellow]Nothing to do.[/] No book's entry conditions were met and nothing "
-                      "held hit an exit. Standing pat is the signal.")
+                      "pitched hit an exit. Standing pat is the signal.")
     else:
         t = Table(box=None)
         for c, j in (("action", "left"), ("symbol", "left"), ("book", "left"), ("close", "right"),
@@ -230,7 +230,7 @@ async def _ident(x):
 
 @stocks_app.command("score")
 def score():
-    """Mark every pitch against the benchmark. Paper, which is the point."""
+    """Mark every pitch against the benchmark: the desk's track record."""
     sc = _run(lambda d: _ident(d.scorecard()))
     a = sc["all"]
     console.print(f"\n[bold]{a['n']}[/] pitch(es) marked · avg return {_pct(a.get('avg_ret'))} · "
