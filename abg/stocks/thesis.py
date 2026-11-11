@@ -410,15 +410,9 @@ def _cap(x) -> str:
     return f"${x / 1e12:,.2f} T" if x >= 1e12 else f"${x / 1e9:,.2f} B" if x >= 1e9 else f"${x / 1e6:,.0f} M"
 
 
-GLOSSARY = [
-    ("ATR", "average true range: the stock's typical daily move in dollars over 14 days"),
-    ("R", "one unit of risk: entry minus stop. A +2R trade made twice what it risked"),
-    ("RSI", "relative strength index, 0-100: low means recently sold hard, high means bought hard"),
-    ("EMA / SMA", "exponential / simple moving average of the close"),
-    ("Momentum (12-1)", "the return over the last twelve months, skipping the most recent one"),
-    ("Regime", "the market's state from the benchmark's trend, volatility and choppiness"),
-    ("Reward:risk", "distance to the first target divided by distance to the stop"),
-]
+from .glossary import memo_terms as _memo_terms  # noqa: E402
+
+GLOSSARY = _memo_terms()          # one glossary, shared with the dashboard (abg/stocks/glossary.py)
 
 
 def render_md(pack: dict, note: str | None = None) -> str:
@@ -552,7 +546,8 @@ def render_md(pack: dict, note: str | None = None) -> str:
                         + (f", {nm['change']:+.2f} against its 20-day baseline" if nm.get("change") is not None else ""))
         if sn.get("market"):
             bits.append(f"market mood {sn['market']}")
-        L += ["", "*" + "; ".join(bits) + ". Scores are computed from stored headlines; they inform conviction and never gate the rule.*"]
+        line = "; ".join(bits)
+        L += ["", "*" + line[:1].upper() + line[1:] + ". Scores are computed from stored headlines; they inform conviction and never gate the rule.*"]
     if p.get("news"):
         L += ["", "Recent headlines:", ""]
         for n in p["news"]:

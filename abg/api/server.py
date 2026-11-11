@@ -116,7 +116,15 @@ async def _t(coro):
 # --------------------------------------------------------------------------- endpoints
 @app.get("/api/health")
 async def health(request: Request):
-    return {"status": "ok", "version": __version__}
+    out = {"status": "ok", "version": __version__}
+    try:                                    # the stock desk's live layer (docs/22.5): a heartbeat, nothing private
+        lv = getattr(getattr(getattr(request.app.state, "monitor", None), "stocks", None), "live", None)
+        if lv:
+            out["stocks_live"] = {k: lv.get(k) for k in ("last_tick", "watched", "quotes", "alerts_on")}
+            out["stocks_live"]["degraded"] = bool(lv.get("degraded"))
+    except Exception:
+        pass
+    return out
 
 
 class _Login(BaseModel):
@@ -280,11 +288,10 @@ app.include_router(stocks_router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
-@app.get("/", include_in_schema=False)
-async def index():
-    """index.html with cache-busting asset URLs (?v=<file mtime>), so a browser never runs a stale script
-    against a newer server."""
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
+def _page(name: str) -> HTMLResponse:
+    """A dashboard page with cache-busting asset URLs (?v=<file mtime>), so a browser never runs a stale
+    script against a newer server."""
+    html = (STATIC / name).read_text(encoding="utf-8")
 
     def bust(m):
         f = STATIC / m.group(2)
@@ -293,6 +300,19 @@ async def index():
     import re as _re
     html = _re.sub(r'(src="|href=")/static/([\w./-]+)"', bust, html)
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """DAISY: the stock-pitching desk (docs/22.6)."""
+    return _page("daisy.html")
+
+
+@app.get("/classic", include_in_schema=False)
+async def classic():
+    """The earlier Intelligence Terminal (single-name analysis, risk, forecasts and the retired desks'
+    records). Kept, but out of the main navigation."""
+    return _page("index.html")
 
 
 @app.middleware("http")

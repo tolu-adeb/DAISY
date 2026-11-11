@@ -8,7 +8,7 @@
 
 Every number drawn comes from the pack, so a chart can never disagree with the memo. matplotlib is an
 optional extra (``pip install .[charts]``): without it ``render_all`` returns ``{}`` and the memo goes
-out without pictures. Colours: the dataviz reference palette (validated, light surface).
+out without pictures. Colours: the dashboard's tokens, validated on both surfaces (see THEMES).
 """
 from __future__ import annotations
 
@@ -18,9 +18,31 @@ from statistics import median
 
 log = logging.getLogger(__name__)
 
-PRICE, EMA50, EMA200 = "#2a78d6", "#eb6834", "#6250d6"
-INK, INK2, MUTED, GRID, SURFACE = "#1f2328", "#4b535c", "#8a929b", "#e6e8eb", "#ffffff"
-ZONE = "#2a78d6"
+# Two looks from the dashboard's own tokens (docs/22.6): "ivory" is the default (memos, Discord, the deck
+# and the light theme) and "green" is the dark theme's. Both series palettes pass the dataviz validator on
+# their surface (lightness band, chroma, colour-blind separation, contrast).
+THEMES = {
+    "ivory": {"PRICE": "#1668ad", "EMA50": "#a3421a", "EMA200": "#6a4fa3", "INK": "#213438", "INK2": "#446266",
+              "MUTED": "#5a5552", "GRID": "#d3c6be", "SURFACE": "#efe6e0", "ZONE": "#446266"},
+    "green": {"PRICE": "#368fd0", "EMA50": "#d17237", "EMA200": "#8d70dc", "INK": "#e4d7d0", "INK2": "#b8b1ad",
+              "MUTED": "#a39c98", "GRID": "#3a5356", "SURFACE": "#213438", "ZONE": "#a8c7c6"},
+}
+PRICE, EMA50, EMA200 = THEMES["ivory"]["PRICE"], THEMES["ivory"]["EMA50"], THEMES["ivory"]["EMA200"]
+INK, INK2, MUTED, GRID, SURFACE = (THEMES["ivory"][k] for k in ("INK", "INK2", "MUTED", "GRID", "SURFACE"))
+ZONE = THEMES["ivory"]["ZONE"]
+
+
+class _look:
+    """Draw with one theme's colours, then put the default back (the drawing code reads module names)."""
+    def __init__(self, name: str):
+        self.name = name
+
+    def __enter__(self):
+        self.old = {k: globals()[k] for k in THEMES["ivory"]}
+        globals().update(THEMES[self.name])
+
+    def __exit__(self, *a):
+        globals().update(self.old)
 
 
 def available() -> bool:
@@ -316,8 +338,9 @@ def peer_table(pack: dict, path: Path) -> Path | None:
 
 
 # ---------------------------------------------------------------------------------------------- all
-def render_all(pack: dict, bars, out_dir: Path) -> dict:
-    """Write every chart that has data; returns {kind: filename}. Never raises: a chart is decoration."""
+def render_all(pack: dict, bars, out_dir: Path, dark: bool = True) -> dict:
+    """Write every chart that has data; returns {kind: filename}. Never raises: a chart is decoration.
+    With ``dark`` each chart is also written as ``<name>-dark.png`` for the dashboard's dark theme."""
     if not available():
         return {}
     out_dir = Path(out_dir)
@@ -330,6 +353,9 @@ def render_all(pack: dict, bars, out_dir: Path) -> dict:
         try:
             if fn(path):
                 out[kind] = path.name
+                if dark:                              # the same chart for the dashboard's dark theme
+                    with _look("green"):
+                        fn(path.with_name(f"{pack['id']}-{kind}-dark.png"))
         except Exception as e:
             log.warning("chart %s for %s failed (%s: %s)", kind, pack.get("symbol"), type(e).__name__, e)
             try:

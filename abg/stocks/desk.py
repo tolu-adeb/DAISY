@@ -488,10 +488,10 @@ class StockDesk(DayMixin):
                 if res["status"] == "closed":
                     r.update({"closed_at": res["closed_at"], "close_reason": res["reason"],
                               "close_price": res["close_price"], "close_basis": res["close_basis"]})
-                    self.book.set_status(r, "closed", f"{res['reason']}: {res['close_price']} ({res['close_basis']})")
+                    self.book.set_status(r, "closed", f"{res['reason']}: ${res['close_price']:,.2f} ({res['close_basis']})")
                     continue
                 if res["status"] != r.get("status"):
-                    self.book.set_status(r, res["status"], f"entered at the {res['entry_date']} open, {res['entry_open']}")
+                    self.book.set_status(r, res["status"], f"entered at the {res['entry_date']} open, ${res['entry_open']:,.2f}")
                     continue
             if json.dumps(r, sort_keys=True, default=str) != was:
                 self.book.save(r)

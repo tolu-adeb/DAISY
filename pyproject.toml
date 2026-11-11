@@ -50,7 +50,7 @@ abg = "abg.cli:app"
 include = ["abg*"]
 
 [tool.setuptools.package-data]
-abg = ["api/static/*", "api/static/vendor/*", "agents/sops/*.md", "assets/*.pptx"]
+abg = ["api/static/*", "api/static/vendor/*", "api/static/daisy/*", "api/static/daisy/fonts/*", "agents/sops/*.md", "assets/*.pptx"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

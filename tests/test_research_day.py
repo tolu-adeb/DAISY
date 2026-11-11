@@ -532,3 +532,87 @@ def test_explore_name_card_notes_heat_and_recap(desk):
     assert e["title"].startswith("[") or e["title"].startswith("Weekly recap") and "research, not advice" in e["footer"]["text"]
     status = json.dumps(desk.status(), default=str)
     assert '"live_alerts": false' in status and '"watch_post": false' in status   # new posts start off
+
+
+# --------------------------------------------------------------------------- the API and the front page
+def test_api_serves_the_pitching_desk(desk, monkeypatch, tmp_path):
+    monkeypatch.setenv("ABG_ALLOW_SYNTHETIC", "true")
+    monkeypatch.setenv("ABG_PROVIDER_ORDER", "synthetic")
+    monkeypatch.setenv("ABG_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("ABG_AI_ENABLED", "false")
+    monkeypatch.setenv("ABG_DATA_DIR", str(tmp_path / "apidata"))
+    monkeypatch.setenv("ABG_MONITOR_ON_SERVE", "false")
+    from fastapi.testclient import TestClient
+    from abg.api.server import app
+    with TestClient(app) as c:
+        app.state.stock_desk = desk
+        try:
+            d = c.get("/api/stocks/desk").json()
+            assert d["pitch_book"]["new"] > 0 and d["candidates"] and d["board"]["picks"]
+            assert all(d["state"][k] is None for k in ("equity", "drawdown", "positions"))      # no paper book in the API
+            assert "equity" not in json.dumps(d["candidates"]).replace('"equity": null', "")
+            pid = d["board"]["picks"][0]["id"]
+            p = c.get(f"/api/stocks/pitch/{pid}").json()
+            assert p["memo"] and p["row"]["status"] == "new" and p["history"][0]["status"] == "new" and p["pack"]["rec"]["rating"] == "BUY"
+            assert c.get("/api/stocks/pitch/nope").status_code == 404 and c.get("/api/stocks/pitch/a%20b").status_code == 400
+            assert c.get("/api/stocks/pitches?status=open").json()["rows"]
+            sc = c.get("/api/stocks/scorecard").json()
+            assert sc["track"]["all"]["n"] == d["pitch_book"]["new"] and "forming" in sc and "watchlist" in sc
+            ex = c.get("/api/stocks/explore?q=T0").json()
+            assert ex["rows"] and ex["coverage"]["covered"] == 24
+            assert c.get("/api/stocks/name/" + ex["rows"][0]["symbol"]).json()["gates"]
+            assert c.get("/api/stocks/name/ZZZZ").status_code == 404 and c.get("/api/stocks/name/bad$sym").status_code == 400
+            assert c.post(f"/api/stocks/notes/{pid}", json={"name": "Ada", "vote": "up", "text": "ok"}).json()["votes"]["up"] == 1
+            assert c.post(f"/api/stocks/notes/{pid}", json={"name": "", "vote": "up"}).status_code == 400
+            assert c.post("/api/stocks/notes/none", json={"name": "Ada", "vote": "up"}).status_code == 404
+            assert c.get("/api/stocks/holdings").json()["provided"] is False
+            h = c.post("/api/stocks/holdings", json={"holdings": [{"symbol": "nvda", "weight": 8}]}).json()
+            assert h["holdings"] == [{"symbol": "NVDA", "weight": 0.08}]
+            st = c.get("/api/stocks/settings").json()
+            assert st["features"]["live_alerts"] is False and set(st["keys"]) == {"polygon", "finnhub", "anthropic"}
+            assert all(isinstance(v, bool) for v in st["keys"].values())                          # yes/no only, never a value
+            g = c.get("/api/stocks/glossary").json()
+            assert "ATR" in g["terms"] and g["ranks"]["1"] == "Strong buy" and "in_zone" in g["status"]
+            assert c.post("/api/stocks/live/tick").status_code == 200 and c.get("/api/stocks/live").json()["heartbeat"]
+            assert c.get("/api/stocks/watchlist").json()["score"]["horizon_sessions"] == 10
+            assert len(c.get("/api/stocks/recap").json()["bullets"]) == 5
+            assert c.get("/api/health").json()["status"] == "ok"
+            page = c.get("/").text
+            assert "DAISY" in page and "/static/daisy/app.js" in page and "paper" not in page.lower()
+            for f in ("daisy.css", "app.js", "ui.js", "views.js", "fonts/inter-latin-wght-normal.woff2"):
+                assert c.get(f"/static/daisy/{f}").status_code == 200
+        finally:
+            app.state.stock_desk = None
+
+
+def test_a_viewer_may_leave_a_note_and_nothing_else():
+    from abg.ops import auth
+
+    class Req:
+        def __init__(self, method, path, token):
+            self.method, self.headers, self.cookies = method, {"authorization": f"Bearer {token}"}, {}
+            self.url = SimpleNamespace(path=path)
+    s = SimpleNamespace(admin_token="adm", view_token="view")
+    mw = auth.middleware(lambda r: s)
+
+    async def ok(_):
+        return "passed"
+    run = lambda *a: asyncio.run(mw(Req(*a), ok))                                # noqa: E731
+    assert run("POST", "/api/stocks/notes/p1", "view") == "passed"
+    assert run("POST", "/api/stocks/holdings", "view").status_code == 403
+    assert run("POST", "/api/stocks/watchlist/scan", "view").status_code == 403
+    assert run("POST", "/api/stocks/holdings", "adm") == "passed"
+    assert run("GET", "/api/stocks/desk", "nobody").status_code == 401
+
+
+def test_the_dashboard_stays_small_and_declares_its_themes():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "abg" / "api" / "static"
+    files = [root / "daisy.html"] + [root / "daisy" / f for f in ("daisy.css", "app.js", "ui.js", "views.js")]
+    assert sum(f.stat().st_size for f in files) < 200_000                        # first load, fonts and charts aside
+    css = (root / "daisy" / "daisy.css").read_text(encoding="utf-8")
+    for token in ("--dark-green: #213438", "--ivory: #e4d7d0", '[data-theme="light"]', "prefers-reduced-motion", ":focus-visible"):
+        assert token in css
+    html = (root / "daisy.html").read_text(encoding="utf-8")
+    assert 'class="skip"' in html and "<main" in html and 'aria-live="polite"' in html and "cdn" not in html.lower()
+    assert (root / "daisy" / "fonts" / "LICENSES.txt").exists()

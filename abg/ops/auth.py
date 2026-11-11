@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 OPEN_PATHS = ("/api/health", "/api/auth/", "/static/", "/favicon")
 WRITE = {"POST", "PUT", "PATCH", "DELETE"}
+VIEW_WRITE = ("/api/stocks/notes/",)       # a viewer may leave a note or a vote on a pitch; nothing else
 
 
 def _token(request: Request) -> str | None:
@@ -48,10 +49,10 @@ def middleware(get_settings):
         if path.startswith(OPEN_PATHS) or (not s.admin_token and not s.view_token):
             return await call_next(request)
         r = role(s, request)
-        if r == "none" and path != "/":
+        if r == "none" and path not in ("/", "/classic"):
             return JSONResponse({"error": {"code": "unauthorized", "message": "sign in with your view or admin token"}},
                                 status_code=401)
-        if request.method in WRITE and r != "admin":
+        if request.method in WRITE and r != "admin" and not (r == "view" and path.startswith(VIEW_WRITE)):
             return JSONResponse({"error": {"code": "forbidden", "message": "read-only access: changes need the admin token"}},
                                 status_code=403)
         return await call_next(request)

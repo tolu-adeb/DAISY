@@ -127,7 +127,7 @@ def test_rd_api_tab(monkeypatch, tmp_path):
         assert c.get("/api/rd/digest?period=yearly").status_code == 400
         assert c.post("/api/rd/digest?period=daily").status_code == 400           # no webhook configured
         assert c.get("/api/rd/report/../../etc").status_code in (400, 404)
-        html = c.get("/").text
+        html = c.get("/classic").text
         assert 'data-view="rd"' in html and "/static/rd.js" in html
 
 

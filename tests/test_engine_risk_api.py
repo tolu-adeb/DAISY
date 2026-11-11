@@ -204,6 +204,8 @@ def test_api_endpoints(api_client):
     assert len(f["rows"]) == 10 and f["columns"][0] == "symbol"
     assert c.get("/api/schema").json()["version"]
     assert c.get("/").status_code == 200 and "Intelligence Terminal" in c.get("/").text
+    assert "/static/daisy/app.js?v=" in c.get("/").text                      # the pitching desk is the front page
+    assert c.get("/classic").status_code == 200 and "/static/app.js?v=" in c.get("/classic").text
     csv = "Date,Open,High,Low,Close,Volume\n" + "\n".join(
         f"{d.date()},{10 + i % 7},{11 + i % 7},{9 + i % 7},{10.5 + i % 7},1000" for i, d in enumerate(pd.bdate_range("2023-01-02", periods=120)))
     assert c.post("/api/analyze-csv", json={"symbol": "UP", "csv": csv}).status_code == 200

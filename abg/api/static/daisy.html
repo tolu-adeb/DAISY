@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>DAISY — Stock Intelligence Terminal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23213438'/%3E%3Cpath d='M7 21l6-6 4 3 8-9' stroke='%23e4d7d0' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preload" href="/static/daisy/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/daisy/daisy.css">
+<script>
+  // theme and depth are remembered per viewer; set before paint so nothing flashes
+  (function () {
+    try {
+      var t = localStorage.getItem("daisy-theme"), d = localStorage.getItem("daisy-deep");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      if (d === "1") document.documentElement.dataset.deep = "1";
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="nav">
+  <a class="brand" href="#/today" aria-label="DAISY, home">DAISY</a>
+  <button class="nav-menu caps" id="nav-menu" aria-expanded="false" aria-controls="nav-links">Menu</button>
+  <nav id="nav-links" aria-label="Main">
+    <a class="roll" href="#/today" data-nav="today"><span data-t="Today">Today</span></a>
+    <a class="roll" href="#/watchlist" data-nav="watchlist"><span data-t="Watchlist">Watchlist</span></a>
+    <a class="roll" href="#/pitches" data-nav="pitch"><span data-t="Pitches">Pitches</span></a>
+    <a class="roll" href="#/scorecard" data-nav="scorecard"><span data-t="Scorecard">Scorecard</span></a>
+    <a class="roll" href="#/explore" data-nav="explore"><span data-t="Explore">Explore</span></a>
+    <a class="roll" href="#/research" data-nav="research"><span data-t="Research">Research</span></a>
+  </nav>
+  <div class="nav-tools">
+    <button class="switch" id="deep" role="switch" aria-checked="false" title="Show the technical layer on every page">
+      <span class="switch-track" aria-hidden="true"><span class="switch-dot"></span></span><span class="caps">Deep dive</span>
+    </button>
+    <button class="icon-btn" id="theme" aria-label="Switch between dark and light theme" title="Dark / light">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-.9-.1-1.4A7 7 0 0 1 12 3z" fill="currentColor"/></svg>
+    </button>
+    <a class="roll settings" href="#/settings" data-nav="settings"><span data-t="Settings">Settings</span></a>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+  <div id="view" class="view"><p class="loading" role="status">Loading the desk…</p></div>
+</main>
+
+<footer class="foot">
+  <div class="foot-mark" aria-hidden="true">DAISY</div>
+  <div class="foot-cols">
+    <div><span class="caps">The desk</span>
+      <a href="#/today">Today</a><a href="#/watchlist">Watchlist</a><a href="#/pitches">Pitches</a><a href="#/scorecard">Scorecard</a></div>
+    <div><span class="caps">Research</span>
+      <a href="#/explore">Explore any stock</a><a href="#/research">Rule research</a><a href="#/glossary">Glossary</a></div>
+    <div><span class="caps">Terminal</span>
+      <a href="#/settings">Settings and status</a><a href="/classic">Classic Intelligence Terminal</a></div>
+  </div>
+  <p class="foot-note">AI Business Group Investment Fund · University of Michigan. The desk pitches ideas and tracks how its
+    pitches did. It places no orders and holds no positions. Research, not advice.</p>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+
+<dialog id="signin" aria-labelledby="signin-h">
+  <form method="dialog" id="signin-form">
+    <h2 id="signin-h">Sign in</h2>
+    <p>Enter the view token (read-only) or the admin token you were given.</p>
+    <label for="signin-token" class="caps">Token</label>
+    <input id="signin-token" type="password" autocomplete="current-password" required>
+    <p id="signin-err" class="down" role="alert" hidden></p>
+    <div class="row-end"><button class="btn" value="ok">Sign in</button></div>
+  </form>
+</dialog>
+
+<script type="module" src="/static/daisy/app.js"></script>
+</body>
+</html>

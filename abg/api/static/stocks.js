@@ -30,7 +30,7 @@ function renderToday(r) {
     stat("Signals for", s ? esc(s.date) : "—", ld.at ? `pass ran ${esc(ld.at.slice(0, 16).replace("T", " "))}` : "no daily pass yet"),
     stat("Regime", s ? pill(rw, rc) : "—", s ? `stress ${fmt(s.stress, 2)}${s.crisis ? " · crisis mode" : ""}` : ""),
     stat("To open", opens.length, `${closes.length} to close`),
-    stat("Paper equity", s ? usd(s.equity).replace("+", "") : "—", s ? `${p1(s.drawdown)} from peak` : ""),
+    stat("Open pitches", ((t.pitch_book || {}).active || 0) + ((t.pitch_book || {}).new || 0), `${(t.pitch_book || {}).closed || 0} closed · no portfolio, ideas only`),
     stat("Pitches", st.pitches || 0, "every one marked vs the benchmark"),
   ].join("");
 
@@ -56,8 +56,7 @@ function renderToday(r) {
   const w = Object.entries(s.weights || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0));
   $("#sk-context").innerHTML = `
     <div class="row two">
-      <div><h3>Capital by book</h3><table><tbody>${w.map(([k, v]) => `<tr><td>${esc(SHORT[k] || k)}</td><td class="n">${p0(v)}</td>
-        <td class="n muted">${usd((s.budgets || {})[k]).replace("+", "")}</td></tr>`).join("")}</tbody></table>
+      <div><h3>Rule weights by book</h3><table><tbody>${w.map(([k, v]) => `<tr><td>${esc(SHORT[k] || k)}</td><td class="n">${p0(v)}</td></tr>`).join("")}</tbody></table>
         <p class="muted small">Set by the Hedge allocator from how each book has done lately; every book keeps at least its floor.</p></div>
       <div><h3>Early-warning flags</h3>${flags.length ? `<p>${on.length ? on.map((k) => pill(k, "warn")).join(" ") : '<span class="muted">none on</span>'}</p>
         <p class="muted small">${on.length} of ${flags.length} on · stress ${fmt(s.stress, 2)} · crisis mode starts at half of them.</p>` : '<p class="muted">no flags available (missing inputs)</p>'}
@@ -68,8 +67,8 @@ function renderToday(r) {
       <th class="n">Stop</th><th class="n">Size</th><th class="n">Rank</th><th class="n">At risk</th><th></th></tr></thead><tbody>
     ${cands.map((c) => `<tr><td>${pill(c.action, c.action === "SELL" ? "bad" : c.action === "BUY" ? "ok" : "")}</td>
       <td><b>${esc(c.symbol)}</b></td><td>${esc(SHORT[c.book] || c.book)}</td><td class="n">${px(c.price)}</td>
-      <td class="n">${px(c.stop)}</td><td class="n">${c.shares ? fmt(c.shares, 0) : "—"}</td>
-      <td class="n">${c.rank ? `${c.rank}/${c.of}` : "—"}</td><td class="n">${c.r_dollars ? usd(c.r_dollars).replace("+", "") : "—"}</td>
+      <td class="n">${px(c.stop)}</td><td class="n">${(((c.plan || {}).risk || {}).pct_of_fund != null) ? p1(c.plan.risk.pct_of_fund).replace("+", "") : "—"}</td>
+      <td class="n">${c.rank ? `${c.rank}/${c.of}` : "—"}</td><td class="n">${(((c.plan || {}).risk || {}).risk_pct_of_fund != null) ? fmt(c.plan.risk.risk_pct_of_fund * 100, 2) + "%" : "—"}</td>
       <td><button class="btn small" data-skmemo="${esc(c.id)}">Thesis</button></td></tr>`).join("")}</tbody></table>
     <p class="muted small">Signals from the ${esc(s.date)} close, to act on at the next open. Paper only, research not advice.</p>`
     : '<p class="muted">Nothing to do: no book\'s entry conditions were met and nothing held hit an exit. Standing pat is the signal.</p>';
