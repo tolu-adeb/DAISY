@@ -169,6 +169,11 @@ class InsightMixin:
             try:
                 got = json.loads(cache.read_text(encoding="utf-8"))
                 if got.get("day") == day:
+                    sent = self.sentiment_for(sym)                   # news keeps arriving through the day: never serve it stale
+                    got["sentiment"] = sent
+                    if row is not None and isinstance(got.get("grades"), dict):
+                        got["grades"]["sentiment"] = RK.grades({**row, "sent": sent.get("level"), "sent_n": sent.get("n")}).get("sentiment")
+                        got.setdefault("grade_reasons", {})["sentiment"] = grade_reasons(row, None, None, sent).get("sentiment")
                     return got
             except (OSError, ValueError):
                 pass

@@ -64,6 +64,27 @@ class NewsFeeds:
                           datetime.fromtimestamp(r["datetime"], NY) if r.get("datetime") else None,
                           r.get("source"), name=name) for r in rows]
 
+    async def polygon_news(self, symbol: str, days: int = 3, name: str | None = None, limit: int = 50) -> list[dict]:
+        """Polygon's ticker news: a second source for names Finnhub covers thinly. Raises when the key's plan
+        does not include it; the caller reports that and carries on."""
+        if not self.src.polygon_key:
+            return []
+        to = datetime.now(NY).date()
+        j = await self.src._get("polygon", float(getattr(self.s, "swing_wide_polygon_per_min", 5) or 5), self.src._poly("/v2/reference/news"),
+                                {"ticker": symbol, "published_utc.gte": (to - timedelta(days=days)).isoformat(), "order": "desc",
+                                 "sort": "published_utc", "limit": max(1, min(1000, limit)), "apiKey": self.src.polygon_key})
+        out = []
+        for r in (j or {}).get("results") or []:
+            if not isinstance(r, dict) or not r.get("title"):
+                continue
+            try:
+                at = datetime.fromisoformat(str(r.get("published_utc") or "").replace("Z", "+00:00"))
+            except ValueError:
+                at = None
+            out.append(N.article(symbol, r["title"], r.get("description") or "", r.get("article_url"), at,
+                                 (r.get("publisher") or {}).get("name"), name=name, extra={"via": "polygon"}))
+        return out
+
     async def recommendation(self, symbol: str) -> dict | None:
         """Wall Street's buy / hold / sell counts for the latest month (Finnhub, free plan). Third-party
         opinion, shown as such. Price targets are not on the free plan."""

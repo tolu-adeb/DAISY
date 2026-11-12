@@ -160,7 +160,8 @@ class DayMixin:
             return {"skipped": "no Finnhub key (ABG_FINNHUB_API_KEY)", "new": 0, "material": []}
         scr = self.screen_rows()
         cap = int(getattr(self.s, "stocks_news_max_names", 40) or 40)
-        symbols = list(dict.fromkeys(symbols or []))[:cap]
+        # the caller's names first (holdings, pitches, the watchlist), then names someone opened on Explore
+        symbols = list(dict.fromkeys((symbols or []) + (self.news_followed() if symbols is not None else [])))[:cap]
         arts, failed = [], 0
         if market:
             for cat in ("general", "merger"):
@@ -194,6 +195,100 @@ class DayMixin:
         self.last_news = {"at": datetime.now(NY).isoformat(timespec="seconds"), "symbols": len(symbols), "fetched": len(arts),
                           "new": n, "failed_calls": failed}
         return {**self.last_news, "material": [a for a in fresh if a.get("symbol") and N.material(a, self.cfg)]}
+
+    # ------------------------------------------------------------------ news on demand (docs/23.9)
+    def _opt(self, name: str, default):
+        v = getattr(self.s, name, None)
+        return default if v is None else v
+
+    def news_followed(self) -> list[str]:
+        """Names opened on Explore that are still inside their follow window, most recently opened first."""
+        today = datetime.now(NY).date().isoformat()
+        st = self.db.kv_get("news_viewed") or {}
+        return [s for s, r in sorted(st.items(), key=lambda kv: kv[1].get("seen") or "", reverse=True) if (r.get("until") or "") >= today]
+
+    def _news_view(self, sym: str) -> dict:
+        """What the Explore page shows about one name's news: the same keys the name card carries."""
+        sent = self.sentiment_for(sym)
+        row = dict(self.screen_rows().get(sym) or {})
+        row["sent"], row["sent_n"] = sent.get("level"), sent.get("n")
+        from .insight import grade_reasons
+        return {"sentiment": sent, "sentiment_series": N.series(self.db, sym, 30),
+                "news": [{k: a[k] for k in ("at", "title", "url", "source", "kind", "sent", "rel")} for a in N.recent(self.db, sym, limit=15)],
+                "grade": RK.grades(row).get("sentiment"), "grade_reason": grade_reasons(row, None, None, sent).get("sentiment")}
+
+    async def name_news(self, symbol: str, force: bool = False) -> dict:
+        """Fetch, score and store one name's news when someone opens it, then keep collecting it for a few
+        sessions. The first fetch reaches back ``stocks_news_backfill_days`` so the name has a sentiment
+        history at once. A per-name cooldown keeps page views inside the free API budget. Never posts."""
+        sym = symbol.strip().upper()
+        now = datetime.now(NY)
+        if not self._opt("stocks_news", True) or not self._opt("stocks_news_on_view", True):
+            return {"symbol": sym, "status": "off", "note": "Fetching news on view is switched off.", **self._news_view(sym)}
+        lock = self.__dict__.setdefault("_name_news_locks", {}).setdefault(sym, asyncio.Lock())
+        async with lock:                                              # two people opening one name share one fetch
+            st = self.db.kv_get("news_viewed") or {}
+            rec = dict(st.get(sym) or {})
+            cool = max(1, int(self._opt("stocks_news_view_minutes", 30)))
+            keep = max(0, int(self._opt("stocks_news_follow_sessions", 5)))
+            back = max(3, int(self._opt("stocks_news_backfill_days", 30)))
+            rec["seen"] = now.isoformat(timespec="seconds")
+            rec["until"] = WL._sessions_after(now.date(), keep).isoformat() if keep else now.date().isoformat()
+            fresh = False
+            if rec.get("at") and not force:
+                try:
+                    fresh = now - datetime.fromisoformat(rec["at"]) < timedelta(minutes=cool)
+                except ValueError:
+                    fresh = False
+            out = {"symbol": sym, "checked": rec.get("at"), "follow_until": rec["until"], "sources": rec.get("sources") or {}, "new": 0}
+            if fresh:
+                out["status"] = "fresh"
+            else:
+                fd = self._feeds()
+                name = (self.screen_rows().get(sym) or {}).get("name")
+                first = not rec.get("backfilled")
+                days = back if first else 3
+                arts, sources, ok = [], {}, False
+                if fd.enabled:
+                    try:
+                        got = await fd.company_news(sym, days=days, name=name, limit=400 if first else 40)
+                        arts, sources["finnhub"], ok = arts + got, len(got), True
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        sources["finnhub"] = f"failed ({type(e).__name__})"
+                else:
+                    sources["finnhub"] = "no key"
+                if self._opt("stocks_news_polygon", True) and len(arts) < 3:      # thin or missing: ask the second source
+                    try:
+                        got = await fd.polygon_news(sym, days=days, name=name, limit=200 if first else 40)
+                        arts, sources["polygon"], ok = arts + got, len(got), True
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        sources["polygon"] = f"failed ({type(e).__name__})"
+                if self._opt("stocks_edgar", True):
+                    try:
+                        got = await fd.filings(sym, days=5, name=name)
+                        arts, sources["sec"] = arts + got, len(got)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        sources["sec"] = f"failed ({type(e).__name__})"
+                since = (now - timedelta(days=days + 2)).isoformat()
+                have = {(sym, N.title_key(a["title"])) for a in N.recent(self.db, sym, since=since, limit=3000, kind="news")}
+                n = N.store(self.db, N.dedupe(arts, have))
+                N.roll_daily(self.db, [sym], days=back + 2)
+                if ok:                                               # a failed fetch is retried on the next view, not after the cooldown
+                    rec.update(at=now.isoformat(timespec="seconds"), backfilled=True)
+                rec["sources"] = sources
+                out.update(status="fetched" if ok else "failed", new=n, fetched=len(arts), sources=sources, checked=rec.get("at"),
+                           days=days, backfilled=first and ok)
+            today = now.date().isoformat()
+            st = {s: r for s, r in st.items() if (r.get("until") or "") >= today}   # names past their window drop off
+            st[sym] = rec
+            self.db.kv_set("news_viewed", st)
+        return {**out, **self._news_view(sym)}
 
     def sentiment_for(self, symbol: str, day: str | None = None) -> dict:
         day = day or datetime.now(NY).date().isoformat()

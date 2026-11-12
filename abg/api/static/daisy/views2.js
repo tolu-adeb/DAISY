@@ -101,13 +101,13 @@ export async function explore([sym]) {
   }
   const r = c.row || {}, s = c.sentiment || {}, name = r.name && r.name !== c.symbol ? r.name : "";
   const noteName = (() => { try { return localStorage.getItem("daisy-name") || ""; } catch { return ""; } })();
-  after = (box) => { wireJumps(box); drawPrice(box, c.symbol); fillProfile(box, c); wirePitch(box, c); };
+  after = (box) => { wireJumps(box); drawPrice(box, c.symbol); fillProfile(box, c); fillNews(box, c); wirePitch(box, c); };
   const ind = ["close", "ema50", "ema200", "sma200", "sma5", "rsi14", "min_rsi14_5", "rsi2", "mom_12_1", "mom126", "vol252", "atr14", "prev_high", "macd_hist", "macd_hist_prev", "adv20_usd", "dist_200", "mom_score", "mom_rank", "mom_pct", "trend_pct", "chg_5d", "chg_21d"];
   return hero(`Explore · as of the ${shortDate(c.as_of)} close`, `${esc(c.symbol)}${name ? ` <span class="muted">— ${esc(name)}</span>` : ""}`,
       `<span class="num" style="font-size:1.5rem">${usd(r.close)}</span> ${move(r.chg_1d)} <span class="muted">on the day</span>`, { short: true,
       extra: `<div class="chips" style="margin-top:16px;align-items:center">${c.drank ? rankBadge(c.drank) + " " + pill(c.rank_words || "") : pill("Not ranked")}
           ${isAdmin() ? `<a class="btn solid" href="#pitch-this" data-jump="pitch-this">Pitch this stock</a>` : ""}<a class="btn" href="#/explore">Search another</a></div>
-        <div style="margin-top:14px">${gradeChips(c.grades)}</div>
+        <div style="margin-top:14px" id="ex-grades">${gradeChips(c.grades)}</div>
         <div id="ex-summary" class="article" style="margin-top:22px"><p>${esc(c.verdict)}</p><p class="muted small" role="status">Loading the deeper read: key numbers, ratings, valuation and risk…</p></div>` })
     + `<div class="grid">${onPage([["ex-chart-sec", "Chart"], ["ex-key", "Key numbers"], ["ex-ratings", "Ratings"], ["ex-val", "Valuation"], ["ex-risk", "Risk and outlook"], ["ex-news", "News"], ["ex-rules", "Rules"]].concat(isAdmin() ? [["pitch-this", "Pitch this"]] : []))}</div>`
     + section("Price", `${anchor("ex-chart-sec")}<div class="toolbar" role="group" aria-label="Chart options">
@@ -124,12 +124,8 @@ export async function explore([sym]) {
     + section("Ratings", `${anchor("ex-ratings")}<div id="ex-ratings-body"><p><b>DAISY Rank${c.drank ? ` ${c.drank} · ${esc(c.rank_words || "")}` : ": not ranked"}.</b> ${esc(c.verdict)}</p>${gradeChips(c.grades)}</div>`)
     + section("Valuation", `${anchor("ex-val")}<div id="ex-val-body"><p class="muted">Loading…</p></div>`, { alt: true })
     + section("Risk and outlook", `${anchor("ex-risk")}<div id="ex-risk-body"><p class="muted">Loading…</p></div>`)
-    + section("News and sentiment", `${anchor("ex-news")}<p>${esc(s.level == null ? "No scored news in the last three days." :
-        `News sentiment is ${num(s.level, 2)} over ${plural(s.n, "article")} in three days${s.change != null ? `, ${s.change >= 0 ? "up" : "down"} ${num(Math.abs(s.change), 2)} against its 20-day baseline` : ""}${s.volume_ratio ? `; today's news flow is ${num(s.volume_ratio, 1)} times normal` : ""}.`)}
-        <span class="muted small">Scores run from −1 (bad) to +1 (good), from a finance word list.</span></p>
-        ${spark((c.sentiment_series || []).map((x) => ({ y: x.score })), { label: `Daily news sentiment for ${c.symbol}, last 30 days` })}
-        ${(c.news || []).length ? `<ul class="feed">${c.news.map((n) => `<li><time datetime="${esc(n.at)}">${esc(shortDate(n.at))}</time>${link(n.url, n.title)} <span class="muted small">${esc(n.source || "")}${n.kind === "filing" ? " · filing" : ` · score ${num(n.sent, 2)}`}</span></li>`).join("")}</ul>` :
-          empty("No stored headlines for this name yet. News is collected for holdings, watched names and the day's movers.")}`, { alt: true })
+    + section("News and sentiment", `${anchor("ex-news")}<div id="ex-news-body">${newsBody(c.symbol, s, c.sentiment_series, c.news, "Looking for headlines on this name…")}</div>
+        <p class="muted small" id="ex-news-status" role="status" style="margin-top:12px">Checking the news sources for newer headlines…</p>`, { alt: true })
     + section("What DAISY's rules say", `${anchor("ex-rules")}<p>${esc(c.verdict)}</p>${(c.setups || []).length ? `<ul class="feed">${c.setups.map((x) => `<li><b>${esc(BOOK[x.book] || x.book)}</b> — ${x.steps === 1 ? "one step" : x.steps + " steps"} away. Needs ${esc(x.trigger)}.
         ${x.stop_note ? `<span class="muted">${esc(x.stop_note)}.</span>` : ""}</li>`).join("")}</ul>` : ""}
         ${(c.pitches || []).length ? table("Every pitch the desk has made on this name", ["Pitch", "Rating", "Status", "Return"],
@@ -154,6 +150,41 @@ export async function explore([sym]) {
     + section("Deep dive · the numbers the rules read", table("From the last close", ["Indicator", "Value"], ind.map((k) => [esc(k), num(r[k], Math.abs(r[k] || 0) >= 1000 ? 0 : 4)]), { numeric: [1] })
         + `<div id="ex-deep-more"></div>`, { alt: true })
     + `</div>`;
+}
+
+// One name's news block: the sentence, the 30-day line, the headlines. Used for the first paint (what is stored)
+// and again when the on-view fetch comes back (docs/23.9).
+function newsBody(sym, s, series, news, none) {
+  s = s || {};
+  return `<p>${esc(s.level == null ? "No scored news in the last three days." :
+      `News sentiment is ${num(s.level, 2)} over ${plural(s.n, "article")} in three days${s.change != null ? `, ${s.change >= 0 ? "up" : "down"} ${num(Math.abs(s.change), 2)} against its 20-day baseline` : ""}${s.volume_ratio ? `; today's news flow is ${num(s.volume_ratio, 1)} times normal` : ""}.`)}
+      <span class="muted small">Scores run from −1 (bad) to +1 (good), from a finance word list. Untested as a trading signal.</span></p>
+    ${spark((series || []).map((x) => ({ y: x.score })), { label: `Daily news sentiment for ${sym}, last 30 days` })}
+    ${(news || []).length ? `<ul class="feed">${news.map((n) => `<li><time datetime="${esc(n.at)}">${esc(shortDate(n.at))}</time>${link(n.url, n.title)} <span class="muted small">${esc(n.source || "")}${n.kind === "filing" ? " · filing" : ` · score ${num(n.sent, 2)}`}</span></li>`).join("")}</ul>` : empty(none)}`;
+}
+async function fillNews(box, c) {
+  const status = $("#ex-news-status", box);
+  if (!status) return;
+  let r;
+  try { r = await api(`/api/stocks/name/${encodeURIComponent(c.symbol)}/news`); }
+  catch (e) { if (document.body.contains(status)) status.textContent = `Could not check for newer headlines (${e.message}). Showing what is stored.`; return; }
+  if (!document.body.contains(status)) return;
+  const SRC = { finnhub: "Finnhub", polygon: "Polygon", sec: "SEC filings" };
+  const src = Object.entries(r.sources || {}).map(([k, v]) => `${SRC[k] || k}${typeof v === "number" ? " " + v : ": " + v}`).join(", ");
+  const follow = r.follow_until ? ` DAISY keeps collecting this name until ${shortDate(r.follow_until)}.` : "";
+  $("#ex-news-body", box).innerHTML = newsBody(c.symbol, r.sentiment, r.sentiment_series, r.news,
+    r.status === "failed" ? "No stored headlines, and the news sources could not be reached just now." : r.status === "off" ? "No stored headlines for this name." :
+      "No headlines for this name in the last month from the sources DAISY can read.");
+  status.textContent = r.status === "fetched" ? `Checked just now: ${plural(r.new, "new item")} stored${src ? ` (${src})` : ""}.${r.backfilled ? ` The first check reaches back ${r.days} days, so the sentiment line has a history from the start.` : ""}${follow}` :
+    r.status === "fresh" ? `Last checked ${r.checked ? shortDate(r.checked) + " " + clock(r.checked) : "recently"}; it checks again after half an hour.${follow}` :
+    r.status === "failed" ? `The news sources could not be reached just now${src ? ` (${src})` : ""}. Showing what is stored; it tries again the next time the page opens.` : (r.note || "");
+  if (r.grade !== undefined && c.grades) {                          // the News grade follows the fresh score
+    c.grades.sentiment = r.grade; c._news = { grade: r.grade, reason: r.grade_reason };
+    const chips = $("#ex-grades", box); if (chips) chips.innerHTML = gradeChips(c.grades);
+    const g = $("#ex-g-sentiment", box), why = $("#ex-gr-sentiment", box);
+    if (g) g.textContent = r.grade || "—"; if (why) why.textContent = r.grade_reason || "";
+  }
+  wireTips(box);
 }
 
 async function fillProfile(box, c) {
@@ -181,7 +212,8 @@ async function fillProfile(box, c) {
   const sg = (x, d = 0) => (x == null ? "—" : (x > 0 ? "+" : x < 0 ? "−" : "") + num(Math.abs(x), d) + "%"), HZ = (p.forecast || {}).horizons || [];
   const recH = HZ.find((h) => h.label === rec.horizon_label && h.return_pct);
   $("#ex-ratings-body", box).innerHTML = `<p><b>DAISY Rank${c.drank ? ` ${c.drank} · ${esc(c.rank_words || "")}` : ": not ranked"}.</b> ${esc(c.verdict)}</p>
-    ${table("Style grades, A (best) to F, and the reason for each", ["Grade", "", "Why"], Object.keys(GL).map((k) => [esc(GL[k]), `<b>${esc((p.grades || {})[k] || "—")}</b>`, esc((p.grade_reasons || {})[k] || "")]))}
+    ${table("Style grades, A (best) to F, and the reason for each", ["Grade", "", "Why"], Object.keys(GL).map((k) => { const live = k === "sentiment" && c._news ? c._news : null;
+      return [esc(GL[k]), `<b id="ex-g-${k}">${esc((live ? live.grade : (p.grades || {})[k]) || "—")}</b>`, `<span id="ex-gr-${k}">${esc((live ? live.reason : (p.grade_reasons || {})[k]) || "")}</span>`]; }))}
     <div class="two" style="margin-top:22px">
       <div><h3>Technical read</h3><p>${p.signal ? `DAISY's indicator blend scores ${esc(c.symbol)} <b>${num(p.signal.score, 0)}</b> on a scale of −100 to +100: <b>${esc(p.signal.label)}</b>.${p.regime ? ` The stock is in ${esc(String(p.regime.trend).replace(/_/g, " "))} with ${esc(p.regime.volatility_regime)} volatility.` : ""}` : "Not in data."}</p>
         ${rec.action ? `<p>Our forecast model's outlook over ${esc(rec.horizon_label || "the next quarter")}: <b>${esc(rec.action)}</b>${recH ? `; the middle of its range is ${sg(recH.return_pct.p50)}` : ""}, with a ${pct(rec.prob_up, 0)} chance of finishing higher. <span class="muted small">A model estimate, not a rule signal.</span></p>` : ""}</div>

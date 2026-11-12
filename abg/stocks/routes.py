@@ -395,6 +395,15 @@ async def bars(request: Request, symbol: str, sessions: int = 520):
     return jsonable(out)
 
 
+@router.get("/name/{symbol}/news")
+async def name_news(request: Request, symbol: str):
+    """One name's news, fetched and scored on view (at most once per cooldown), then stored and followed."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9.^-]{1,12}", symbol):
+        raise HTTPException(400, "bad symbol")
+    return jsonable(await _desk(request).name_news(symbol))
+
+
 @router.get("/news")
 async def news_list(request: Request, symbol: str | None = None, limit: int = 40):
     from . import news as N

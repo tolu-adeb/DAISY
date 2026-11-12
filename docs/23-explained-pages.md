@@ -166,6 +166,27 @@ New under `/api/stocks`:
 `GET desk` adds `regime_note`; `GET pitch/{key}` adds `kind` and `analyst` to `pack`; the scorecard's
 `track` adds `by_kind`. Existing keys are unchanged.
 
+## 23.9 News on view
+
+`DayMixin.name_news`, `GET /api/stocks/name/{symbol}/news`.
+
+Opening a stock on Explore fetches its headlines, scores them with the same finance word list, stores
+them and updates its daily sentiment. The page shows what is stored first, then fills in.
+
+- **First view reaches back 30 days** (`ABG_STOCKS_NEWS_BACKFILL_DAYS`), so the sentiment line and
+  the 20-day baseline exist at once. Later views read the last three days.
+- **Cooldown**: one fetch per name per 30 minutes (`ABG_STOCKS_NEWS_VIEW_MINUTES`). Two people opening
+  the same name share one fetch. A failed fetch is retried on the next view.
+- **Keeps collecting**: a viewed name is added to the scheduled news passes for five sessions
+  (`ABG_STOCKS_NEWS_FOLLOW_SESSIONS`), after holdings, pitches and the watchlist, inside the
+  40-names-per-pass budget.
+- **Sources**: Finnhub first. If it returns fewer than three items, Polygon's ticker news is asked
+  (`ABG_STOCKS_NEWS_POLYGON`, on by default). A source the key's plan does not cover is reported in
+  the status line and skipped. Tiingo News is a paid add-on and is not used.
+- **One story once**: the same headline for the same name from two sources is stored once.
+- Opening a page never posts to Discord and never fires an alert. `ABG_STOCKS_NEWS_ON_VIEW=false`
+  turns the whole thing off. Sentiment stays untested as a trading signal.
+
 ## 23.8 Known limits
 
 - The forecast and the valuation on the Explore page are model estimates. They explain; they do not

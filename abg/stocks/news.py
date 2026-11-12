@@ -120,6 +120,26 @@ def store(db, arts: list[dict]) -> int:
     return len(rows)
 
 
+def title_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()[:120]
+
+
+def dedupe(arts: list[dict], have_titles: set | None = None) -> list[dict]:
+    """Drop a story already seen under another link: the same headline for the same name is one story,
+    whichever source or syndication carried it. Filings are kept as they are."""
+    seen, out = set(have_titles or ()), []
+    for a in arts:
+        if a.get("kind") != "news":
+            out.append(a)
+            continue
+        k = (a.get("symbol"), title_key(a["title"]))
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(a)
+    return out
+
+
 def recent(db, symbol: str | None = None, since: str | None = None, limit: int = 50, kind: str | None = None) -> list[dict]:
     sql, args = "SELECT * FROM news WHERE 1=1", []
     if symbol is not None:

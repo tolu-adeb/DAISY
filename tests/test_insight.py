@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import warnings
-from datetime import date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from abg.stocks import watchlist as WL
 from test_stocks import _desk
 
 TODAY = date(2026, 11, 10)
+NY = ZoneInfo("America/New_York")
 
 
 # --------------------------------------------------------------------------- analyst pitches
@@ -301,3 +303,74 @@ def test_api_for_the_new_pages(desk, monkeypatch, tmp_path):
     assert asyncio.run(mw(Req("POST", "/api/stocks/analyst-pitch", "view"), ok)).status_code == 403      # filing a pitch is an admin action
     assert asyncio.run(mw(Req("POST", "/api/stocks/portfolio/flow", "view"), ok)).status_code == 403
     assert asyncio.run(mw(Req("GET", "/api/stocks/newsfeed", "view"), ok)) == "passed"
+
+
+# --------------------------------------------------------------------------- news on view (docs/23.9)
+class ViewFeeds:
+    """Finnhub-shaped and Polygon-shaped sources for one name, with the calls they received."""
+    enabled = True
+
+    def __init__(self, finnhub_days=(0, 1, 2, 5, 9, 14, 20, 27), polygon=None, polygon_fails=False):
+        self.calls, self.fh_days, self.poly, self.poly_fails = [], finnhub_days, polygon or [], polygon_fails
+
+    async def market_news(self, category="general"):
+        return []
+
+    async def company_news(self, symbol, days=3, name=None, limit=15):
+        self.calls.append(("finnhub", symbol, days))
+        now = datetime.now(NY)
+        return [N.article(symbol, f"{symbol} beats forecasts with record profit, day {k}", "", f"https://fh.test/{symbol}/{k}",
+                          now - timedelta(days=k, minutes=5), "Wire") for k in self.fh_days if k <= days]
+
+    async def polygon_news(self, symbol, days=3, name=None, limit=50):
+        self.calls.append(("polygon", symbol, days))
+        if self.poly_fails:
+            raise RuntimeError("403")
+        return [N.article(symbol, t, "", u, datetime.now(NY) - timedelta(minutes=9), "Other wire") for t, u in self.poly]
+
+    async def filings(self, symbol, days=5, name=None):
+        return []
+
+
+def test_opening_a_name_backfills_scores_stores_and_then_waits(desk):
+    desk.s.stocks_news, desk._news_feeds = True, ViewFeeds()
+    assert desk.sentiment_for("T03")["level"] is None and not desk.news_followed()
+    r = asyncio.run(desk.name_news("T03"))
+    assert r["status"] == "fetched" and r["backfilled"] and r["days"] == 30 and r["new"] == 8 and r["sources"]["finnhub"] == 8
+    assert desk._news_feeds.calls[0] == ("finnhub", "T03", 30)
+    assert len(r["sentiment_series"]) == 8 and r["sentiment"]["level"] > 0 and r["sentiment"]["baseline"] is not None    # a history at once
+    assert r["grade"] in "ABCDF" and "articles" in r["grade_reason"] and len(r["news"]) == 8
+    assert r["follow_until"] > datetime.now(NY).date().isoformat() and desk.news_followed() == ["T03"]
+    n = len(desk._news_feeds.calls)
+    again = asyncio.run(desk.name_news("T03"))                                     # inside the cooldown: nothing is fetched
+    assert again["status"] == "fresh" and again["new"] == 0 and len(desk._news_feeds.calls) == n and len(again["news"]) == 8
+    forced = asyncio.run(desk.name_news("T03", force=True))                        # later checks read only the last few days
+    assert forced["status"] == "fetched" and forced["days"] == 3 and forced["new"] == 0 and not forced["backfilled"]
+
+
+def test_a_thin_first_source_asks_the_second_and_one_story_is_stored_once(desk):
+    same = "T05 beats forecasts with record profit, day 0"
+    desk.s.stocks_news = True
+    desk._news_feeds = ViewFeeds(finnhub_days=(0,), polygon=[(same.upper(), "https://poly.test/a"), ("T05 wins a large new contract", "https://poly.test/b")])
+    r = asyncio.run(desk.name_news("T05"))
+    assert ("polygon", "T05", 30) in desk._news_feeds.calls and r["sources"] == {"finnhub": 1, "polygon": 2, "sec": 0}
+    assert r["new"] == 2 and sorted(a["title"] for a in r["news"]) == sorted([same, "T05 wins a large new contract"])   # the syndicated copy is dropped
+    desk._news_feeds = ViewFeeds(finnhub_days=(), polygon_fails=True)              # a source that refuses is reported, not fatal
+    r = asyncio.run(desk.name_news("T07"))
+    assert r["status"] == "fetched" and r["new"] == 0 and r["sources"]["polygon"].startswith("failed") and r["news"] == []
+
+
+def test_viewed_names_keep_being_collected_and_the_switch_turns_it_off(desk):
+    desk.s.stocks_news, desk._news_feeds = True, ViewFeeds()
+    asyncio.run(desk.name_news("T09"))
+    desk._news_feeds.calls.clear()
+    asyncio.run(desk.news_refresh(["T01"]))                                        # a scheduled pass: its own names first, then viewed ones
+    assert [c[1] for c in desk._news_feeds.calls if c[0] == "finnhub"] == ["T01", "T09"]
+    st = desk.db.kv_get("news_viewed")
+    st["T09"]["until"] = "2000-01-03"                                              # past its window: no longer followed
+    desk.db.kv_set("news_viewed", st)
+    assert desk.news_followed() == []
+    desk.s.stocks_news_on_view = False
+    desk._news_feeds.calls.clear()
+    off = asyncio.run(desk.name_news("T11"))
+    assert off["status"] == "off" and not desk._news_feeds.calls and "sentiment" in off

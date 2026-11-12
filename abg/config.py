@@ -378,6 +378,11 @@ class Settings(BaseSettings):
     stocks_news: bool = True                       # store headlines + filings for watched names (needs ABG_FINNHUB_API_KEY)
     stocks_news_minutes: int = 30                  # how often the live layer re-reads news for the watched names
     stocks_news_max_names: int = 40                # names per news pass (free-tier budget)
+    stocks_news_on_view: bool = True               # opening a stock on Explore fetches, scores and stores its news (docs/23.9)
+    stocks_news_view_minutes: int = 30             # ...at most this often per name
+    stocks_news_backfill_days: int = 30            # the first fetch for a name reaches this far back, so sentiment has a history
+    stocks_news_follow_sessions: int = 5           # a viewed name keeps being collected for this many sessions
+    stocks_news_polygon: bool = True               # use Polygon's news as a second source when Finnhub is thin (fails soft)
     stocks_edgar: bool = True                      # SEC EDGAR filings (8-K, S-1, 13D/G, Form 4) for watched names
     stocks_edgar_user_agent: str | None = None     # SEC asks for an app name here; default names DAISY, never a person
     stocks_themes: str | None = None               # path to the theme map (default: configs/themes.yaml)
