@@ -323,7 +323,7 @@ export async function settings() {
   };
   return hero("Settings", "What is switched on, and when things run.", esc(`You are signed in as ${state.role === "admin" ? "an admin" : "a viewer (read-only)"}. Switches live in the server's .env file; this page shows them and never shows a key.`), { short: true })
     + section("Switches", kv([["Stock desk schedule", yes(s.enabled)], ["Discord webhook", has(s.webhook)], ["Morning watchlist (dashboard)", yes(f.watch)],
-        ["Morning watchlist post", yes(f.watch_post)], ["Live watch (dashboard)", yes(f.live)], ["Live alerts post", yes(f.live_alerts)], ["News and filings", yes(f.news)], ["Weekly recap post", yes(f.weekly_recap)],
+        ["Morning watchlist post", yes(f.watch_post)], ["Live watch (dashboard)", yes(f.live)], ["Live alerts post", yes(f.live_alerts)], ["News and filings", yes(f.news)], ["Weekly recap post", yes(f.weekly_recap)], ["Analyst pitches post", yes(f.post_analyst)],
         ["Post tag", esc(s.tag || "none")]]), { alt: true })
     + section("Schedule (ET)", kv([["Daily pass", esc(sc.daily)], ["Top picks and check-ins", esc(sc.board)], ["Morning scan / post", `${esc(sc.watch_scan)} / ${esc(sc.watch_post)}`],
         ["Live look every", `${esc(sc.live_seconds)} seconds`], ["News re-read every", `${esc(sc.news_minutes)} minutes`], ["Weekly recap", `Fridays ${esc(sc.weekly_recap)}`]]))

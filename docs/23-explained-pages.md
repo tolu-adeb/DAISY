@@ -62,7 +62,7 @@ How it is kept apart from rule pitches:
   the open after the pitch was filed.
 - Sell and watch pitches are tracked on time only (the stop/target walk is a long's).
 
-Filing needs the admin token. It posts to Discord only if the form's box is ticked or
+Filing needs the admin token. It posts to Discord if the form's box is ticked, or always when
 `ABG_STOCKS_POST_ANALYST=true`; both use the one stock webhook and the one poster.
 
 ## 23.2 The Explore page

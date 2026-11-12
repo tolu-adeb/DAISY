@@ -494,10 +494,10 @@ async def profile(request: Request, symbol: str, refresh: bool = False):
 @router.post("/analyst-pitch")
 async def analyst_pitch(request: Request, body: dict = Body(...)):
     """File a member's idea as an analyst pitch: {symbol, analyst, thesis, direction, entry?, stop?, t1?, t2?, horizon_days?}.
-    Never posts from the API unless {post: true} and a webhook is set."""
+    Posts to Discord when {post: true}, or when ABG_STOCKS_POST_ANALYST is on; either way only if a webhook is set."""
     d = _desk(request)
     try:
-        return jsonable(await d.analyst_pitch(body, post=bool(body.get("post", False))))
+        return jsonable(await d.analyst_pitch(body, post=True if body.get("post") else None))   # None: the setting decides
     except FileExistsError as e:
         raise HTTPException(409, str(e))
     except ValueError as e:

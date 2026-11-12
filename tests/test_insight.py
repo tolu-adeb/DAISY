@@ -265,6 +265,18 @@ def test_api_for_the_new_pages(desk, monkeypatch, tmp_path):
             assert c.post("/api/stocks/analyst-pitch", json={"symbol": "T04", "analyst": "Grace", "thesis": "A clean base and improving breadth."}).status_code == 409
             assert c.post("/api/stocks/analyst-pitch", json={"symbol": "T04", "analyst": "", "thesis": "x"}).status_code == 400
             assert c.get(f"/api/stocks/pitch/{r.json()['id']}").json()["pack"]["book_label"] == "Analyst pitch"
+            sent = []                                                             # the setting posts every analyst pitch; the box posts one
+
+            async def fake_post(url, embeds, content=None, username="Stock Desk", files=None):
+                sent.append(embeds[0]["title"])
+                return "posted"
+            desk._post_to, desk.s.stocks_webhook_url, desk.s.stocks_post_analyst = fake_post, "https://x.test/hook", True
+            idea = {"analyst": "Grace", "thesis": "A clean base and improving breadth in its group."}
+            assert c.post("/api/stocks/analyst-pitch", json={"symbol": "T06", **idea}).json()["posted"] == "posted"
+            desk.s.stocks_post_analyst = False
+            assert c.post("/api/stocks/analyst-pitch", json={"symbol": "T08", **idea}).json()["posted"] == "dashboard"
+            assert c.post("/api/stocks/analyst-pitch", json={"symbol": "T10", "post": True, **idea}).json()["posted"] == "posted"
+            assert len(sent) == 2 and all("Analyst pitch by Grace" in t for t in sent)
             assert c.get("/api/stocks/profile/T04").json()["summary"] and c.get("/api/stocks/profile/ZZZZ").status_code == 404
             nf = c.get("/api/stocks/newsfeed").json()
             assert len(nf["categories"]) == 8 and nf["brief"] and c.get("/api/stocks/newsfeed?category=nope").status_code == 400
