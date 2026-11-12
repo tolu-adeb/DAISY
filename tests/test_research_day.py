@@ -582,7 +582,7 @@ def test_api_serves_the_pitching_desk(desk, monkeypatch, tmp_path):
             assert c.get("/api/health").json()["status"] == "ok"
             page = c.get("/").text
             assert "DAISY" in page and "/static/daisy/app.js" in page and "paper" not in page.lower()
-            for f in ("daisy.css", "app.js", "ui.js", "views.js", "fonts/inter-latin-wght-normal.woff2"):
+            for f in ("daisy.css", "app.js", "ui.js", "views.js", "views2.js", "fonts/inter-latin-wght-normal.woff2"):
                 assert c.get(f"/static/daisy/{f}").status_code == 200
         finally:
             app.state.stock_desk = None
@@ -611,8 +611,13 @@ def test_a_viewer_may_leave_a_note_and_nothing_else():
 def test_the_dashboard_stays_small_and_declares_its_themes():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1] / "abg" / "api" / "static"
-    files = [root / "daisy.html"] + [root / "daisy" / f for f in ("daisy.css", "app.js", "ui.js", "views.js")]
-    assert sum(f.stat().st_size for f in files) < 200_000                        # first load, fonts and charts aside
+    files = [root / "daisy.html"] + [root / "daisy" / f for f in ("daisy.css", "app.js", "ui.js", "views.js", "views2.js")]
+    assert sum(f.stat().st_size for f in files) < 200_000                        # first load, fonts and charts aside (about 45 KB gzipped)
+    app_js = (root / "daisy" / "app.js").read_text(encoding="utf-8")
+    for route in ("news: V2.news", "explore: V2.explore", "portfolio: V2.portfolio", "research: V2.research"):
+        assert route in app_js                                                   # the explained pages are routed (docs/23)
+    v2 = (root / "daisy" / "views2.js").read_text(encoding="utf-8")
+    assert "/api/stocks/analyst-pitch" in v2 and "not a rule signal" in (root / "daisy" / "views.js").read_text(encoding="utf-8")
     css = (root / "daisy" / "daisy.css").read_text(encoding="utf-8")
     for token in ("--dark-green: #213438", "--ivory: #e4d7d0", '[data-theme="light"]', "prefers-reduced-motion", ":focus-visible"):
         assert token in css

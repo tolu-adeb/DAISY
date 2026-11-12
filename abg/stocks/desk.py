@@ -1185,7 +1185,7 @@ def _public(p: dict) -> dict:
             "rank", "of", "score", "ml_prob", "price", "stop", "shares", "notional", "weight",
             "risk_pct", "r_dollars", "atr", "stop_atr", "max_hold", "what_happened", "gates",
             "exits", "risks", "caveats", "valuation", "news", "context", "reason", "facts",
-            "rec", "plan", "overview", "charts", "grades", "flags", "sentiment")
+            "rec", "plan", "overview", "charts", "grades", "flags", "sentiment", "kind", "analyst")
     out = {k: p.get(k) for k in keep}
     if out.get("plan"):                             # base rates carry the replay's trade list: keep the summary
         out["plan"] = {k: v for k, v in out["plan"].items() if k != "settings"}

@@ -59,7 +59,7 @@ class FakeHttp:
             return {"results": [] if d in self.unpublished else _grouped(d), "status": "OK"}
         if "/v3/reference/tickers" in url:
             cs = [s for s in MARKET if re.fullmatch(r"S\d{3}", s) or s == "AAPL"]
-            if "cursor" in url:
+            if params.get("cursor"):                              # the cursor travels as a parameter (httpx drops a URL's own query)
                 return {"results": [{"ticker": s, "name": f"{s} Corp", "type": "CS"} for s in cs[200:]]}
             return {"results": [{"ticker": s, "name": f"{s} Corp", "type": "CS"} for s in cs[:200]],
                     "next_url": "https://api.polygon.io/v3/reference/tickers?cursor=abc"}

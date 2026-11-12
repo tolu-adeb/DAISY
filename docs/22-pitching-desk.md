@@ -356,3 +356,15 @@ viewer token may POST notes and nothing else; every other change needs the admin
   It informs; it never gates.
 - Lock-up expiries and analyst rating changes are not in a free source: not in data.
 - `docs/samples/` uses a synthetic panel. Tickers there are not real companies.
+
+## 22.12 The recorded portfolio and the Explore chart
+
+The Portfolio tab is the fund's own log of real positions, entered by hand by an admin: ticker, shares,
+average cost, date, an optional note and the pitch it came from. Viewers can read it; only the admin
+token can add, edit, mark sold, reopen or remove. DAISY places no orders and never changes the log.
+The rows live in the server database (`desk.sqlite3`, tables `holding`, `flow` and the cash value),
+never in the repository. When positions are logged, their weights replace the holdings file as the
+source for "fund fit" on a pitch. Chapter 23.4 covers performance, the breakdown and holdings news.
+
+The Explore page draws a daily candle chart from `/api/stocks/bars/{symbol}` with TradingView
+Lightweight Charts (served from `/static/vendor`, no CDN). Chapter 23.2 covers the rest of the page.

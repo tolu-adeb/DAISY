@@ -126,7 +126,7 @@ def apply(pack: dict, v: dict, checks: list[dict], pcfg: dict, risk: dict, entry
     one = f"{verb} {pack['symbol']}" + (f" near ${entry:,.2f}" if entry and v["direction"] == "buy" else "") + f": {v['analyst']}'s idea."
     if stop and t1 and entry and v["direction"] == "buy":
         one += f" Risk ${entry - stop:,.2f}/share to a ${t1:,.2f} first target over about {v['horizon_days']} trading days."
-    rec.update({"one_liner": one, "core_thesis": f"{name}: {v['thesis']}", "open_pitch": None,
+    rec.update({"one_liner": one, "core_thesis": f"{name}: {v['thesis']}", "open_pitch": None, "daisy_rank": None,   # the rank is the rules' word
                 "method": {"book": BOOK, "label": "Analyst pitch", "edge": pack["edge"],
                            "style": f"an analyst's idea, held up to {v['horizon_days']} trading days"}})
     pl["targets"] = {**(pl.get("targets") or {}), "book": BOOK, "entry_ref": entry, "stop": stop, "t1": t1, "t2": t2,

@@ -5,7 +5,7 @@ import { $, $$, api, post, esc, safeUrl, state, toast, usd, pct, num, move, shor
 
 let after = null;                                        // the current view's event wiring
 export function afterRender(view, box) { const f = after; after = null; if (f) f(box); }
-const BOOK = { trend_pullback: "Trend pullback", mean_reversion: "Mean reversion", xs_momentum: "12-1 momentum", dual_momentum: "ETF rotation", crisis_alpha: "Crisis" };
+const BOOK = { trend_pullback: "Trend pullback", mean_reversion: "Mean reversion", xs_momentum: "12-1 momentum", dual_momentum: "ETF rotation", crisis_alpha: "Crisis", analyst: "Analyst pitch" };
 const link = (u, t) => (safeUrl(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t)}</a>` : esc(t));
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : /(ch|s|x)$/.test(w) ? "es" : "s"}`;
 const isAdmin = () => state.role === "admin";
@@ -45,7 +45,8 @@ export async function today() {
   const w = Object.entries(st.weights || {}).sort((a, c) => (c[1] || 0) - (a[1] || 0));
   const ld = d.last_daily || {};
   return hero(`Today · signals from the ${shortDate(st.date)} close`, title, lede, { extra: shocks ? `<ul class="feed" style="margin-top:20px;max-width:70ch">${shocks}</ul>` : "" })
-    + section("Market at a glance", heatHtml + `<p class="muted small" style="margin-top:12px">Moves are from the last close. Regime: <b>${esc((st.regime || "—").replace(/_/g, " "))}</b>.</p>`)
+    + section("Market at a glance", heatHtml + `<p class="muted small" style="margin-top:12px">Moves are from the last close. The rules' regime: <b>${esc((st.regime || "—").replace(/_/g, " "))}</b>; today's mood: <b>${esc(mood.label || "—")}</b>.
+      ${esc(d.regime_note || "")} <a href="#/research">How the market filter works</a></p>`)
     + section(`Top ${picks.length || 5} today`, picks.length ? `<div class="cards">${picks.map(pickCard).join("")}</div>
         ${(board.dropped || []).length ? `<p class="muted small" style="margin-top:14px">Out since this morning: ${board.dropped.map((x) => `${esc(x.symbol)} (${esc(statusWords((x.live || {}).state))})`).join(", ")}.</p>` : ""}` :
       empty("No picks yet. The list is built after the 16:20 ET pass and posted at 9:00, with check-ins at 12:00 and 15:00."), { alt: true, wide: true })
@@ -74,7 +75,7 @@ export async function today() {
 }
 
 // ====================================================================== Watchlist
-function watchCard(r) {
+export function watchCard(r) {
   const c = r.card || {}, s = c.strategy || {}, tl = c.timeline || {};
   const plan = s.steps === 0 ? `Buy at the open near ${usd(s.entry_ref)}${s.stop ? `, stop ${usd(s.stop)}` : ""}${s.t1 ? `, first target ${usd(s.t1)}` : ""}.` :
     s.book ? `Needs ${esc(s.trigger)}.` : esc(s.trigger || "");
@@ -101,7 +102,9 @@ function watchCard(r) {
 
 export async function watchlist() {
   const d = await api("/api/stocks/watchlist");
-  const m = d.meta || {}, all = d.rows || [], live = all.filter((r) => ["watching", "triggered", "in_play"].includes(r.status));
+  const m = d.meta || {}, all = d.rows || [], on = all.filter((r) => ["watching", "triggered", "in_play"].includes(r.status));
+  const ideas = on.filter((r) => (r.card || {}).source === "idea" && !(r.card || {}).stale), old = on.filter((r) => (r.card || {}).stale);
+  const live = on.filter((r) => !ideas.includes(r) && !old.includes(r));
   const gone = all.filter((r) => ["exited", "dropped"].includes(r.status));
   const nod = m.name_of_the_day;
   after = (box) => {
@@ -128,18 +131,24 @@ export async function watchlist() {
         ${isAdmin() ? `<button class="btn" id="wl-scan" style="margin-left:auto">Scan now (no post)</button>` : ""}</div>
       ${live.length ? `<div class="cards" id="wl-cards">${live.map(watchCard).join("")}</div>` :
         empty("No names yet. The first list appears after the next 8:30 ET scan; it needs one daily pass (16:20 ET) to have run first.")}`, { wide: true })
+    + (ideas.length ? section("Research ideas · untested", `<p>Strong names from the whole-market scan that the rules cannot pitch (too small, too thinly traded or too new). They are starting points for an analyst pitch, not signals: nothing here has been back-tested.</p>
+        <div class="cards" style="margin-top:14px">${ideas.map(watchCard).join("")}</div>`, { wide: true, alt: true }) : "")
+    + (old.length ? section("Still on the clock", `<details><summary>${plural(old.length, "earlier name")} not in today's scan</summary>
+        <p class="muted small">A name stays for a few sessions after the scan that added it, so a setup is not lost overnight. These were not picked again today.</p>
+        <div class="cards" style="margin-top:14px">${old.map(watchCard).join("")}</div></details>`, { wide: true }) : "")
     + (gone.length ? section("Recently off the list", table("Names that left the list", ["Ticker", "What happened", "Added", "Left"],
         gone.slice(0, 30).map((r) => [esc(r.symbol), esc(statusWords(r.status)), esc(r.added), esc(r.updated)])), { alt: true }) : "")
     + `<div class="deep">` + section("Deep dive · does the rank mean anything?", rankScore(d.score), { alt: !gone.length }) + `</div>`;
 }
-const rankScore = (s) => (!s ? empty("No score yet.") : table(`Names by the rank they joined with: how often a pitch followed within 15 days, and the ${s.horizon_sessions}-session return from the day they were added`,
+export const rankScore = (s) => (!s ? empty("No score yet.") : table(`Names by the rank they joined with: how often a pitch followed within 15 days, and the ${s.horizon_sessions}-session return from the day they were added`,
   ["Rank when added", "Names", "Went on to a pitch", "Avg return", "Avg vs SPY"],
   [["1–2", s.rank_1_2], ["3", s.rank_3], ["4–5", s.rank_4_5]].map(([k, v]) => [k, v.n, v.trigger_rate == null ? "—" : pct(v.trigger_rate, 0), move(v.avg_ret), move(v.avg_excess)]), { numeric: [1, 2, 3, 4] }));
 
 // ====================================================================== Pitches
 export async function pitches() {
   const d = await api("/api/stocks/pitches");
-  const rows = d.rows || [], open = rows.filter((r) => r.status !== "closed"), closed = rows.filter((r) => r.status === "closed");
+  const every = d.rows || [], mine = every.filter((r) => r.book === "analyst"), rows = every.filter((r) => r.book !== "analyst");
+  const open = rows.filter((r) => r.status !== "closed"), closed = rows.filter((r) => r.status === "closed");
   const c = d.counts || {};
   const row = (r) => { const t = r.track || {}; return [`<a href="#/pitch/${encodeURIComponent(r.id)}"><b>${esc(r.symbol)}</b></a>`, esc(r.rating || "BUY"), esc(BOOK[r.book] || r.book), esc(shortDate(r.as_of)),
     `${stateDot(r.status)} ${esc(r.status === "closed" ? `Closed: ${r.close_reason || ""} ${r.closed_at ? "(" + shortDate(r.closed_at) + ")" : ""}` : statusWords(r.status))}`,
@@ -149,8 +158,10 @@ export async function pitches() {
       + "A pitch is an idea with a plan, not a position: returns are measured from the tested entry, the open after the signal."), { short: true })
     + section("Open pitches", open.length ? table("New and active pitches", heads, open.map(row), { numeric: [5, 6, 7, 8] }) :
       empty("No open pitches. New ones appear after the 16:20 ET pass on any day a rule triggers."), { wide: true })
+    + section("Analyst pitches", (mine.length ? table("Ideas pitched by members of the fund: not rule signals, and scored apart from the rules", heads, mine.map(row), { numeric: [5, 6, 7, 8] }) :
+        empty("No analyst pitches yet.")) + `<p class="muted small" style="margin-top:12px">An admin can pitch any stock from its <a href="#/explore">Explore</a> page with the "Pitch this stock" button. DAISY writes it up and checks the levels.</p>`, { wide: true, alt: true })
     + section("Closed pitches", closed.length ? table("Closed at a target, the stop, the time limit or a rule exit", heads, closed.map(row), { numeric: [5, 6, 7, 8] }) :
-      empty("Nothing has closed yet."), { wide: true, alt: true });
+      empty("Nothing has closed yet."), { wide: true });
 }
 
 export async function pitch([id]) {
@@ -159,15 +170,16 @@ export async function pitch([id]) {
   const p = d.pack || {}, row = d.row || {}, rec = p.rec || {}, pl = p.plan || {}, tg = pl.targets || {}, ent = pl.entry || {}, risk = pl.risk || {}, conv = rec.conviction || {};
   const sym = p.symbol || row.symbol, name = p.name || row.name || sym, rating = rec.rating || row.rating || "BUY";
   const stat = row.status ? (row.status === "closed" ? `Closed: ${row.close_reason} on ${shortDate(row.closed_at)} at ${usd(row.close_price)}` : statusWords(row.status)) : "Not in the pitch book";
-  const tr = row.track || {};
-  const steps = [["Pitched", shortDate(p.as_of || row.as_of), "signal from that close"],
-    ["Tested entry", row.entry_open ? usd(row.entry_open) : `the ${shortDate(ent.date)} open`, ent.zone ? `zone ${usd(ent.zone[0])}–${usd(ent.zone[1])}` : `ref ${usd(p.price || row.price)}`],
+  const tr = row.track || {}, an = p.analyst || null;
+  const steps = [["Pitched", shortDate(p.as_of || row.as_of), an ? `by ${an.name}` : "signal from that close"],
+    [an ? "Entry" : "Tested entry", row.entry_open ? usd(row.entry_open) : `the ${shortDate(ent.date)} open`, ent.zone ? `zone ${usd(ent.zone[0])}–${usd(ent.zone[1])}` : `ref ${usd(p.price || row.price)}`],
     (p.stop || (row.plan || {}).stop) ? ["Stop", usd(p.stop || row.plan.stop), risk.stop_pct != null ? pct(risk.stop_pct) + " from entry" : "the exit if touched"] : null,
     tg.t1 ? ["First target", usd(tg.t1), tg.t1_kind || ""] : null, tg.t2 ? ["Stretch target", usd(tg.t2), tg.t2_kind || ""] : null,
     (pl.max_hold || tg.review_date) ? [tg.review_date ? "Next review" : "Time limit", tg.review_date ? shortDate(tg.review_date) : `${pl.max_hold} sessions`, "then it closes or is reviewed"] : null,
     risk.pct_of_fund != null ? ["Suggested size", `${pct(risk.pct_of_fund)} of the fund`, risk.shares ? `${risk.shares} shares` : esc(risk.bound || "")] : null].filter(Boolean);
   const v = d.votes || {};
   const noteName = (() => { try { return localStorage.getItem("daisy-name") || ""; } catch { return ""; } })();
+  const val = p.valuation, peers = p.peers || [];
   after = (box) => {
     $("#note-form", box)?.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -179,14 +191,18 @@ export async function pitch([id]) {
       } catch (x) { toast(x.message); }
     });
   };
-  const val = p.valuation, peers = p.peers || [];
+
   return hero(`${rating} · ${p.book_label || BOOK[row.book] || ""} · pitched ${shortDate(p.as_of || row.as_of)}`, `${esc(sym)}${name !== sym ? ` <span class="muted">— ${esc(name)}</span>` : ""}`,
-      esc(rec.one_liner || p.what_happened || ""), { short: true, extra: `<div class="chips" style="margin-top:18px;align-items:center">${rankBadge(rec.daisy_rank ?? row.drank)}
+      esc(rec.one_liner || p.what_happened || ""), { short: true, extra: `<div class="chips" style="margin-top:18px;align-items:center">${an ? pill("Analyst pitch · not a rule signal", true) : rankBadge(rec.daisy_rank ?? row.drank)}
         ${pill(stat, row.status === "active")} ${conv.bucket ? pill(`${conv.bucket} conviction (${conv.score})`) : ""}
         ${d.pack ? `<a class="btn" href="/api/stocks/deck/${encodeURIComponent(d.id)}">Download deck (.pptx)</a>` : ""}</div>
-        <div style="margin-top:14px">${gradeChips(p.grades)}</div>` })
+        <div style="margin-top:14px">${gradeChips(p.grades)}</div>
+        <p style="margin-top:18px"><a class="link-caps" href="#/pitches">All pitches</a> · <a class="link-caps" href="#/explore/${encodeURIComponent(sym)}">${esc(sym)} in depth</a></p>` })
+    + (an ? section("Analyst pitch", `<div class="banner"><b>This is ${esc(an.name)}'s idea, not a rule signal.</b> The direction, thesis and levels are the analyst's. DAISY filled in the numbers from data and checked the levels: ${an.passed} of ${an.of} checks passed. It is scored apart from the rule pitches.</div>
+        <p><b>The thesis.</b> ${esc(an.thesis)}</p>
+        ${table("DAISY's checks on the analyst's levels", ["Check", "Result"], (an.checks || []).map((c) => [esc(c.text || ""), c.ok ? '<span class="up">✓ fine</span>' : '<span class="warn">⚑ flag</span>']))}`) : "")
     + section("The plan", `<ol class="timeline">${steps.map(([k, val_, sub]) => `<li><span class="caps muted">${esc(k)}</span><span class="v num">${val_}</span><span class="muted small">${esc(sub)}</span></li>`).join("")}</ol>
-        ${tr.ret != null ? `<p style="margin-top:22px">Since the tested entry: ${move(tr.ret)}; SPY over the same days ${move(tr.spy)}${tr.sector != null ? `; ${esc(tr.sector_etf)} ${move(tr.sector)}` : ""}${tr.r != null ? ` · ${num(tr.r, 2)}${term("R")}` : ""}.</p>` : ""}
+        ${tr.ret != null ? `<p style="margin-top:22px">Since the ${an ? "" : "tested "}entry: ${move(tr.ret)}; SPY over the same days ${move(tr.spy)}${tr.sector != null ? `; ${esc(tr.sector_etf)} ${move(tr.sector)}` : ""}${tr.r != null ? ` · ${num(tr.r, 2)}${term("R")}` : ""}.</p>` : ""}
         ${(ent.refinements || []).length ? `<p class="muted small">Untested refinements (scored apart): ${ent.refinements.map((x) => esc(x.text)).join(" ")}</p>` : ""}`, { alt: true })
     + ((p.flags || []).length ? section("Flags", `<ul class="feed">${p.flags.map((f) => `<li>⚑ ${esc(f.text)} ${safeUrl(f.url) ? "· " + link(f.url, "source") : ""}</li>`).join("")}</ul>`) : "")
     + section("Lifecycle", (d.history || []).length ? `<ul class="feed">${d.history.map((h) => `<li><time datetime="${esc(h.at)}">${esc(shortDate(h.at))}</time><b>${esc(h.status)}</b> ${esc(h.note || "")}</li>`).join("")}</ul>` :
@@ -208,83 +224,6 @@ export async function pitch([id]) {
     + section("Deep dive · write-up check and pack", `<details><summary>Write-up validator log</summary><pre>${esc(JSON.stringify(d.writeup || "template text: no LLM write-up on this pitch", null, 1))}</pre></details>
         <details><summary>Pack JSON (every number behind this page, with its as-of)</summary><pre>${esc(JSON.stringify(d.pack_json || row, null, 1))}</pre></details>`, { alt: true })
     + `</div>`;
-}
-
-// ====================================================================== Portfolio (the fund's real, hand-logged positions)
-export async function portfolio() {
-  const d = await api("/api/stocks/portfolio");
-  const t = d.totals || {}, open = d.open || [], closed = d.closed || [], admin = isAdmin();
-  const money = (x) => (x == null ? "—" : usd(x, 0)), signed = (x) => (x == null ? "—" : (x > 0 ? "+" : x < 0 ? "−" : "") + usd(Math.abs(x), 0));
-  const said = open.length ? `${plural(open.length, "position")} worth ${money(t.invested)}${t.cash ? `, plus ${money(t.cash)} cash` : ""}. `
-      + (t.gain == null ? "No prices stored for these names yet." : `Against what was paid, the open positions are ${t.gain >= 0 ? "up" : "down"} ${money(Math.abs(t.gain))} (${pct(Math.abs(t.gain_pct))}).`)
-      + (t.unmarked ? ` ${plural(t.unmarked, "position")} could not be priced and are shown at cost.` : "")
-    : "Nothing has been logged yet." + (admin ? " Add the fund's first position below." : " An admin records the fund's positions here.");
-  const stat = (k, v, sub) => `<div class="stat"><span class="caps muted">${k}</span><span class="v num">${v}</span><span class="muted small">${sub}</span></div>`;
-  const acts = (r, isOpen) => (admin ? `<div class="row-actions">${isOpen ? `<button data-act="edit" data-id="${r.id}">Edit</button><button data-act="close" data-id="${r.id}">Sold</button>` : `<button data-act="reopen" data-id="${r.id}">Reopen</button>`}<button data-act="delete" data-id="${r.id}">Remove</button></div>` : "");
-  const pitchLink = (r) => (r.pitch_id ? `<a href="#/pitch/${encodeURIComponent(r.pitch_id)}">pitch</a>` : "");
-  const openRows = open.map((r) => [`<a href="#/explore/${encodeURIComponent(r.symbol)}"><b>${esc(r.symbol)}</b></a>`, num(r.shares, r.shares % 1 ? 3 : 0), usd(r.cost), usd(r.last), money(r.value), r.weight == null ? "—" : pct(r.weight),
-    `${move(r.gain_pct)}<br><span class="muted small">${signed(r.gain)}</span>`, move(r.excess), esc(shortDate(r.opened)), `${esc(r.note || "")} ${pitchLink(r)}`, ...(admin ? [acts(r, true)] : [])]);
-  const closedRows = closed.map((r) => [`<b>${esc(r.symbol)}</b>`, num(r.shares, r.shares % 1 ? 3 : 0), usd(r.cost), usd(r.exit_price), `${move(r.gain_pct)}<br><span class="muted small">${signed(r.gain)}</span>`,
-    esc(shortDate(r.opened)), esc(shortDate(r.closed)), `${esc(r.note || "")} ${pitchLink(r)}`, ...(admin ? [acts(r, false)] : [])]);
-  after = (box) => {
-    const form = $("#pf-form", box), byId = Object.fromEntries(open.concat(closed).map((r) => [String(r.id), r]));
-    const reload = () => { location.hash = "#/portfolio?keep"; location.hash = "#/portfolio"; };
-    const send = async (path, body, ok) => { try { await post(path, body); toast(ok); reload(); } catch (e) { toast(e.message); } };
-    form?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const f = Object.fromEntries(new FormData(form).entries()), id = f.id;
-      delete f.id;
-      send(id ? `/api/stocks/portfolio/${id}` : "/api/stocks/portfolio", id ? { action: "update", ...f } : f, id ? "Position updated." : "Position logged.");
-    });
-    $("#pf-cash", box)?.addEventListener("submit", (e) => { e.preventDefault(); send("/api/stocks/portfolio", { cash: new FormData(e.target).get("cash") }, "Cash updated."); });
-    $("#pf-sold", box)?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const f = Object.fromEntries(new FormData(e.target).entries());
-      send(`/api/stocks/portfolio/${f.id}`, { action: "close", exit_price: f.exit_price, closed: f.closed }, "Marked as sold.");
-    });
-    for (const b of $$("[data-act]", box)) b.addEventListener("click", () => {
-      const r = byId[b.dataset.id], act = b.dataset.act;
-      if (act === "edit") {
-        for (const k of ["id", "symbol", "shares", "cost", "opened", "note", "pitch_id"]) form.elements[k].value = r[k] ?? "";
-        $("#pf-form-h", box).textContent = `Edit ${r.symbol}`; form.scrollIntoView({ block: "center" }); form.elements.shares.focus();
-      } else if (act === "close") {
-        const s = $("#pf-sold", box);
-        s.hidden = false; s.elements.id.value = r.id; $("#pf-sold-h", box).textContent = `Sold ${r.symbol}: at what price?`;
-        s.elements.exit_price.value = r.last ?? ""; s.scrollIntoView({ block: "center" }); s.elements.exit_price.focus();
-      } else if (act === "reopen") send(`/api/stocks/portfolio/${r.id}`, { action: "reopen" }, "Reopened.");
-      else if (act === "delete") {
-        if (b.dataset.sure) send(`/api/stocks/portfolio/${r.id}`, { action: "delete" }, "Entry removed.");
-        else { b.dataset.sure = "1"; b.textContent = "Click again to remove"; }
-      }
-    });
-  };
-  const today = new Date().toISOString().slice(0, 10);
-  return hero(`Portfolio · prices as of the ${shortDate(d.as_of)} close`, "What the fund actually holds.", esc(said), { short: true })
-    + section("At a glance", `<div class="stats">${stat("Positions", t.positions ?? 0, `${t.closed ?? 0} closed`)}${stat("Invested", money(t.invested), "at the last close")}
-        ${stat("Cash", money(t.cash), "as logged")}${stat("Total", money(t.total), "invested plus cash")}
-        ${stat("Open gain", t.gain == null ? "—" : signed(t.gain), t.gain_pct == null ? "against cost" : `${pct(t.gain_pct)} against cost`)}
-        ${stat("Realised", t.realized == null ? "—" : signed(t.realized), "from closed positions")}</div>
-        <p class="muted small" style="margin-top:18px">Logged by hand by the fund's admins. DAISY places no orders and does not change this list. New pitches are checked against it in “Why this fits our fund”.</p>`, { alt: true })
-    + section("Open positions", open.length ? table("The fund's open positions, largest first", ["Ticker", "Shares", "Avg cost", "Last close", "Value", "Weight", "Gain", `vs ${esc(d.benchmark || "SPY")}`, "Bought", "Note", ...(admin ? ["Change"] : [])], openRows, { numeric: [1, 2, 3, 4, 5, 6, 7] }) :
-      empty(admin ? "No open positions logged. Use the form below to add the first one." : "No open positions have been logged yet."), { wide: true })
-    + (closed.length ? section("Closed positions", table("Positions the fund has sold", ["Ticker", "Shares", "Avg cost", "Sold at", "Result", "Bought", "Sold", "Note", ...(admin ? ["Change"] : [])], closedRows, { numeric: [1, 2, 3, 4] }), { wide: true, alt: true }) : "")
-    + (admin ? section("Log a position", `<h3 id="pf-form-h" style="margin-bottom:14px">Add a position</h3>
-        <form id="pf-form" class="form-grid"><input type="hidden" name="id">
-          <div><label for="pf-s">Ticker</label><input id="pf-s" name="symbol" type="text" required maxlength="12" autocomplete="off" spellcheck="false"></div>
-          <div><label for="pf-n">Shares</label><input id="pf-n" name="shares" type="text" inputmode="decimal" required></div>
-          <div><label for="pf-c">Average cost ($ per share)</label><input id="pf-c" name="cost" type="text" inputmode="decimal" required></div>
-          <div><label for="pf-d">Date bought</label><input id="pf-d" name="opened" type="text" value="${today}" placeholder="2026-11-10" required></div>
-          <div class="span"><label for="pf-t">Note (optional)</label><input id="pf-t" name="note" type="text" maxlength="300"></div>
-          <div class="span"><label for="pf-p">Pitch id it came from (optional)</label><input id="pf-p" name="pitch_id" type="text" maxlength="80" placeholder="2026-11-10-trend_pullback-NVDA"></div>
-          <div class="span"><button class="btn">Save position</button></div></form>
-        <form id="pf-sold" class="form-grid" hidden style="margin-top:28px"><input type="hidden" name="id"><h3 id="pf-sold-h" class="span">Sold</h3>
-          <div><label for="pf-x">Exit price ($ per share)</label><input id="pf-x" name="exit_price" type="text" inputmode="decimal" required></div>
-          <div><label for="pf-xd">Date sold</label><input id="pf-xd" name="closed" type="text" value="${today}" required></div>
-          <div class="span"><button class="btn">Mark as sold</button></div></form>
-        <form id="pf-cash" class="form-grid" style="margin-top:28px"><div><label for="pf-k">Cash ($)</label><input id="pf-k" name="cash" type="text" inputmode="decimal" value="${t.cash ?? 0}"></div>
-          <div style="align-self:end"><button class="btn">Save cash</button></div></form>`) :
-      section("Editing", `<p class="muted">You are signed in as a viewer: the portfolio is read-only. An admin logs and updates positions.</p>`))
-    + `<div class="deep">` + section("Deep dive · change log", (d.log || []).length ? `<ul class="feed">${d.log.map((h) => `<li><time datetime="${esc(h.at)}">${esc(shortDate(h.at))} ${esc(clock(h.at))}</time>${esc(h.note || h.status)}</li>`).join("")}</ul>` : empty("No changes logged yet."), { alt: true }) + `</div>`;
 }
 
 // ====================================================================== Scorecard
@@ -316,6 +255,8 @@ export async function scorecard() {
     + section("By conviction", cut("High, medium and low conviction pitches", t.by_bucket, term("Conviction")))
     + section("By DAISY Rank", cut("By the rank each pitch carried when it was made", t.by_rank, term("DAISY Rank")), { alt: true })
     + section("By rule book", cut("Which rule produced the pitch", t.by_book, "Book"))
+    + (Object.keys(t.by_kind || {}).length > 1 ? section("Rules against analysts", cut("Rule pitches and analyst pitches, measured the same way and kept apart", Object.fromEntries(Object.entries(t.by_kind).map(([k, o]) => [k === "analyst" ? "Analyst pitches" : "Rule pitches", o])), "Source")
+        + `<p class="muted small">Analyst pitches are measured from the open after they were filed.</p>`, { alt: true }) : "")
     + section("By sector", cut("By the company's sector", t.by_sector, "Sector"), { alt: true })
     + section("The watchlist", rankScore(d.watchlist))
     + `<div class="deep">`
@@ -335,95 +276,11 @@ export async function scorecard() {
 }
 
 // ====================================================================== Explore
-function nameCard(c) {
-  const r = c.row || {}, s = c.sentiment || {};
-  const facts = [["Close", `${usd(r.close)} ${move(r.chg_1d)}`], ["Sector", esc(r.sector || "not in data")],
-    ["Pitch eligible", r.eligible ? "yes" : `no: ${esc(r.why_not || "")}`], ["History", `${r.sessions ?? "—"} sessions${r.too_new ? " (too new for the tested rules)" : ""}`],
-    ["Themes", (c.themes || []).map((t) => esc(t.label)).join(", ") || "none"]];
-  const sentLine = s.level == null ? "No scored news in the last three days." :
-    `News sentiment ${num(s.level, 2)} over ${plural(s.n, "article")} in three days${s.change != null ? `, ${s.change >= 0 ? "up" : "down"} ${num(Math.abs(s.change), 2)} against its 20-day baseline` : ""}${s.volume_ratio ? `; today's news flow is ${num(s.volume_ratio, 1)}× normal` : ""}.`;
-  const ind = ["close", "ema50", "ema200", "sma200", "sma5", "rsi14", "min_rsi14_5", "rsi2", "mom_12_1", "mom126", "vol252", "atr14", "prev_high", "macd_hist", "macd_hist_prev", "adv20_usd", "dist_200", "mom_score", "mom_rank", "mom_pct", "trend_pct", "chg_5d", "chg_21d"];
-  return hero(`Explore · as of the ${shortDate(c.as_of)} close`, `${esc(c.symbol)}${r.name && r.name !== c.symbol ? ` <span class="muted">— ${esc(r.name)}</span>` : ""}`, esc(c.verdict), { short: true,
-      extra: `<div class="chips" style="margin-top:18px;align-items:center">${c.drank ? rankBadge(c.drank) + " " + pill(c.rank_words || "") : pill("Not ranked")}</div><div style="margin-top:14px">${gradeChips(c.grades)}</div>
-        <p style="margin-top:18px"><a class="link-caps" href="#/explore">Search another name</a></p>` })
-    + section("At a glance", kv(facts), { alt: true })
-    + section("Price", `<div class="toolbar" role="group" aria-label="Chart range">${[["3M", 63], ["6M", 126], ["1Y", 252], ["2Y", 520]].map(([t, n]) =>
-        `<button class="pill${n === 252 ? " on" : ""}" data-range="${n}" aria-pressed="${n === 252}" style="cursor:pointer;background:none;color:inherit">${t}</button>`).join("")}</div>
-      <div class="chart-legend" id="ex-legend" aria-live="off"><span class="key"><span class="swatch" style="background:var(--ema50)"></span>50-day EMA</span>
-        <span class="key"><span class="swatch" style="background:var(--ema200)"></span>200-day EMA</span><span class="muted" id="ex-read">Daily candles; hover or drag for a day's numbers.</span></div>
-      <div class="chart" id="ex-chart" role="img" aria-label="Daily price chart for ${esc(c.symbol)} with its 50- and 200-day averages. The numbers are in the indicator table under Deep dive."><p class="loading">Loading the chart…</p></div>
-      <p class="muted small" id="ex-src" style="margin-top:10px"></p>`, { wide: true })
-    + section("Closest setups", (c.setups || []).length ? `<ul class="feed">${c.setups.map((x) => `<li><b>${esc(BOOK[x.book] || x.book)}</b> — ${x.steps === 1 ? "one step" : x.steps + " steps"} away. Needs ${esc(x.trigger)}.
-        ${x.stop_note ? `<span class="muted">${esc(x.stop_note)}.</span>` : ""}</li>`).join("")}</ul>` : empty("No rule is close to a trigger on this name."))
-    + section("News and sentiment", `<p>${esc(sentLine)}</p>${spark((c.sentiment_series || []).map((x) => ({ y: x.score })), { label: `Daily news sentiment for ${c.symbol}, last 30 days` })}
-        ${(c.news || []).length ? `<ul class="feed">${c.news.map((n) => `<li><time datetime="${esc(n.at)}">${esc(shortDate(n.at))}</time>${link(n.url, n.title)} <span class="muted small">${esc(n.source || "")}${n.kind === "filing" ? " · filing" : ` · score ${num(n.sent, 2)}`}</span></li>`).join("")}</ul>` :
-          empty("No stored headlines for this name yet. News is collected for watched names and the day's movers.")}`, { alt: true })
-    + ((c.pitches || []).length ? section("Our pitches on it", table("Every pitch the desk has made on this name", ["Pitch", "Rating", "Status", "Return"],
-        c.pitches.map((p) => [`<a href="#/pitch/${encodeURIComponent(p.id)}">${esc(shortDate(p.as_of))} · ${esc(BOOK[p.book] || p.book)}</a>`, esc(p.rating), esc(p.status === "closed" ? `closed: ${p.close_reason}` : p.status), move((p.track || {}).ret)]), { numeric: [3] })) : "")
-    + `<div class="deep">`
-    + section("Deep dive · rule by rule", (c.gates || []).map((g) => table(`${BOOK[g.book] || g.book}: ${g.passes ? "every check passes" : "not every check passes"}`, ["Check", "Result"],
-        g.checks.map((x) => [esc(x.check), x.pass == null ? '<span class="muted">not in data</span>' : x.pass ? '<span class="up">✓ passes</span>' : '<span class="down">✗ fails</span>']))).join("<br>"))
-    + section("Deep dive · indicators", table("The numbers the rules read, from the last close", ["Indicator", "Value"], ind.map((k) => [esc(k), num(r[k], Math.abs(r[k] || 0) >= 1000 ? 0 : 4)]), { numeric: [1] }), { alt: true })
-    + section("Deep dive · sentiment series", (c.sentiment_series || []).length ? table("Daily news score and article count", ["Day", "Score", "Articles"], c.sentiment_series.map((x) => [esc(x.day), num(x.score, 2), x.n]), { numeric: [1, 2] }) : empty("No sentiment history yet."))
-    + `</div>`;
-}
-// The Explore chart: daily candles, volume, the two EMAs the rules read, and any plan level. The chart
-// library (TradingView Lightweight Charts, already vendored) is loaded only when a name page opens.
-function loadCharts() {
-  if (window.LightweightCharts) return Promise.resolve();
-  return new Promise((ok, bad) => { const sc = document.createElement("script"); sc.src = "/static/vendor/lightweight-charts.js"; sc.onload = ok; sc.onerror = () => bad(new Error("chart library did not load")); document.head.appendChild(sc); });
-}
-async function drawChart(box, sym) {
-  const el = $("#ex-chart", box);
-  if (!el) return;
-  try {
-    const [d] = await Promise.all([api(`/api/stocks/bars/${encodeURIComponent(sym)}`), loadCharts()]);
-    if (!document.body.contains(el)) return;
-    const v = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    const LC = window.LightweightCharts, up = v("--up"), down = v("--down");
-    el.innerHTML = "";
-    const chart = LC.createChart(el, { autoSize: true, layout: { background: { color: "transparent" }, textColor: v("--muted"), fontFamily: "Inter, system-ui, sans-serif", fontSize: 11 },
-      grid: { vertLines: { visible: false }, horzLines: { color: v("--stroke") } }, rightPriceScale: { borderColor: v("--stroke") }, timeScale: { borderColor: v("--stroke") },
-      crosshair: { mode: LC.CrosshairMode.Normal } });
-    const candles = chart.addCandlestickSeries({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false });
-    candles.setData(d.bars.filter((b) => b.o != null).map((b) => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })));
-    const vol = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false, color: v("--stroke-strong") });
-    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
-    vol.setData(d.bars.filter((b) => b.v != null).map((b) => ({ time: b.t, value: b.v })));
-    const line = (key, color) => { const sr = chart.addLineSeries({ color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-      sr.setData(d.bars.filter((b) => b[key] != null).map((b) => ({ time: b.t, value: b[key] }))); return sr; };
-    line("e50", v("--ema50")); line("e200", v("--ema200"));
-    for (const l of d.levels || []) candles.createPriceLine({ price: l.price, title: l.label, color: l.kind === "stop" ? down : l.kind === "entry" ? v("--muted") : v("--text"),
-      lineWidth: 1, lineStyle: l.kind === "stop" ? LC.LineStyle.Solid : LC.LineStyle.Dashed, axisLabelVisible: true });
-    const byDay = Object.fromEntries(d.bars.map((b) => [b.t, b])), read = $("#ex-read", box), idle = read.textContent;
-    chart.subscribeCrosshairMove((p) => {
-      const t = p && p.time ? (typeof p.time === "string" ? p.time : `${p.time.year}-${String(p.time.month).padStart(2, "0")}-${String(p.time.day).padStart(2, "0")}`) : null, b = t && byDay[t];
-      read.innerHTML = b ? `<b>${esc(shortDate(b.t))}</b> · open ${usd(b.o)} · high ${usd(b.h)} · low ${usd(b.l)} · close ${usd(b.c)} · 50-day ${usd(b.e50)} · 200-day ${usd(b.e200)}` : esc(idle);
-    });
-    const show = (n) => { const bs = d.bars; if (bs.length) chart.timeScale().setVisibleRange({ from: bs[Math.max(0, bs.length - n)].t, to: bs[bs.length - 1].t }); };
-    show(252);
-    for (const b of $$("[data-range]", box)) b.addEventListener("click", () => {
-      for (const x of $$("[data-range]", box)) { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", x === b ? "true" : "false"); }
-      show(+b.dataset.range);
-    });
-    $("#ex-src", box).textContent = `${d.bars.length} daily bars to ${shortDate(d.as_of)}, from ${d.source}.` + ((d.levels || []).length ? ` Lines: ${d.levels.map((l) => `${l.label} ${usd(l.price)}`).join(", ")}.` : "");
-  } catch (e) {
-    el.innerHTML = `<p class="empty" style="margin:16px">No chart for ${esc(sym)}: ${esc(e.message)}</p>`;
-  }
-}
-
 const exploreRows = (rows) => (rows.length ? table("Matching names from the research universe", ["Ticker", "Company", "Close", "1 day", "Rank", "Pitch eligible", "Grades"],
   rows.map((r) => [`<a href="#/explore/${encodeURIComponent(r.symbol)}"><b>${esc(r.symbol)}</b></a>`, esc(r.name || "—"), usd(r.close), move(r.chg_1d), r.drank ? rankBadge(r.drank) : "—",
     r.eligible ? "yes" : `<span class="muted">no: ${esc(r.why_not || "")}</span>`, gradeChips(r.grades)]), { numeric: [2, 3] }) : empty("No name matches that. Try a ticker (NVDA) or part of a company name."));
 
-export async function explore([sym]) {
-  if (sym) {
-    try { const card = nameCard(await api(`/api/stocks/name/${encodeURIComponent(sym)}`)); after = (box) => drawChart(box, sym); return card; }
-    catch (e) {                                           // not a fault: say what we know and offer the search again
-      return hero("Explore", `No card for ${esc(sym.toUpperCase())} yet.`, esc(e.message), { short: true,
-        extra: `<p style="margin-top:18px"><a class="link-caps" href="#/explore">Search another name</a></p>` });
-    }
-  }
+export async function explore() {
   const d = await api("/api/stocks/explore?limit=12&only=eligible");
   const cov = d.coverage || {}, ls = ((d.listings || {}).rows || []).slice(0, 30);
   after = (box) => {
@@ -444,22 +301,6 @@ export async function explore([sym]) {
     + section("IPOs and new listings", ls.length ? table("Too new for the tested rules: watched and researched, not rule-pitched", ["Date", "Company", "Ticker", "Exchange", "Price", "Status"],
         ls.map((x) => [esc(shortDate(x.date)), esc(x.name), x.symbol ? `<a href="#/explore/${encodeURIComponent(x.symbol)}">${esc(x.symbol)}</a>` : "—", esc(x.exchange || "—"), esc(x.price ?? "—"), esc(x.status || "—")])) :
       empty("No upcoming IPOs or new listings on file. The calendar is read during the 8:30 ET scan and needs a Finnhub key."), { alt: true });
-}
-
-// ====================================================================== Research
-export async function research() {
-  const d = await api("/api/stocks/research");
-  const rep = d.report, v = (rep || {}).verdict || {}, checks = Object.entries(v.checks || {});
-  const passed = checks.filter(([, c]) => c.pass).length;
-  const said = !rep ? "No study has been run yet. The weekly study replays the rule books over ten years, removes one rule at a time, and tests them walk-forward."
-    : `The latest study (${String(rep.at || "").slice(0, 10)}) says: ${v.overall || "no verdict"}. ${checks.length ? `${passed} of ${checks.length} pass bars were met.` : ""} Findings are proposals: nothing here changes a rule on its own.`;
-  return hero("Research", "Do the rules still earn their place?", esc(said), { short: true })
-    + section("Pass bars", checks.length ? table("Each bar the rules are held to", ["Bar", "Result"], checks.map(([k, c]) => [esc(k), c.pass == null ? '<span class="muted">not in data</span>' : c.pass ? '<span class="up">✓ met</span>' : '<span class="down">✗ not met</span>'])) :
-      empty("The pass bars appear after the first study."), { alt: true })
-    + section("Known limits", `<ul class="feed"><li><b>Survivorship.</b> Outside the S&amp;P 500 core, the market list is today's listed names: companies that were delisted are missing, which flatters any backtest on them.</li>
-        <li><b>News sentiment is untested as a gate.</b> It informs conviction and raises flags. Pitches are tracked by sentiment on the Scorecard so the team can see whether it adds edge before anyone proposes a rule.</li>
-        <li><b>History depth.</b> Names outside the core have about two years of bars (the free data plan), so the live replay for them is two years.</li></ul>`)
-    + `<div class="deep">` + section("Deep dive · the full report", d.markdown ? `<div class="memo">${md(d.markdown)}</div>` : empty("No report yet."), { wide: true, alt: true }) + `</div>`;
 }
 
 // ====================================================================== Settings (read-only for viewers)

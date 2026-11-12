@@ -31,10 +31,14 @@
     <a class="roll" href="#/pitches" data-nav="pitch"><span data-t="Pitches">Pitches</span></a>
     <a class="roll" href="#/portfolio" data-nav="portfolio"><span data-t="Portfolio">Portfolio</span></a>
     <a class="roll" href="#/scorecard" data-nav="scorecard"><span data-t="Scorecard">Scorecard</span></a>
+    <a class="roll" href="#/news" data-nav="news"><span data-t="News">News</span></a>
     <a class="roll" href="#/explore" data-nav="explore"><span data-t="Explore">Explore</span></a>
-    <a class="roll" href="#/research" data-nav="research"><span data-t="Research">Research</span></a>
+    <a class="roll" href="#/research" data-nav="research"><span data-t="Strategy">Strategy</span></a>
   </nav>
   <div class="nav-tools">
+    <form id="go-form" class="go" role="search" aria-label="Open a stock">
+      <label for="go-q" class="sr">Ticker</label><input id="go-q" type="search" placeholder="Ticker  /" autocomplete="off" spellcheck="false" maxlength="12" aria-keyshortcuts="/">
+    </form>
     <button class="switch" id="deep" role="switch" aria-checked="false" title="Show the technical layer on every page">
       <span class="switch-track" aria-hidden="true"><span class="switch-dot"></span></span><span class="caps">Deep dive</span>
     </button>
@@ -55,12 +59,12 @@
     <div><span class="caps">The desk</span>
       <a href="#/today">Today</a><a href="#/watchlist">Watchlist</a><a href="#/pitches">Pitches</a><a href="#/portfolio">Portfolio</a><a href="#/scorecard">Scorecard</a></div>
     <div><span class="caps">Research</span>
-      <a href="#/explore">Explore any stock</a><a href="#/research">Rule research</a><a href="#/glossary">Glossary</a></div>
+      <a href="#/explore">Explore any stock</a><a href="#/news">News</a><a href="#/research">Strategy and research</a><a href="#/glossary">Glossary</a></div>
     <div><span class="caps">Terminal</span>
       <a href="#/settings">Settings and status</a><a href="/classic">Classic Intelligence Terminal</a></div>
   </div>
   <p class="foot-note">AI Business Group Investment Fund · University of Michigan. The desk pitches ideas and tracks how its
-    pitches did. It places no orders and holds no positions. Research, not advice.</p>
+    pitches did. It places no orders; the Portfolio page is the fund's own hand-kept log. Research, not advice.</p>
 </footer>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

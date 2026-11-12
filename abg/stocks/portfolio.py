@@ -305,6 +305,10 @@ def breakdown(view: dict, sectors: dict, cap: float = 0.10) -> dict:
                               "over_cap": sorted(s for s, w in by_sym.items() if w > cap), "cap": cap}}
 
 
+def _n(n: int, one: str, many: str | None = None) -> str:
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
 def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> list[dict]:
     """What the log shows about how the fund invests, next to what DAISY pitched. Observations with their
     evidence and one testable suggestion each - never an instruction."""
@@ -324,7 +328,7 @@ def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> 
     linked = [(h, pitch_for(h)) for h in op]
     with_p = [(h, p) for h, p in linked if p]
     obs.append({"title": "How much of the portfolio came from DAISY's ideas",
-                "finding": f"{len(with_p)} of {len(op)} open positions are names DAISY has pitched.",
+                "finding": f"{len(with_p)} of {_n(len(op), 'open position')} {'is a name' if len(with_p) == 1 else 'are names'} DAISY has pitched.",
                 "evidence": [f"{h['symbol']}: pitched {p['as_of']} ({p.get('rating') or 'BUY'}, {'analyst' if p['book'] == 'analyst' else 'rule'})" for h, p in with_p][:8]
                             + [f"{h['symbol']}: no DAISY pitch on record" for h, p in linked if not p][:8],
                 "suggestion": "Link each position to its pitch when logging it, so the two records can be compared name by name."})
@@ -332,13 +336,13 @@ def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> 
     if past:
         avg = sum(h["last"] / float(p["plan"]["stop"]) - 1 for h, p in past) / len(past)
         obs.append({"title": "Positions held below their pitch's stop",
-                    "finding": f"{len(past)} position(s) trade under the stop their pitch set, on average {avg:+.1%} beyond it.",
+                    "finding": f"{_n(len(past), 'position trades', 'positions trade')} under the stop their pitch set, on average {avg:+.1%} beyond it.",
                     "evidence": [f"{h['symbol']}: last ${h['last']:,.2f} against a stop of ${float(p['plan']['stop']):,.2f} ({h['last'] / float(p['plan']['stop']) - 1:+.1%})" for h, p in past],
                     "suggestion": "Decide each one on purpose: either the stop is the exit, or write down why this position is an exception."})
     stale = [(h, p) for h, p in with_p if p.get("status") == "closed"]
     if stale:
         obs.append({"title": "Still held after DAISY closed the pitch",
-                    "finding": f"{len(stale)} position(s) are open although their pitch has closed.",
+                    "finding": f"{_n(len(stale), 'position is', 'positions are')} open although their pitch has closed.",
                     "evidence": [f"{h['symbol']}: pitch closed {p.get('closed_at')} ({p.get('close_reason')}); position {('%+.1f%%' % (h['gain_pct'] * 100)) if h.get('gain_pct') is not None else 'not priced'} against cost" for h, p in stale],
                     "suggestion": "Check whether holding past the plan has helped: compare each position's return since the pitch closed with SPY's."})
     weak = [h for h in op if (screen.get(h["symbol"]) or {}).get("close") and (screen[h["symbol"]].get("sma200") or 0) and screen[h["symbol"]]["close"] < screen[h["symbol"]]["sma200"]]
@@ -353,16 +357,16 @@ def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> 
     big = {s: w for s, w in by_w.items() if w > cap}
     if big:
         obs.append({"title": "Positions larger than the pitch size cap",
-                    "finding": f"{len(big)} position(s) are above {cap:.0%} of the fund, the largest size a DAISY pitch will suggest.",
+                    "finding": f"{_n(len(big), 'position is', 'positions are')} above {cap:.0%} of the fund, the largest size a DAISY pitch will suggest.",
                     "evidence": [f"{s}: {w:.1%} of the fund" for s, w in sorted(big.items(), key=lambda kv: -kv[1])],
-                    "suggestion": f"Either trim toward {cap:.0%} or raise pitch.max_position_pct on purpose, so the plan and the book agree."})
+                    "suggestion": f"Check whether a {cap:.0%} cap would have changed the result. If the larger sizes are deliberate, raise the pitch size cap so the plans match how the fund sizes."})
     marked = [h for h in op if h.get("gain_pct") is not None]
     win, lose = [h for h in marked if h["gain_pct"] > 0], [h for h in marked if h["gain_pct"] <= 0]
     if win and lose:
         aw, al = sum(h["gain_pct"] for h in win) / len(win), sum(h["gain_pct"] for h in lose) / len(lose)
         worst = min(lose, key=lambda h: h["gain_pct"])
         obs.append({"title": "Winners against losers",
-                    "finding": f"{len(win)} holdings are up (average {aw:+.1%}) and {len(lose)} are down (average {al:+.1%}).",
+                    "finding": f"{_n(len(win), 'holding is', 'holdings are')} up (average {aw:+.1%}) and {_n(len(lose), 'is', 'are')} down (average {al:+.1%}).",
                     "evidence": [f"Largest loss: {worst['symbol']} {worst['gain_pct']:+.1%}", f"Average gain to average loss: {abs(aw / al):.2f} to 1" if al else "No losing average"],
                     "suggestion": "If the average loss is larger than the average gain, test a rule that cuts a position at a fixed loss."})
     held = {h["symbol"] for h in op}
@@ -372,6 +376,6 @@ def review(view: dict, pitches: list[dict], screen: dict, cap: float = 0.10) -> 
         mt, mp = sum(p["track"]["ret"] for p in taken) / len(taken), sum(p["track"]["ret"] for p in passed) / len(passed)
         obs.append({"title": "Pitches the fund took against those it passed on",
                     "finding": f"Pitches on names the fund holds have returned {mt:+.1%} on average; the {len(passed)} it did not take, {mp:+.1%}.",
-                    "evidence": [f"Taken: {len(taken)} pitches", f"Passed on: {len(passed)} pitches"],
+                    "evidence": [f"Taken: {_n(len(taken), 'pitch', 'pitches')}", f"Passed on: {_n(len(passed), 'pitch', 'pitches')}"],
                     "suggestion": "If the passed-on pitches keep doing better, look at how the fund chooses which pitches to act on."})
     return obs

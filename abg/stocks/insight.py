@@ -67,6 +67,13 @@ TIMELINE = [
 ]
 
 
+def span_words(sessions) -> str:
+    """The stretch a statistic covers, in words: the engine measures over the bars it was given."""
+    n = int(sessions or 0)
+    return ("the past two years" if n >= 440 else "the past year" if 220 <= n <= 290 else
+            f"the past {round(n / 21)} months" if n >= 42 else f"the last {n} sessions")
+
+
 def summarize(sym: str, row: dict | None, stats: dict | None, fund: dict | None, sent: dict | None, verdict: str | None,
               val: dict | None = None) -> list[dict]:
     """The plain-English summary: each sentence with the numbers it rests on (so the page can show them)."""
@@ -83,8 +90,9 @@ def summarize(sym: str, row: dict | None, stats: dict | None, fund: dict | None,
             s += f" and {'up' if d21 > 0 else 'down'} {abs(d21):.1%} over the last month"
         add(s + ".", close=c, chg_1d=d1, chg_21d=d21)
     tr, br = st.get("total_return_pct"), st.get("benchmark_return_pct")
+    span = span_words(st.get("observations"))
     if tr is not None and br is not None:
-        add(f"Over the past year it returned {tr:+.1f}% against the market's {br:+.1f}%, "
+        add(f"Over {span} it returned {tr:+.1f}% against the market's {br:+.1f}%, "
             f"{'ahead' if tr > br else 'behind'} by {abs(tr - br):.1f} points.", total_return_pct=tr, benchmark_return_pct=br)
     d200, mp = r.get("dist_200"), r.get("mom_pct")
     if d200 is not None:
@@ -102,7 +110,7 @@ def summarize(sym: str, row: dict | None, stats: dict | None, fund: dict | None,
     vol, dd = st.get("ann_volatility_pct"), st.get("max_drawdown_pct")
     if vol is not None and dd is not None:
         add(f"It has been {'a volatile' if vol > 35 else 'an average-risk' if vol > 20 else 'a steady'} stock: {vol:.0f}% annual volatility, "
-            f"with a worst drop of {abs(dd):.0f}% in the past year.", ann_volatility_pct=vol, max_drawdown_pct=dd)
+            f"with a worst drop of {abs(dd):.0f}% in {span}.", ann_volatility_pct=vol, max_drawdown_pct=dd)
     sn = sent or {}
     if sn.get("level") is not None and (sn.get("n") or 0) >= 3:
         tone = "positive" if sn["level"] >= 0.25 else "negative" if sn["level"] <= -0.25 else "mixed"
@@ -119,7 +127,7 @@ def grade_reasons(row: dict | None, fund: dict | None, peer_pe: float | None, se
     out = {}
     out["momentum"] = (f"Its 12-month return (skipping the latest month), adjusted for volatility, beats {r['mom_pct']:.0%} of eligible US stocks."
                        if r.get("mom_pct") is not None else "Not graded: the name is not in the eligible universe or lacks a year of history.")
-    out["trend"] = (f"Price is {r['dist_200']:+.0%} from its 200-day average, further above it than {r['trend_pct']:.0%} of eligible stocks."
+    out["trend"] = (f"Price is {abs(r['dist_200']):.0%} {'above' if r['dist_200'] >= 0 else 'below'} its 200-day average; {r['trend_pct']:.0%} of eligible stocks sit lower against theirs."
                     if r.get("trend_pct") is not None and r.get("dist_200") is not None else "Not graded: no 200-day average yet, or not eligible.")
     fpe = f.get("forward_pe")
     out["value"] = (f"Forward P/E of {fpe:.1f} against a peer median of {peer_pe:.1f} ({fpe / peer_pe:.2f} times its peers)."
@@ -208,6 +216,8 @@ class InsightMixin:
         card = self.name_card(sym) if row is not None else None
         out = {
             "symbol": sym, "day": day, "available": bool(rep), "name": (fund or {}).get("name") or (row or {}).get("name") or rep.get("name"),
+            "price": price, "in_screen": row is not None,
+            "change_pct": (row or {}).get("chg_1d") if row is not None else ((rep.get("quote") or {}).get("change_pct") or 0) / 100 or None,
             "fundamentals": {k: (fund or {}).get(k) for k in ("name", "sector", "industry", "description", "market_cap", "pe", "forward_pe", "eps",
                                                                "beta", "dividend_yield", "week52_high", "week52_low", "profit_margin", "extra")} if fund else None,
             "statistics": rep.get("statistics"), "signal": {k: (rep.get("signal") or {}).get(k) for k in ("score", "label")} if rep.get("signal") else None,

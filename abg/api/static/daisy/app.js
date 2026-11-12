@@ -1,14 +1,15 @@
 // DAISY dashboard - shell: routes, the nav, theme, the Deep dive switch, sign-in.
 import { $, $$, api, post, state, toast, wireTips, esc } from "./ui.js";
 import * as V from "./views.js";
+import * as V2 from "./views2.js";
 
 const ROUTES = {
-  today: V.today, watchlist: V.watchlist, pitches: V.pitches, pitch: V.pitch, portfolio: V.portfolio, scorecard: V.scorecard,
-  explore: V.explore, research: V.research, settings: V.settings, glossary: V.glossary,
+  today: V.today, watchlist: V.watchlist, pitches: V.pitches, pitch: V.pitch, portfolio: V2.portfolio, scorecard: V.scorecard,
+  explore: V2.explore, news: V2.news, research: V2.research, settings: V.settings, glossary: V.glossary,
 };
 const NAV = { pitches: "pitch", pitch: "pitch", glossary: "settings" };
 const TITLES = { today: "Today", watchlist: "Watchlist", pitches: "Pitches", pitch: "Pitch", portfolio: "Portfolio", scorecard: "Scorecard",
-  explore: "Explore", research: "Research", settings: "Settings", glossary: "Glossary" };
+  explore: "Explore", news: "News", research: "Strategy and research", settings: "Settings", glossary: "Glossary" };
 let seq = 0;
 
 async function render() {
@@ -28,6 +29,7 @@ async function render() {
     if (mine !== seq) return;                       // a newer navigation won
     if (typeof html === "string") box.innerHTML = html;
     V.afterRender?.(view, box);
+    V2.afterRender?.(view, box);
     for (const im of $$("img[data-light]", box)) im.addEventListener("error", () => { if (im.src !== im.dataset.light) im.src = im.dataset.light; }, { once: true });
     wireTips(box);
   } catch (e) {
@@ -56,6 +58,17 @@ $("#deep").setAttribute("aria-checked", document.documentElement.dataset.deep ==
 $("#nav-menu").addEventListener("click", () => {
   const open = $("#nav-links").classList.toggle("open");
   $("#nav-menu").setAttribute("aria-expanded", open ? "true" : "false");
+});
+$("#go-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("#go-q").value.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, "");
+  if (!q) return;
+  $("#go-q").value = ""; $("#go-q").blur();
+  location.hash = `#/explore/${encodeURIComponent(q)}`;
+});
+document.addEventListener("keydown", (e) => {                       // "/" jumps to the ticker box, as on most terminals
+  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "")) return;
+  e.preventDefault(); $("#go-q").focus();
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#nav-links").classList.remove("open"); $("#nav-menu").setAttribute("aria-expanded", "false"); } });
 
